@@ -293,12 +293,24 @@
         "pasteSettings": "貼上設定",
         "resetSectionSettings": "重置 {{section}} 設定"
       },
+      "lowlight": {
+        "apply": "Denoise (BM3D)",
+        "applying": "Denoising...",
+        "denoise": "ISO-Adaptive Denoise",
+        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal previews live; denoising saves the result as a new file and opens it.",
+        "hotPixels": "Hot Pixels",
+        "isoDetected": "ISO {{iso}} detected - suggested strength {{strength}}%",
+        "noIso": "No ISO metadata available - set strength manually",
+        "strength": "Denoise Strength",
+        "threshold": "Detection Threshold"
+      },
       "sections": {
         "basic": "基礎",
         "color": "顏色",
         "curves": "曲線",
         "details": "細節",
         "effects": "效果",
+        "lowlight": "Low-Light Recovery",
         "upscale": "放大"
       },
       "title": "調整",
@@ -1142,6 +1154,7 @@
         "halationGlow": "光暈與發光",
         "hueShift": "全域色相偏移",
         "lensCorrection": "鏡頭校正",
+        "lowlight": "Low-Light Recovery",
         "lut": "LUT",
         "masks": "遮色片",
         "noiseReduction": "降噪",

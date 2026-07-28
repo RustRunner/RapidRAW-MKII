@@ -1496,8 +1496,8 @@ pub struct GlobalAdjustments {
     pub red_curve_count: u32,
     pub green_curve_count: u32,
     pub blue_curve_count: u32,
-    _pad_end1: f32,
-    _pad_end2: f32,
+    pub hot_pixel_enabled: u32,
+    pub hot_pixel_threshold: f32,
     _pad_end3: f32,
     _pad_end4: f32,
 
@@ -2306,8 +2306,14 @@ fn get_global_adjustments_from_json(
         red_curve_count: red_points.len() as u32,
         green_curve_count: green_points.len() as u32,
         blue_curve_count: blue_points.len() as u32,
-        _pad_end1: 0.0,
-        _pad_end2: 0.0,
+        hot_pixel_enabled: if js_adjustments["hotPixelEnabled"].as_bool().unwrap_or(false)
+            && is_visible("lowlight")
+        {
+            1
+        } else {
+            0
+        },
+        hot_pixel_threshold: js_adjustments["hotPixelThreshold"].as_f64().unwrap_or(50.0) as f32 / 100.0,
         _pad_end3: 0.0,
         _pad_end4: 0.0,
 

@@ -106,8 +106,8 @@ struct GlobalAdjustments {
     red_curve_count: u32,
     green_curve_count: u32,
     blue_curve_count: u32,
-    _pad_end1: f32,
-    _pad_end2: f32,
+    hot_pixel_enabled: u32,
+    hot_pixel_threshold: f32,
     _pad_end3: f32,
     _pad_end4: f32,
 
@@ -1437,6 +1437,56 @@ fn apply_halation(
     return contrast_reduced + halation_glow * amount * 2.5;
 }
 
+// ============================================================================
+// HOT PIXEL REMOVAL (Low-Light Recovery)
+// ============================================================================
+
+fn median5(a: f32, b: f32, c: f32, d: f32, e: f32) -> f32 {
+    // Median of 5 values via sorting network
+    var v = array<f32, 5>(a, b, c, d, e);
+    if (v[0] > v[1]) { let t = v[0]; v[0] = v[1]; v[1] = t; }
+    if (v[2] > v[3]) { let t = v[2]; v[2] = v[3]; v[3] = t; }
+    if (v[0] > v[2]) { let t = v[0]; v[0] = v[2]; v[2] = t; }
+    if (v[1] > v[3]) { let t = v[1]; v[1] = v[3]; v[3] = t; }
+    if (v[1] > v[2]) { let t = v[1]; v[1] = v[2]; v[2] = t; }
+    if (v[2] > v[4]) { let t = v[2]; v[2] = v[4]; v[4] = t; }
+    if (v[1] > v[2]) { let t = v[1]; v[1] = v[2]; v[2] = t; }
+    return v[2];
+}
+
+// Detects and repairs hot/stuck pixels per channel: a channel deviating from
+// the median of its neighborhood by more than `threshold` (relative) is
+// replaced with that median. Operates in linear space.
+fn apply_hot_pixel_correction(center_linear: vec3<f32>, coords_i: vec2<i32>, threshold: f32, is_raw: u32) -> vec3<f32> {
+    let dims = vec2<i32>(textureDimensions(input_texture));
+    let max_idx = dims - vec2<i32>(1);
+    let offsets = array<vec2<i32>, 8>(
+        vec2<i32>(-1, -1), vec2<i32>(0, -1), vec2<i32>(1, -1),
+        vec2<i32>(-1, 0),                    vec2<i32>(1, 0),
+        vec2<i32>(-1, 1),  vec2<i32>(0, 1),  vec2<i32>(1, 1)
+    );
+
+    var neighbors: array<vec3<f32>, 8>;
+    for (var i = 0u; i < 8u; i++) {
+        let coord = clamp(coords_i + offsets[i], vec2<i32>(0), max_idx);
+        var s = textureLoad(input_texture, vec2<u32>(coord), 0).rgb;
+        if (is_raw == 0u) {
+            s = srgb_to_linear(s);
+        }
+        neighbors[i] = s;
+    }
+
+    var result = center_linear;
+    for (var ch = 0; ch < 3; ch++) {
+        let med = median5(neighbors[0][ch], neighbors[1][ch], neighbors[2][ch], neighbors[3][ch], neighbors[4][ch]);
+        let deviation = abs(center_linear[ch] - med) / max(med, 0.001);
+        if (deviation > threshold) {
+            result[ch] = med;
+        }
+    }
+    return result;
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let out_dims = vec2<u32>(textureDimensions(output_texture));
@@ -1464,6 +1514,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         initial_linear_rgb = srgb_to_linear(color_from_texture);
     } else {
         initial_linear_rgb = color_from_texture;
+    }
+
+    if (adjustments.global.hot_pixel_enabled == 1u) {
+        initial_linear_rgb = apply_hot_pixel_correction(
+            initial_linear_rgb,
+            absolute_coord_i,
+            adjustments.global.hot_pixel_threshold,
+            is_raw
+        );
     }
 
     var t_exposure = adjustments.global.exposure;

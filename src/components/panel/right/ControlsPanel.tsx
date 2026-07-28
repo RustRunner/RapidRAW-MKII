@@ -8,6 +8,7 @@ import CurveGraph from '../../adjustments/Curves';
 import ColorPanel from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
+import LowLightPanel from '../../adjustments/LowLight';
 import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import Waveform from '../editor/Waveform';
@@ -280,6 +281,7 @@ export default function Controls() {
             color: ColorPanel,
             details: DetailsPanel,
             effects: EffectsPanel,
+            lowlight: LowLightPanel,
             upscale: UpscalePanel,
           }[sectionName];
 

@@ -293,12 +293,24 @@
         "pasteSettings": "설정 붙여넣기",
         "resetSectionSettings": "{{section}} 설정 초기화"
       },
+      "lowlight": {
+        "apply": "Denoise (BM3D)",
+        "applying": "Denoising...",
+        "denoise": "ISO-Adaptive Denoise",
+        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal previews live; denoising saves the result as a new file and opens it.",
+        "hotPixels": "Hot Pixels",
+        "isoDetected": "ISO {{iso}} detected - suggested strength {{strength}}%",
+        "noIso": "No ISO metadata available - set strength manually",
+        "strength": "Denoise Strength",
+        "threshold": "Detection Threshold"
+      },
       "sections": {
         "basic": "기본",
         "color": "색상",
         "curves": "커브",
         "details": "디테일",
         "effects": "효과",
+        "lowlight": "Low-Light Recovery",
         "upscale": "업스케일"
       },
       "title": "조정",
@@ -1142,6 +1154,7 @@
         "halationGlow": "헐레이션 및 글로우",
         "hueShift": "글로벌 색조 시프트",
         "lensCorrection": "렌즈 보정",
+        "lowlight": "Low-Light Recovery",
         "lut": "LUT",
         "masks": "마스크",
         "noiseReduction": "노이즈 감소",

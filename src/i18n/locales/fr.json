@@ -309,12 +309,24 @@
         "pasteSettings": "Coller les paramètres",
         "resetSectionSettings": "Réinitialiser les paramètres de la section {{section}}"
       },
+      "lowlight": {
+        "apply": "Denoise (BM3D)",
+        "applying": "Denoising...",
+        "denoise": "ISO-Adaptive Denoise",
+        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal previews live; denoising saves the result as a new file and opens it.",
+        "hotPixels": "Hot Pixels",
+        "isoDetected": "ISO {{iso}} detected - suggested strength {{strength}}%",
+        "noIso": "No ISO metadata available - set strength manually",
+        "strength": "Denoise Strength",
+        "threshold": "Detection Threshold"
+      },
       "sections": {
         "basic": "Basique",
         "color": "Couleur",
         "curves": "Courbes",
         "details": "Détails",
         "effects": "Effets",
+        "lowlight": "Low-Light Recovery",
         "upscale": "Agrandir"
       },
       "title": "Ajustements",
@@ -1168,6 +1180,7 @@
         "halationGlow": "Halo & Lueur",
         "hueShift": "Décalage de teinte global",
         "lensCorrection": "Correction de l'objectif",
+        "lowlight": "Low-Light Recovery",
         "lut": "LUT",
         "masks": "Masques",
         "noiseReduction": "Réduction du bruit",

@@ -72,6 +72,11 @@ export enum DetailsAdjustment {
   ChromaticAberrationBlueYellow = 'chromaticAberrationBlueYellow',
 }
 
+export enum LowLightAdjustment {
+  HotPixelEnabled = 'hotPixelEnabled',
+  HotPixelThreshold = 'hotPixelThreshold',
+}
+
 export enum Effect {
   GrainAmount = 'grainAmount',
   GrainRoughness = 'grainRoughness',
@@ -157,6 +162,8 @@ export interface ParametricCurve {
 }
 
 export interface Adjustments {
+  hotPixelEnabled: boolean;
+  hotPixelThreshold: number;
   [index: string]: any;
   aiPatches: Array<AiPatch>;
   aspectRatio: number | null;
@@ -360,6 +367,7 @@ export interface Sections {
   color: Array<string>;
   details: Array<string>;
   effects: Array<string>;
+  lowlight: Array<string>;
   upscale: Array<string>;
 }
 
@@ -370,6 +378,7 @@ export interface SectionVisibility {
   color: boolean;
   details: boolean;
   effects: boolean;
+  lowlight: boolean;
   upscale: boolean;
 }
 
@@ -476,6 +485,7 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
     color: true,
     details: true,
     effects: true,
+    lowlight: true,
     upscale: true,
   },
   shadows: 0,
@@ -498,6 +508,8 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 };
 
 export const INITIAL_ADJUSTMENTS: Adjustments = {
+  hotPixelEnabled: false,
+  hotPixelThreshold: 50,
   aiPatches: [],
   aspectRatio: null,
   blacks: 0,
@@ -572,6 +584,7 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
     color: true,
     details: true,
     effects: true,
+    lowlight: true,
     upscale: true,
   },
   shadows: 0,
@@ -686,6 +699,8 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     flareAmount: loadedAdjustments.flareAmount ?? INITIAL_ADJUSTMENTS.flareAmount,
     glowAmount: loadedAdjustments.glowAmount ?? INITIAL_ADJUSTMENTS.glowAmount,
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
+    hotPixelEnabled: loadedAdjustments.hotPixelEnabled ?? INITIAL_ADJUSTMENTS.hotPixelEnabled,
+    hotPixelThreshold: loadedAdjustments.hotPixelThreshold ?? INITIAL_ADJUSTMENTS.hotPixelThreshold,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,
     lensBlurShape: loadedAdjustments.lensBlurShape ?? INITIAL_ADJUSTMENTS.lensBlurShape,
@@ -791,6 +806,10 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     {
       label: 'modals.copyPaste.groups.chromaticAberration',
       keys: [DetailsAdjustment.ChromaticAberrationRedCyan, DetailsAdjustment.ChromaticAberrationBlueYellow],
+    },
+    {
+      label: 'modals.copyPaste.groups.lowlight',
+      keys: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
     },
   ],
   effects: [
@@ -908,5 +927,6 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     Effect.LensBlurMinFade,
     Effect.LensBlurMaxFade,
   ],
+  lowlight: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
   upscale: [],
 };

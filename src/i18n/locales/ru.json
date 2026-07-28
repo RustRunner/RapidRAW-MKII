@@ -325,12 +325,24 @@
         "pasteSettings": "Вставить настройки",
         "resetSectionSettings": "Сбросить настройки раздела «{{section}}»"
       },
+      "lowlight": {
+        "apply": "Denoise (BM3D)",
+        "applying": "Denoising...",
+        "denoise": "ISO-Adaptive Denoise",
+        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal previews live; denoising saves the result as a new file and opens it.",
+        "hotPixels": "Hot Pixels",
+        "isoDetected": "ISO {{iso}} detected - suggested strength {{strength}}%",
+        "noIso": "No ISO metadata available - set strength manually",
+        "strength": "Denoise Strength",
+        "threshold": "Detection Threshold"
+      },
       "sections": {
         "basic": "Основные",
         "color": "Цвет",
         "curves": "Кривые",
         "details": "Детали",
         "effects": "Эффекты",
+        "lowlight": "Low-Light Recovery",
         "upscale": "Апскейлинг"
       },
       "title": "Настройки",
@@ -1192,6 +1204,7 @@
         "halationGlow": "Ореол и свечение",
         "hueShift": "Глобальный сдвиг цветового тона",
         "lensCorrection": "Коррекция объектива",
+        "lowlight": "Low-Light Recovery",
         "lut": "LUT",
         "masks": "Маски",
         "noiseReduction": "Подавление шума",
