@@ -1741,7 +1741,7 @@
       "addShortcutTooltip": "Shortcut hinzufügen",
       "addShortcutsPlaceholder": "Shortcuts hinzufügen (kommagetrennt)...",
       "aiTagging": "KI-Tagging",
-      "aiTaggingDesc": "Aktiviert automatisches Bild-Tagging mit einem KI-Modell (CLIP). Dies lädt ein zusätzliches Modell herunter und beeinträchtigt die Leistung beim Durchsuchen.",
+      "aiTaggingDesc": "Aktiviert automatisches Bild-Tagging mit einem KI-Modell (CLIP). Erfordert die CLIP-Modelldateien im lokalen Modellordner der App und beeinträchtigt die Leistung beim Durchsuchen von Ordnern. Tags werden für die Suche in einem Ordner verwendet.",
       "amount": "Betrag",
       "automaticAiTagging": "Automatisches KI-Tagging",
       "clearAiTagsButton": "Löschen",

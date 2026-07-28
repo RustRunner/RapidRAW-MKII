@@ -1741,7 +1741,7 @@
       "addShortcutTooltip": "Add Shortcut",
       "addShortcutsPlaceholder": "Add shortcuts (comma separated)...",
       "aiTagging": "AI Tagging",
-      "aiTaggingDesc": "Enables automatic image tagging using an AI (CLIP) model. This will download an additional model and impact performance while browsing folders. Tags are used for searching a folder.",
+      "aiTaggingDesc": "Enables automatic image tagging using an AI (CLIP) model. Requires the CLIP model files in the app's local models folder and impacts performance while browsing folders. Tags are used for searching a folder.",
       "amount": "Amount",
       "automaticAiTagging": "Automatic AI Tagging",
       "clearAiTagsButton": "Clear",

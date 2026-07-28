@@ -1774,7 +1774,7 @@
       "addShortcutTooltip": "Ajouter un raccourci",
       "addShortcutsPlaceholder": "Ajouter des raccourcis (séparés par des virgules)...",
       "aiTagging": "Marquage IA",
-      "aiTaggingDesc": "Active le marquage automatique des images à l'aide d'un modèle IA (CLIP). Ceci téléchargera un modèle supplémentaire et aura un impact sur les performances lors de la navigation dans les dossiers. Les étiquettes sont utilisées pour rechercher dans un dossier.",
+      "aiTaggingDesc": "Active le marquage automatique des images à l'aide d'un modèle IA (CLIP). Nécessite les fichiers du modèle CLIP dans le dossier local des modèles de l'application et affecte les performances lors de la navigation dans les dossiers. Les étiquettes sont utilisées pour la recherche dans un dossier.",
       "amount": "Quantité",
       "automaticAiTagging": "Marquage IA automatique",
       "clearAiTagsButton": "Effacer",

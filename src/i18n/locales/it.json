@@ -1774,7 +1774,7 @@
       "addShortcutTooltip": "Aggiungi Scorciatoia",
       "addShortcutsPlaceholder": "Aggiungi scorciatoie (separate da virgola)...",
       "aiTagging": "Tagging AI",
-      "aiTaggingDesc": "Abilita il tagging automatico delle immagini utilizzando un modello AI (CLIP). Questo scaricherà un modello aggiuntivo e influenzerà le prestazioni durante l'esplorazione delle cartelle. I tag vengono utilizzati per la ricerca in una cartella.",
+      "aiTaggingDesc": "Abilita il tagging automatico delle immagini utilizzando un modello AI (CLIP). Richiede i file del modello CLIP nella cartella locale dei modelli dell'app e influisce sulle prestazioni durante la navigazione nelle cartelle. I tag vengono usati per la ricerca in una cartella.",
       "amount": "Quantità",
       "automaticAiTagging": "Tagging AI Automatico",
       "clearAiTagsButton": "Cancella",

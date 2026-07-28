@@ -1807,7 +1807,7 @@
       "addShortcutTooltip": "Dodaj skrót",
       "addShortcutsPlaceholder": "Dodaj skróty (oddzielone przecinkiem)...",
       "aiTagging": "Tagowanie przez AI",
-      "aiTaggingDesc": "Włącza automatyczne tagowanie przy użyciu modelu AI (CLIP). Wymaga to pobrania dodatkowego modelu AI i wpłynie na wydajność podczas przeglądania folderów. Tagi ułatwią późniejsze wyszukiwanie.",
+      "aiTaggingDesc": "Włącza automatyczne tagowanie przy użyciu modelu AI (CLIP). Wymaga plików modelu CLIP w lokalnym folderze modeli aplikacji i wpływa na wydajność podczas przeglądania folderów. Tagi służą do wyszukiwania w folderze.",
       "amount": "Ilość",
       "automaticAiTagging": "Automatyczne tagowanie AI",
       "clearAiTagsButton": "Wyczyść",

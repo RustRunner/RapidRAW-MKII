@@ -1739,7 +1739,7 @@
       "addShortcutTooltip": "ショートカットを追加",
       "addShortcutsPlaceholder": "ショートカットを入力（カンマ区切り）...",
       "aiTagging": "AIタグ付け",
-      "aiTaggingDesc": "AI（CLIP）モデルを使用した自動画像タグ付けを有効にします。追加のモデルがダウンロードされ、フォルダ閲覧時のパフォーマンスに影響します。タグはフォルダ内検索に使用されます。",
+      "aiTaggingDesc": "AI（CLIP）モデルを使用した自動画像タグ付けを有効にします。アプリのローカルモデルフォルダにCLIPモデルファイルが必要で、フォルダ閲覧時のパフォーマンスに影響します。タグはフォルダ内検索に使用されます。",
       "amount": "適用度",
       "automaticAiTagging": "自動AIタグ付け",
       "clearAiTagsButton": "クリア",

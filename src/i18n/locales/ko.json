@@ -1739,7 +1739,7 @@
       "addShortcutTooltip": "단축키 추가",
       "addShortcutsPlaceholder": "단축키 추가 (쉼표로 구분)...",
       "aiTagging": "AI 태그 지정",
-      "aiTaggingDesc": "AI(CLIP) 모델을 사용한 자동 이미지 태그 지정을 활성화합니다. 추가 모델을 다운로드하며 폴더를 탐색하는 동안 성능에 영향을 줍니다. 태그는 폴더 검색에 사용됩니다.",
+      "aiTaggingDesc": "AI(CLIP) 모델을 사용한 자동 이미지 태그 지정을 활성화합니다. 앱의 로컬 모델 폴더에 CLIP 모델 파일이 필요하며 폴더를 탐색하는 동안 성능에 영향을 줍니다. 태그는 폴더 검색에 사용됩니다.",
       "amount": "양",
       "automaticAiTagging": "자동 AI 태그 지정",
       "clearAiTagsButton": "지우기",

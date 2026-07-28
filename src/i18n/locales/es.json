@@ -1774,7 +1774,7 @@
       "addShortcutTooltip": "Añadir atajo",
       "addShortcutsPlaceholder": "Añadir atajos (separados por comas)...",
       "aiTagging": "Etiquetado por IA",
-      "aiTaggingDesc": "Habilita el etiquetado automático de imágenes mediante un modelo de IA (CLIP). Esto descargará un modelo adicional y afectará el rendimiento al navegar por las carpetas. Las etiquetas se utilizan para buscar en una carpeta.",
+      "aiTaggingDesc": "Habilita el etiquetado automático de imágenes mediante un modelo de IA (CLIP). Requiere los archivos del modelo CLIP en la carpeta local de modelos de la aplicación y afecta al rendimiento al navegar por las carpetas. Las etiquetas se usan para buscar en una carpeta.",
       "amount": "Cantidad",
       "automaticAiTagging": "Etiquetado automático por IA",
       "clearAiTagsButton": "Borrar",

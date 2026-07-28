@@ -1774,7 +1774,7 @@
       "addShortcutTooltip": "Adicionar Atalho",
       "addShortcutsPlaceholder": "Adicionar atalhos (separados por vírgula)...",
       "aiTagging": "Tagging por IA",
-      "aiTaggingDesc": "Ativa a marcação automática de imagens usando um modelo de IA (CLIP). Isso baixará um modelo adicional e afetará o desempenho durante a navegação em pastas. As etiquetas são usadas para pesquisar em uma pasta.",
+      "aiTaggingDesc": "Ativa a marcação automática de imagens usando um modelo de IA (CLIP). Requer os arquivos do modelo CLIP na pasta local de modelos do aplicativo e afeta o desempenho ao navegar pelas pastas. As tags são usadas para pesquisar em uma pasta.",
       "amount": "Quantidade",
       "automaticAiTagging": "Tagging Automático por IA",
       "clearAiTagsButton": "Limpar",

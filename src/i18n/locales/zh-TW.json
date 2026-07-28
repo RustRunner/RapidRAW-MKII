@@ -1739,7 +1739,7 @@
       "addShortcutTooltip": "新增快捷方式",
       "addShortcutsPlaceholder": "新增快捷方式（逗號分隔）...",
       "aiTagging": "AI 標籤",
-      "aiTaggingDesc": "使用 AI（CLIP）模型啟用自動影像標籤。這將下載額外的模型，並在瀏覽資料夾時影響效能。標籤用於搜尋資料夾。",
+      "aiTaggingDesc": "使用 AI（CLIP）模型啟用自動影像標籤。需要將 CLIP 模型檔案放入應用程式的本機模型資料夾，並在瀏覽資料夾時影響效能。標籤用於搜尋資料夾。",
       "amount": "數量",
       "automaticAiTagging": "自動 AI 標籤",
       "clearAiTagsButton": "清除",
