@@ -2128,6 +2128,130 @@ impl RapidDeconvolver {
 // Tests
 // ============================================================================
 
+// ============================================================================
+// Pipeline integration: full-image blur-recovery pre-pass
+// ============================================================================
+
+struct RapidGpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    deconvolver: RapidDeconvolver,
+}
+
+static RAPID_GPU: std::sync::OnceLock<Option<std::sync::Mutex<RapidGpu>>> = std::sync::OnceLock::new();
+
+/// Lazily creates a dedicated wgpu device for blur recovery. Kept separate
+/// from the main GpuContext so the pre-pass needs no plumbing through the
+/// tiled pipeline; returns None (and logs) when the GPU is unsupported.
+fn get_rapid_gpu() -> Option<&'static std::sync::Mutex<RapidGpu>> {
+    RAPID_GPU
+        .get_or_init(|| {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+            let adapter = match pollster::block_on(instance.request_adapter(
+                &wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    ..Default::default()
+                },
+            )) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::warn!("RAPID: no GPU adapter available ({e}); blur recovery disabled");
+                    return None;
+                }
+            };
+            let (device, queue) = match pollster::block_on(adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("RAPID Deconvolution Device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                },
+            )) {
+                Ok(dq) => dq,
+                Err(e) => {
+                    log::warn!("RAPID: failed to create device ({e}); blur recovery disabled");
+                    return None;
+                }
+            };
+            match RapidDeconvolver::new(&adapter, &device) {
+                Ok(deconvolver) => Some(std::sync::Mutex::new(RapidGpu {
+                    device,
+                    queue,
+                    deconvolver,
+                })),
+                Err(e) => {
+                    log::warn!("RAPID: unsupported GPU ({e}); blur recovery disabled");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// Parses blur-recovery params from the frontend adjustment JSON.
+/// Returns None when the feature is off or its section is hidden.
+pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams> {
+    let visible = adjustments
+        .get("sectionVisibility")
+        .and_then(|v| v.get("blurRecovery"))
+        .and_then(|s| s.as_bool())
+        .unwrap_or(true);
+    if !visible || !adjustments["rapidEnabled"].as_bool().unwrap_or(false) {
+        return None;
+    }
+    let blur_type = match adjustments["rapidBlurType"].as_str().unwrap_or("motion") {
+        "defocus" => BlurType::Defocus,
+        "gaussian" => BlurType::Gaussian,
+        _ => BlurType::Motion,
+    };
+    Some(RapidParams {
+        enabled: true,
+        blur_type,
+        motion_length: adjustments["rapidLength"].as_f64().unwrap_or(10.0) as f32,
+        motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
+        defocus_radius: adjustments["rapidRadius"].as_f64().unwrap_or(5.0) as f32,
+        gaussian_sigma: adjustments["rapidSigma"].as_f64().unwrap_or(2.0) as f32,
+        lambda: adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32,
+        strength: (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
+            .clamp(0.0, 1.0),
+        adaptive: adjustments["rapidAdaptive"].as_bool().unwrap_or(false),
+        ..Default::default()
+    })
+}
+
+/// Full-image FFT deconvolution pre-pass. Runs before geometry transforms so
+/// the PSF stays defined in sensor pixel space. No-ops (with a warning) when
+/// the GPU is unavailable or processing fails.
+pub fn apply_blur_recovery<'a>(
+    image: std::borrow::Cow<'a, image::DynamicImage>,
+    adjustments: &serde_json::Value,
+) -> std::borrow::Cow<'a, image::DynamicImage> {
+    let Some(params) = parse_rapid_params(adjustments) else {
+        return image;
+    };
+    let Some(gpu) = get_rapid_gpu() else {
+        return image;
+    };
+    let mut gpu = gpu.lock().unwrap();
+    let RapidGpu {
+        device,
+        queue,
+        deconvolver,
+    } = &mut *gpu;
+    let start = std::time::Instant::now();
+    match deconvolver.deconvolve_image(device, queue, image.as_ref(), &params) {
+        Ok(out) => {
+            log::info!("RAPID: blur recovery pre-pass took {:?}", start.elapsed());
+            std::borrow::Cow::Owned(out)
+        }
+        Err(e) => {
+            log::warn!("RAPID: blur recovery failed ({e}); using original image");
+            image
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -154,6 +154,30 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
         }
     }
 
+    let blur_recovery_visible = adjustments
+        .get("sectionVisibility")
+        .and_then(|v| v.get("blurRecovery"))
+        .and_then(|s| s.as_bool())
+        .unwrap_or(true);
+    let rapid_enabled = blur_recovery_visible && adjustments["rapidEnabled"].as_bool().unwrap_or(false);
+    rapid_enabled.hash(&mut hasher);
+    if rapid_enabled {
+        for key in [
+            "rapidBlurType",
+            "rapidLength",
+            "rapidAngle",
+            "rapidRadius",
+            "rapidSigma",
+            "rapidLambda",
+            "rapidStrength",
+            "rapidAdaptive",
+        ] {
+            if let Some(val) = adjustments.get(key) {
+                val.to_string().hash(&mut hasher);
+            }
+        }
+    }
+
     if let Some(crop_val) = adjustments.get("crop")
         && !crop_val.is_null()
     {

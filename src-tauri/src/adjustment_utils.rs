@@ -96,7 +96,8 @@ pub fn apply_all_transformations<'a, I: IntoCowImage<'a>>(
 ) -> (Cow<'a, DynamicImage>, (f32, f32)) {
     let start_time = std::time::Instant::now();
     let image = image.into_cow();
-    let warped_image = apply_geometry_warp(image, adjustments);
+    let recovered_image = crate::rapid_processing::apply_blur_recovery(image, adjustments);
+    let warped_image = apply_geometry_warp(recovered_image, adjustments);
     let blurred_image = crate::lens_blur::apply_lens_blur(warped_image, adjustments);
 
     let orientation_steps = adjustments["orientationSteps"].as_u64().unwrap_or(0) as u8;
