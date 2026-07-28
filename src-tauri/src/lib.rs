@@ -2020,6 +2020,11 @@ pub fn run() {
                         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
                         std::env::set_var("NODEVICE_SELECT", "1");
                     } else if is_nvidia_gpu() {
+                        // WebKitGTK's DMABUF renderer never paints on some
+                        // NVIDIA driver/GPU combos (verified on the open
+                        // kernel module, aarch64): the webview stays blank
+                        // and the transparent main window shows nothing.
+                        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
                         std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
                     }
                 }
