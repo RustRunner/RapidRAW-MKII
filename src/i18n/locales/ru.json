@@ -330,13 +330,22 @@
         "color": "Цвет",
         "curves": "Кривые",
         "details": "Детали",
-        "effects": "Эффекты"
+        "effects": "Эффекты",
+        "upscale": "Апскейлинг"
       },
       "title": "Настройки",
       "tooltips": {
         "autoAdjust": "Автонастройка изображения",
         "resetAdjustments": "Сбросить настройки",
         "toggleAnalytics": "Показать/скрыть панель гистограммы"
+      },
+      "upscale": {
+        "alreadyUpscaled": "This image has already been upscaled.",
+        "applied": "Applied",
+        "apply": "Apply",
+        "applying": "Upscaling...",
+        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "heading": "2x Upscale"
       }
     },
     "ai": {

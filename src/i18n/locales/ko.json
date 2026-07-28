@@ -298,13 +298,22 @@
         "color": "색상",
         "curves": "커브",
         "details": "디테일",
-        "effects": "효과"
+        "effects": "효과",
+        "upscale": "업스케일"
       },
       "title": "조정",
       "tooltips": {
         "autoAdjust": "이미지 자동 조정",
         "resetAdjustments": "조정값 초기화",
         "toggleAnalytics": "분석 표시 전환"
+      },
+      "upscale": {
+        "alreadyUpscaled": "This image has already been upscaled.",
+        "applied": "Applied",
+        "apply": "Apply",
+        "applying": "Upscaling...",
+        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "heading": "2x Upscale"
       }
     },
     "ai": {

@@ -1982,7 +1982,7 @@ function SettingsPanel({
     event.stopPropagation();
 
     const sectionKeys = ADJUSTMENT_SECTIONS[sectionName];
-    if (!sectionKeys) return;
+    if (!sectionKeys?.length) return;
 
     const handleCopy = () => {
       const adjustmentsToCopy: Record<string, any> = {};
@@ -2208,6 +2208,7 @@ function SettingsPanel({
             details: DetailsPanel,
             effects: EffectsPanel,
           }[sectionName];
+          if (!SectionComponent) return null;
           const title = sectionName.charAt(0).toUpperCase() + sectionName.slice(1);
           return (
             <CollapsibleSection

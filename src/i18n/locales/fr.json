@@ -314,13 +314,22 @@
         "color": "Couleur",
         "curves": "Courbes",
         "details": "Détails",
-        "effects": "Effets"
+        "effects": "Effets",
+        "upscale": "Agrandir"
       },
       "title": "Ajustements",
       "tooltips": {
         "autoAdjust": "Ajustement auto de l'image",
         "resetAdjustments": "Réinitialiser les ajustements",
         "toggleAnalytics": "Basculer l'affichage des analyses"
+      },
+      "upscale": {
+        "alreadyUpscaled": "This image has already been upscaled.",
+        "applied": "Applied",
+        "apply": "Apply",
+        "applying": "Upscaling...",
+        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "heading": "2x Upscale"
       }
     },
     "ai": {

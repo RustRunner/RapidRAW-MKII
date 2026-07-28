@@ -8,6 +8,7 @@ import CurveGraph from '../../adjustments/Curves';
 import ColorPanel from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
+import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import Waveform from '../editor/Waveform';
 import Resizer from '../../ui/Resizer';
@@ -139,7 +140,7 @@ export default function Controls() {
     event.stopPropagation();
 
     const sectionKeys = ADJUSTMENT_SECTIONS[sectionName];
-    if (!sectionKeys) {
+    if (!sectionKeys?.length) {
       return;
     }
 
@@ -279,6 +280,7 @@ export default function Controls() {
             color: ColorPanel,
             details: DetailsPanel,
             effects: EffectsPanel,
+            upscale: UpscalePanel,
           }[sectionName];
 
           const title = t(`editor.adjustments.sections.${sectionName}`);

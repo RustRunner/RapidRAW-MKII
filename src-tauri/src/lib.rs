@@ -37,6 +37,7 @@ mod preset_converter;
 mod raw_processing;
 mod tagging;
 mod tagging_utils;
+mod upscaling;
 mod window_customizer;
 
 use std::collections::{HashMap, hash_map::DefaultHasher};
@@ -2322,6 +2323,7 @@ pub fn run() {
             denoising::apply_denoising,
             denoising::batch_denoise_images,
             denoising::save_denoised_image,
+            upscaling::upscale_and_save_image,
             image_loader::load_image,
             image_loader::is_image_cached,
             panorama_stitching::stitch_panorama,

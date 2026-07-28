@@ -298,13 +298,22 @@
         "color": "颜色",
         "curves": "曲线",
         "details": "细节",
-        "effects": "效果"
+        "effects": "效果",
+        "upscale": "放大"
       },
       "title": "调整",
       "tooltips": {
         "autoAdjust": "自动调整图像",
         "resetAdjustments": "重置调整",
         "toggleAnalytics": "切换分析显示"
+      },
+      "upscale": {
+        "alreadyUpscaled": "This image has already been upscaled.",
+        "applied": "Applied",
+        "apply": "Apply",
+        "applying": "Upscaling...",
+        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "heading": "2x Upscale"
       }
     },
     "ai": {
