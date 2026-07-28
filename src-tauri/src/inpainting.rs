@@ -1,12 +1,10 @@
 use std::io::Cursor;
 
 use base64::{Engine as _, engine::general_purpose};
-use image::{DynamicImage, GenericImageView, Rgb, RgbImage, RgbaImage};
+use image::{GenericImageView, Rgb, RgbImage};
 use serde_json::Value;
 
-use crate::ai_connector;
 use crate::ai_processing;
-use crate::app_settings::load_settings;
 use crate::app_state::AppState;
 use crate::image_loader::composite_patches_on_image;
 use crate::image_processing::apply_linear_to_srgb;
@@ -319,16 +317,11 @@ pub async fn generate_manual_cleanup_patch(
 
 #[tauri::command]
 pub async fn invoke_generative_replace_with_mask_def(
-    path: String,
     patch_definition: AiPatchDefinition,
     current_adjustments: Value,
-    use_fast_inpaint: bool,
-    token: Option<String>,
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let settings = load_settings(app_handle.clone()).unwrap_or_default();
-
     let mut source_image_adjustments = current_adjustments.clone();
     if let Some(patches) = source_image_adjustments
         .get_mut("aiPatches")
@@ -393,7 +386,7 @@ pub async fn invoke_generative_replace_with_mask_def(
     let mask_bitmap =
         crate::image_processing::inverse_transform_mask(mask_bitmap, &current_adjustments);
 
-    let patch_rgba = if use_fast_inpaint {
+    let patch_rgba = {
         let lama_model = ai_processing::get_or_init_lama_model(
             &app_handle,
             &state.ai_state,
@@ -404,65 +397,6 @@ pub async fn invoke_generative_replace_with_mask_def(
 
         ai_processing::run_lama_inpainting(&source_image, &mask_bitmap, &lama_model)
             .map_err(|e| e.to_string())?
-    } else if settings.ai_provider.as_deref() == Some("cloud")
-        && let Some(auth_token) = token
-    {
-        let base_url = "https://getrapidraw.com/api";
-
-        let mut rgba_mask = RgbaImage::new(img_w, img_h);
-        for (src_val, dst_chunk) in mask_bitmap.as_raw().iter().zip(rgba_mask.chunks_mut(4)) {
-            let intensity = *src_val;
-            dst_chunk[0] = intensity;
-            dst_chunk[1] = intensity;
-            dst_chunk[2] = intensity;
-            dst_chunk[3] = 255;
-        }
-        let mask_image_dynamic = DynamicImage::ImageRgba8(rgba_mask);
-
-        let (real_path_buf, _) = crate::file_management::parse_virtual_path(&path);
-
-        ai_connector::process_inpainting(
-            base_url,
-            &real_path_buf.to_string_lossy(),
-            &source_image,
-            &mask_image_dynamic,
-            patch_definition.prompt,
-            Some(&auth_token),
-        )
-        .await
-        .map_err(|e| e.to_string())?
-    } else if settings.ai_provider.as_deref() == Some("ai-connector")
-        && let Some(address) = settings.ai_connector_address
-    {
-        let base_url = format!("http://{}", address);
-
-        let mut rgba_mask = RgbaImage::new(img_w, img_h);
-        for (src_val, dst_chunk) in mask_bitmap.as_raw().iter().zip(rgba_mask.chunks_mut(4)) {
-            let intensity = *src_val;
-            dst_chunk[0] = intensity;
-            dst_chunk[1] = intensity;
-            dst_chunk[2] = intensity;
-            dst_chunk[3] = 255;
-        }
-        let mask_image_dynamic = DynamicImage::ImageRgba8(rgba_mask);
-
-        let (real_path_buf, _) = crate::file_management::parse_virtual_path(&path);
-
-        ai_connector::process_inpainting(
-            &base_url,
-            &real_path_buf.to_string_lossy(),
-            &source_image,
-            &mask_image_dynamic,
-            patch_definition.prompt,
-            None,
-        )
-        .await
-        .map_err(|e| e.to_string())?
-    } else {
-        return Err(
-            "No generative backend configured or connection invalid. Please check your AI settings."
-                .to_string(),
-        );
     };
 
     let (patch_w, patch_h) = patch_rgba.dimensions();

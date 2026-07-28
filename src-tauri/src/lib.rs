@@ -7,7 +7,6 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod adjustment_utils;
 mod ai_commands;
-mod ai_connector;
 mod ai_processing;
 mod android_integration;
 mod app_settings;
@@ -2095,8 +2094,6 @@ pub fn run() {
             ai_commands::generate_ai_foreground_mask,
             ai_commands::generate_ai_sky_mask,
             ai_commands::generate_ai_depth_mask,
-            ai_commands::check_ai_connector_status,
-            ai_commands::test_ai_connector_connection,
             ai_commands::generate_full_image_depth_map,
             inpainting::invoke_generative_replace_with_mask_def,
             inpainting::generate_manual_cleanup_patch,

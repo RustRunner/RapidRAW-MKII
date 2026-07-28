@@ -72,7 +72,6 @@ interface EditorState {
   isMaskControlHovered: boolean;
   isGeneratingAiMask: boolean;
   isGeneratingAi: boolean;
-  isAIConnectorConnected: boolean;
   hasRenderedFirstFrame: boolean;
   patchesSentToBackend: Set<string>;
 
@@ -135,7 +134,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   copiedAdjustments: null,
 
   isGeneratingAiMask: false,
-  isAIConnectorConnected: false,
   isGeneratingAi: false,
   isMaskControlHovered: false,
   hasRenderedFirstFrame: false,
