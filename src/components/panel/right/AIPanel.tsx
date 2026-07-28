@@ -222,7 +222,6 @@ export default function AIPanel() {
   const selectedImage = useEditorStore((s) => s.selectedImage);
   const setEditor = useEditorStore((s) => s.setEditor);
 
-  const aiModelDownloadStatus = useProcessStore((s) => s.aiModelDownloadStatus);
   const setCustomEscapeHandler = useUIStore((s) => s.setCustomEscapeHandler);
 
   const { setAdjustments } = useEditorActions();
@@ -1087,7 +1086,6 @@ export default function AIPanel() {
                 <SettingsPanel
                   container={activeContainer || null}
                   activeSubMask={activeSubMaskData || null}
-                  aiModelDownloadStatus={aiModelDownloadStatus}
                   brushSettings={brushSettings}
                   setBrushSettings={setBrushSettings}
                   updateContainer={updatePatch}
@@ -1745,7 +1743,6 @@ function SubMaskRow({
 function SettingsPanel({
   container,
   activeSubMask,
-  aiModelDownloadStatus,
   brushSettings,
   setBrushSettings,
   updateContainer,
@@ -1797,22 +1794,6 @@ function SettingsPanel({
           isContentVisible={true}
         >
           <div className="space-y-4 pt-2">
-            {aiModelDownloadStatus && aiModelDownloadStatus.includes('Inpainting') && (
-              <Text
-                as="div"
-                variant={TextVariants.small}
-                color={TextColors.accent}
-                weight={TextWeights.medium}
-                className="p-3 bg-card-active rounded-md border border-surface flex items-center gap-3"
-              >
-                <Loader2 size={16} className="animate-spin shrink-0" />
-                <div className="leading-relaxed">
-                  <Text variant={TextVariants.small}>{t('editor.ai.settings.downloading')}</Text>
-                  <span>{aiModelDownloadStatus}</span>
-                </div>
-              </Text>
-            )}
-
             <Text variant={TextVariants.small}>
               {isQuickErasePatch
                 ? t('editor.ai.settings.quickEraseDesc')
@@ -1871,22 +1852,6 @@ function SettingsPanel({
 
           {isComponentMode && (
             <>
-              {isAiMask && aiModelDownloadStatus && (
-                <Text
-                  as="div"
-                  variant={TextVariants.small}
-                  color={TextColors.accent}
-                  weight={TextWeights.medium}
-                  className="p-3 bg-card-active rounded-md border border-surface flex items-center gap-3"
-                >
-                  <Loader2 size={16} className="animate-spin shrink-0" />
-                  <div className="leading-relaxed">
-                    <Text variant={TextVariants.small}>{t('editor.ai.settings.aiModelDownloading')}</Text>
-                    <span>{aiModelDownloadStatus}</span>
-                  </div>
-                </Text>
-              )}
-
               {subMaskConfig.parameters?.map((param: any) => (
                 <Slider
                   key={param.key}

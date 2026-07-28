@@ -53,7 +53,6 @@ export interface ColumnWidths {
 
 interface MainLibraryProps {
   activePath: string | null;
-  aiModelDownloadStatus: string | null;
   appSettings: AppSettings | null;
   currentFolderPath: string | null;
   groupBadgeInfo: Map<GroupId, GroupBadgeInfo> | null;
@@ -575,25 +574,23 @@ export default function MainLibrary(props: MainLibraryProps) {
             thumbnailSizeOptions={translatedThumbnailSizeOptions}
           />
         )
-      ) : props.isIndexing || props.aiModelDownloadStatus || props.importState.status === Status.Importing ? (
+      ) : props.isIndexing || props.importState.status === Status.Importing ? (
         <div className="flex-1 flex flex-col items-center justify-center" onContextMenu={props.onEmptyAreaContextMenu}>
           <Loader2 className="h-12 w-12 text-secondary animate-spin mb-4" />
           <Text variant={TextVariants.heading} color={TextColors.secondary}>
-            {props.aiModelDownloadStatus
-              ? t('library.status.downloading', { status: props.aiModelDownloadStatus })
-              : props.isIndexing && props.indexingProgress.total > 0
-                ? t('library.status.indexing', {
-                    current: props.indexingProgress.current,
-                    total: props.indexingProgress.total,
+            {props.isIndexing && props.indexingProgress.total > 0
+              ? t('library.status.indexing', {
+                  current: props.indexingProgress.current,
+                  total: props.indexingProgress.total,
+                })
+              : props.importState.status === Status.Importing &&
+                  props.importState?.progress?.total &&
+                  props.importState.progress.total > 0
+                ? t('library.status.importing', {
+                    current: props.importState.progress?.current,
+                    total: props.importState.progress?.total,
                   })
-                : props.importState.status === Status.Importing &&
-                    props.importState?.progress?.total &&
-                    props.importState.progress.total > 0
-                  ? t('library.status.importing', {
-                      current: props.importState.progress?.current,
-                      total: props.importState.progress?.total,
-                    })
-                  : t('library.status.processing')}
+                : t('library.status.processing')}
           </Text>
           <Text className="mt-2">{t('library.status.moment')}</Text>
         </div>

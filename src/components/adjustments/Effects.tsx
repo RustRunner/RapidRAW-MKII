@@ -13,7 +13,6 @@ import { AppSettings } from '../ui/AppProperties';
 import Text from '../ui/Text';
 import { TextVariants } from '../../types/typography';
 import { DepthRangePicker } from '../ui/DepthRangePicker';
-import { useProcessStore } from '../../store/useProcessStore';
 
 interface EffectsPanelProps {
   adjustments: Adjustments;
@@ -147,7 +146,6 @@ export default function EffectsPanel({
 }: EffectsPanelProps) {
   const { t } = useTranslation();
   const [isGeneratingDepth, setIsGeneratingDepth] = useState(false);
-  const aiModelDownloadStatus = useProcessStore((state) => state.aiModelDownloadStatus);
 
   const handleGenerateLensBlurDepthMap = async () => {
     setIsGeneratingDepth(true);
@@ -258,17 +256,8 @@ export default function EffectsPanel({
                     <div className="flex flex-col items-center justify-center gap-1 p-4 text-text-secondary text-center">
                       <div className="flex items-center gap-2">
                         <Loader2 size={16} className="animate-spin shrink-0" />
-                        <Text variant={TextVariants.label}>
-                          {aiModelDownloadStatus
-                            ? t('editor.masks.settings.aiModelDownloading')
-                            : t('editor.ai.generatingDepthMap')}
-                        </Text>
+                        <Text variant={TextVariants.label}>{t('editor.ai.generatingDepthMap')}</Text>
                       </div>
-                      {aiModelDownloadStatus && (
-                        <Text variant={TextVariants.small} className="text-accent">
-                          {aiModelDownloadStatus}
-                        </Text>
-                      )}
                     </div>
                   ) : (
                     <>

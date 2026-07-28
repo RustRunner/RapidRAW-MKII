@@ -99,10 +99,9 @@ export default function AppModals(props: AppModalsProps) {
     })),
   );
 
-  const { thumbnails, aiModelDownloadStatus } = useProcessStore(
+  const { thumbnails } = useProcessStore(
     useShallow((state) => ({
       thumbnails: state.thumbnails,
-      aiModelDownloadStatus: state.aiModelDownloadStatus,
     })),
   );
 
@@ -230,7 +229,6 @@ export default function AppModals(props: AppModalsProps) {
         isProcessing={denoiseModalState.isProcessing}
         error={denoiseModalState.error}
         progressMessage={denoiseModalState.progressMessage}
-        aiModelDownloadStatus={aiModelDownloadStatus}
         isRaw={denoiseModalState.isRaw}
         targetPaths={denoiseModalState.targetPaths}
         loadingImageUrl={

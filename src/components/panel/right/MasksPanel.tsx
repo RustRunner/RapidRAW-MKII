@@ -83,7 +83,6 @@ import Text from '../../ui/Text';
 import { TEXT_COLOR_KEYS, TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { useEditorStore } from '../../../store/useEditorStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
-import { useProcessStore } from '../../../store/useProcessStore';
 import { useAiMasking } from '../../../hooks/useAiMasking';
 import { useEditorActions } from '../../../hooks/useEditorActions';
 import { useUIStore } from '../../../store/useUIStore';
@@ -236,12 +235,6 @@ export default function MasksPanel() {
   const { appSettings } = useSettingsStore(
     useShallow((state) => ({
       appSettings: state.appSettings,
-    })),
-  );
-
-  const { aiModelDownloadStatus } = useProcessStore(
-    useShallow((state) => ({
-      aiModelDownloadStatus: state.aiModelDownloadStatus,
     })),
   );
 
@@ -1134,7 +1127,6 @@ export default function MasksPanel() {
                 <SettingsPanel
                   container={activeContainer}
                   activeSubMask={activeSubMaskData || null}
-                  aiModelDownloadStatus={aiModelDownloadStatus}
                   brushSettings={brushSettings}
                   setBrushSettings={setBrushSettings}
                   updateContainer={updateContainer}
@@ -1839,7 +1831,6 @@ function SubMaskRow({
 function SettingsPanel({
   container,
   activeSubMask,
-  aiModelDownloadStatus,
   brushSettings,
   setBrushSettings,
   updateContainer,
@@ -2121,22 +2112,6 @@ function SettingsPanel({
 
           {isComponentMode && (
             <>
-              {isAiMask && aiModelDownloadStatus && (
-                <Text
-                  as="div"
-                  variant={TextVariants.small}
-                  color={TextColors.accent}
-                  weight={TextWeights.medium}
-                  className="p-3 bg-card-active rounded-md border border-surface flex items-center gap-3"
-                >
-                  <Loader2 size={16} className="animate-spin shrink-0" />
-                  <div className="leading-relaxed">
-                    <Text variant={TextVariants.small}>{t('editor.masks.settings.aiModelDownloading')}</Text>
-                    <span>{aiModelDownloadStatus}</span>
-                  </div>
-                </Text>
-              )}
-
               {activeSubMask.type === Mask.AiDepth && (
                 <DepthRangePicker
                   minDepth={100 - (activeSubMask.parameters?.maxDepth ?? 100)}

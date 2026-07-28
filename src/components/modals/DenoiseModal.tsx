@@ -21,7 +21,6 @@ interface DenoiseModalProps {
   originalBase64: string | null;
   isProcessing: boolean;
   progressMessage: string | null;
-  aiModelDownloadStatus: string | null;
   isRaw: boolean;
   loadingImageUrl?: string | null;
   targetPaths: string[];
@@ -219,7 +218,6 @@ export default function DenoiseModal({
   originalBase64,
   isProcessing,
   progressMessage,
-  aiModelDownloadStatus,
   isRaw,
   loadingImageUrl,
   targetPaths,
@@ -255,9 +253,7 @@ export default function DenoiseModal({
   const currentStatusText =
     isBatch && batchProgress
       ? t('modals.denoise.batchProgressText', { current: batchProgress.current, total: batchProgress.total })
-      : aiModelDownloadStatus?.includes('NIND')
-        ? t('modals.denoise.downloadingText', { status: aiModelDownloadStatus })
-        : progressMessage || t('modals.denoise.initializing');
+      : progressMessage || t('modals.denoise.initializing');
 
   useEffect(() => {
     if (isOpen) {

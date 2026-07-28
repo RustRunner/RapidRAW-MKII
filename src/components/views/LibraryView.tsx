@@ -101,10 +101,9 @@ export default function LibraryView({
     })),
   );
 
-  const { aiModelDownloadStatus, importState, indexingProgress, isIndexing, thumbnailProgress, isCopied, isPasted } =
+  const { importState, indexingProgress, isIndexing, thumbnailProgress, isCopied, isPasted } =
     useProcessStore(
       useShallow((state) => ({
-        aiModelDownloadStatus: state.aiModelDownloadStatus,
         importState: state.importState,
         indexingProgress: state.indexingProgress,
         isIndexing: state.isIndexing,
@@ -119,7 +118,6 @@ export default function LibraryView({
       <div className="flex-1 flex flex-col min-w-0 gap-2">
         <MainLibrary
             activePath={libraryActivePath}
-            aiModelDownloadStatus={aiModelDownloadStatus}
             appSettings={appSettings}
             currentFolderPath={currentFolderPath}
             groupBadgeInfo={groupBadgeInfo}
