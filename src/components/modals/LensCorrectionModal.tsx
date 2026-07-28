@@ -843,23 +843,9 @@ export default function LensCorrectionModal({
             <div className="leading-tight space-y-1">
               <Trans i18nKey="modals.lensCorrection.databaseNotice">
                 Lens database provided by the{' '}
-                <a
-                  href="https://lensfun.github.io/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline hover:text-primary transition-colors"
-                >
-                  Lensfun Project
-                </a>{' '}
+                <span className="underline">Lensfun Project</span>{' '}
                 (
-                <a
-                  href="https://creativecommons.org/licenses/by-sa/3.0/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline hover:text-primary transition-colors"
-                >
-                  CC BY-SA 3.0
-                </a>
+                <span className="underline">CC BY-SA 3.0</span>
                 ).
               </Trans>
             </div>

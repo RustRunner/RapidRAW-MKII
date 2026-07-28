@@ -1382,102 +1382,39 @@ export default function SettingsPanel({
                     <Text className="mb-4">{t('settings.thanks.description')}</Text>
                     <Text as="ul" className="space-y-3 list-disc ml-5 pl-1">
                       <li>
-                        <a
-                          href="https://github.com/dnglab/dnglab/tree/main/rawler"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          rawler
-                        </a>
+                        <span className="font-semibold text-accent">rawler</span>
                         : {t('settings.thanks.list.rawler')}
                       </li>
                       <li>
-                        <a
-                          href="https://lensfun.github.io/"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          lensfun
-                        </a>
+                        <span className="font-semibold text-accent">lensfun</span>
                         : {t('settings.thanks.list.lensfun')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/marcinz606/NegPy"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          NegPy
-                        </a>
+                        <span className="font-semibold text-accent">NegPy</span>
                         : {t('settings.thanks.list.negpy')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/advimman/lama"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          LaMa
-                        </a>
+                        <span className="font-semibold text-accent">LaMa</span>
                         : {t('settings.thanks.list.lama')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/facebookresearch/sam2"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          SAM 2
-                        </a>
+                        <span className="font-semibold text-accent">SAM 2</span>
                         : {t('settings.thanks.list.sam2')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/xuebinqin/U-2-Net"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          U-2-Net
-                        </a>
+                        <span className="font-semibold text-accent">U-2-Net</span>
                         : {t('settings.thanks.list.u2net')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/DepthAnything/Depth-Anything-V2"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          Depth Anything V2
-                        </a>
+                        <span className="font-semibold text-accent">Depth Anything V2</span>
                         : {t('settings.thanks.list.depth')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/trougnouf/nind-denoise"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          nind-denoise
-                        </a>
+                        <span className="font-semibold text-accent">nind-denoise</span>
                         : {t('settings.thanks.list.nind')}
                       </li>
                       <li>
-                        <a
-                          href="https://github.com/darktable-org/darktable"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-accent hover:underline"
-                        >
-                          darktable & co.
-                        </a>
+                        <span className="font-semibold text-accent">darktable & co.</span>
                         : {t('settings.thanks.list.darktable')}
                       </li>
                       <li>

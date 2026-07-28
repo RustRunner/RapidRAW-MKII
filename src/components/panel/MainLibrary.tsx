@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
-import { open } from '@tauri-apps/plugin-shell';
 import {
   AlertTriangle,
   Check,
@@ -169,8 +168,6 @@ export default function MainLibrary(props: MainLibraryProps) {
   const { t } = useTranslation();
   const setUI = useUIStore((state) => state.setUI);
   const [appVersion, setAppVersion] = useState('');
-  const [isUpdateAvailable, setIsUpdateAvailable] = useState(false);
-  const [latestVersion, setLatestVersion] = useState('');
   const [isBusyDelayed, setIsBusyDelayed] = useState(false);
   const [isBusyLoaderMounted, setIsBusyLoaderMounted] = useState(false);
   const [isProgressHovered, setIsProgressHovered] = useState(false);
@@ -394,68 +391,9 @@ export default function MainLibrary(props: MainLibraryProps) {
                     className="absolute bottom-8 left-8 lg:left-16 space-y-1 z-10 drop-shadow-sm"
                   >
                     <p>
-                      {t('library.splash.imagesBy')}{' '}
-                      <a
-                        href="https://instagram.com/timonkaech.photography"
-                        className="hover:underline"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Timon Käch
-                      </a>
+                      {t('library.splash.imagesBy')} <span>Timon Käch</span>
                     </p>
-                    {appVersion && (
-                      <div className="flex items-center space-x-2">
-                        <p>
-                          <span
-                            className={`group transition-all duration-300 ease-in-out rounded-md py-1 ${
-                              isUpdateAvailable
-                                ? 'cursor-pointer border border-yellow-500 px-2 hover:bg-yellow-500/20'
-                                : ''
-                            }`}
-                            onClick={() => {
-                              if (isUpdateAvailable) {
-                                open('https://github.com/CyberTimon/RapidRAW/releases/latest');
-                              }
-                            }}
-                            data-tooltip={
-                              isUpdateAvailable
-                                ? t('library.splash.downloadVersion', { version: latestVersion })
-                                : t('library.splash.latestVersion')
-                            }
-                          >
-                            <span className={isUpdateAvailable ? 'group-hover:hidden' : ''}>
-                              {t('library.splash.version', { version: appVersion })}
-                            </span>
-                            {isUpdateAvailable && (
-                              <span className="hidden group-hover:inline text-yellow-400">
-                                {t('library.splash.newVersionAvailable')}
-                              </span>
-                            )}
-                          </span>
-                        </p>
-                        <span>-</span>
-                        <p>
-                          <a
-                            href="https://ko-fi.com/cybertimon"
-                            className="hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t('library.splash.donate')}
-                          </a>
-                          <span className="mx-1">{t('library.splash.or')}</span>
-                          <a
-                            href="https://github.com/CyberTimon/RapidRAW"
-                            className="hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t('library.splash.contribute')}
-                          </a>
-                        </p>
-                      </div>
-                    )}
+                    {appVersion && <p>{t('library.splash.version', { version: appVersion })}</p>}
                   </Text>
                 </>
               )}
