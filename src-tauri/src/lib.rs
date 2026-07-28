@@ -1887,6 +1887,18 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             {
                 window_builder = window_builder.decorations(decorations).visible(false);
+
+                // The default window icon embedded by tauri-build is the
+                // 32x32 variant, which docks upscale badly; advertise the
+                // 128px icon instead for crisp window-backed app icons.
+                let icon_bytes = include_bytes!("../icons/128x128.png");
+                if let Ok(decoded) = image::load_from_memory(icon_bytes) {
+                    let rgba = decoded.to_rgba8();
+                    let (icon_w, icon_h) = rgba.dimensions();
+                    window_builder = window_builder
+                        .icon(tauri::image::Image::new_owned(rgba.into_raw(), icon_w, icon_h))
+                        .expect("Failed to set window icon");
+                }
             }
 
             let window = window_builder.build().expect("Failed to build window");
