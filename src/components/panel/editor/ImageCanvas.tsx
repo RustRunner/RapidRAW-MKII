@@ -45,6 +45,8 @@ interface ImageCanvasProps {
   isMasking: boolean;
   isSliderDragging: boolean;
   isStraightenActive: boolean;
+  isBlurAngleAdjusting?: boolean;
+  blurOverlayAngle?: number;
   isRotationActive?: boolean;
   maskOverlayUrl: string | null;
   onGenerateAiMask(id: string | null, start: Coord, end: Coord): void;
@@ -1155,6 +1157,8 @@ const ImageCanvas = memo(
     isMasking,
     isSliderDragging,
     isStraightenActive,
+    isBlurAngleAdjusting,
+    blurOverlayAngle,
     isRotationActive,
     maskOverlayUrl,
     onGenerateAiMask,
@@ -2711,7 +2715,30 @@ const ImageCanvas = memo(
                     style={{ imageRendering: isMaxZoom ? 'pixelated' : 'auto' }}
                   />
                 )}
-              </svg>
+              {isBlurAngleAdjusting && imageRenderSize.width > 0 && (
+                  <g style={{ opacity: 0.9, transition: 'opacity 300ms' }}>
+                    <line
+                      x1={imageRenderSize.width / 2 - Math.cos(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
+                      y1={imageRenderSize.height / 2 - Math.sin(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
+                      x2={imageRenderSize.width / 2 + Math.cos(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
+                      y2={imageRenderSize.height / 2 + Math.sin(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
+                      stroke="rgba(255, 255, 255, 0.85)"
+                      strokeWidth={1.5}
+                      strokeDasharray="6 4"
+                      style={{ vectorEffect: 'non-scaling-stroke' }}
+                    />
+                    <circle
+                      cx={imageRenderSize.width / 2}
+                      cy={imageRenderSize.height / 2}
+                      r={4}
+                      fill="none"
+                      stroke="rgba(255, 255, 255, 0.85)"
+                      strokeWidth={1.5}
+                      style={{ vectorEffect: 'non-scaling-stroke' }}
+                    />
+                  </g>
+                )}
+                </svg>
 
               {originalSrc && (
                 <img

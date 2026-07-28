@@ -325,6 +325,20 @@
         "pasteSettings": "Вставить настройки",
         "resetSectionSettings": "Сбросить настройки раздела «{{section}}»"
       },
+      "blurRecovery": {
+        "adaptive": "Adaptive regularization",
+        "angle": "Blur Angle",
+        "defocus": "Defocus",
+        "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Blur Recovery",
+        "gaussian": "Gaussian",
+        "lambda": "Regularization",
+        "length": "Blur Length",
+        "motion": "Motion",
+        "radius": "Blur Radius",
+        "sigma": "Blur Sigma",
+        "strength": "Strength"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -338,6 +352,7 @@
       },
       "sections": {
         "basic": "Основные",
+        "blurRecovery": "Blur Recovery",
         "color": "Цвет",
         "curves": "Кривые",
         "details": "Детали",
@@ -1192,6 +1207,7 @@
       "descMerge": "Добавляет скопированные изменения, оставляя другие параметры нетронутыми.",
       "descReplace": "Перезаписывает все выбранные параметры, сбрасывая остальные к значениям по умолчанию.",
       "groups": {
+        "blurRecovery": "Blur Recovery",
         "chromaticAberration": "Хроматическая аберрация",
         "clarityDehaze": "Четкость и удаление дымки",
         "colorCalibration": "Калибровка цвета",

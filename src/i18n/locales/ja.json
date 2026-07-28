@@ -293,6 +293,20 @@
         "pasteSettings": "設定を貼り付け",
         "resetSectionSettings": "{{section}}設定をリセット"
       },
+      "blurRecovery": {
+        "adaptive": "Adaptive regularization",
+        "angle": "Blur Angle",
+        "defocus": "Defocus",
+        "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Blur Recovery",
+        "gaussian": "Gaussian",
+        "lambda": "Regularization",
+        "length": "Blur Length",
+        "motion": "Motion",
+        "radius": "Blur Radius",
+        "sigma": "Blur Sigma",
+        "strength": "Strength"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -306,6 +320,7 @@
       },
       "sections": {
         "basic": "基本",
+        "blurRecovery": "Blur Recovery",
         "color": "カラー",
         "curves": "トーンカーブ",
         "details": "ディテール",
@@ -1142,6 +1157,7 @@
       "descMerge": "コピーした設定を追加し、その他の設定はそのまま残します。",
       "descReplace": "選択したすべての設定を上書きし、残りの設定をデフォルトにリセットします。",
       "groups": {
+        "blurRecovery": "Blur Recovery",
         "chromaticAberration": "色収差",
         "clarityDehaze": "明瞭度とかすみの除去",
         "colorCalibration": "カラーキャリブレーション",

@@ -77,6 +77,18 @@ export enum LowLightAdjustment {
   HotPixelThreshold = 'hotPixelThreshold',
 }
 
+export enum BlurRecoveryAdjustment {
+  RapidEnabled = 'rapidEnabled',
+  RapidBlurType = 'rapidBlurType',
+  RapidLength = 'rapidLength',
+  RapidAngle = 'rapidAngle',
+  RapidRadius = 'rapidRadius',
+  RapidSigma = 'rapidSigma',
+  RapidLambda = 'rapidLambda',
+  RapidStrength = 'rapidStrength',
+  RapidAdaptive = 'rapidAdaptive',
+}
+
 export enum Effect {
   GrainAmount = 'grainAmount',
   GrainRoughness = 'grainRoughness',
@@ -164,6 +176,15 @@ export interface ParametricCurve {
 export interface Adjustments {
   hotPixelEnabled: boolean;
   hotPixelThreshold: number;
+  rapidEnabled: boolean;
+  rapidBlurType: 'motion' | 'defocus' | 'gaussian';
+  rapidLength: number;
+  rapidAngle: number;
+  rapidRadius: number;
+  rapidSigma: number;
+  rapidLambda: number;
+  rapidStrength: number;
+  rapidAdaptive: boolean;
   [index: string]: any;
   aiPatches: Array<AiPatch>;
   aspectRatio: number | null;
@@ -368,6 +389,7 @@ export interface Sections {
   details: Array<string>;
   effects: Array<string>;
   lowlight: Array<string>;
+  blurRecovery: Array<string>;
   upscale: Array<string>;
 }
 
@@ -379,6 +401,7 @@ export interface SectionVisibility {
   details: boolean;
   effects: boolean;
   lowlight: boolean;
+  blurRecovery: boolean;
   upscale: boolean;
 }
 
@@ -486,6 +509,7 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
     details: true,
     effects: true,
     lowlight: true,
+    blurRecovery: true,
     upscale: true,
   },
   shadows: 0,
@@ -510,6 +534,15 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 export const INITIAL_ADJUSTMENTS: Adjustments = {
   hotPixelEnabled: false,
   hotPixelThreshold: 50,
+  rapidEnabled: false,
+  rapidBlurType: 'motion',
+  rapidLength: 10,
+  rapidAngle: 0,
+  rapidRadius: 5,
+  rapidSigma: 2,
+  rapidLambda: 0.01,
+  rapidStrength: 100,
+  rapidAdaptive: false,
   aiPatches: [],
   aspectRatio: null,
   blacks: 0,
@@ -585,6 +618,7 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
     details: true,
     effects: true,
     lowlight: true,
+    blurRecovery: true,
     upscale: true,
   },
   shadows: 0,
@@ -701,6 +735,15 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
     hotPixelEnabled: loadedAdjustments.hotPixelEnabled ?? INITIAL_ADJUSTMENTS.hotPixelEnabled,
     hotPixelThreshold: loadedAdjustments.hotPixelThreshold ?? INITIAL_ADJUSTMENTS.hotPixelThreshold,
+    rapidEnabled: loadedAdjustments.rapidEnabled ?? INITIAL_ADJUSTMENTS.rapidEnabled,
+    rapidBlurType: loadedAdjustments.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
+    rapidLength: loadedAdjustments.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
+    rapidAngle: loadedAdjustments.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
+    rapidRadius: loadedAdjustments.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
+    rapidSigma: loadedAdjustments.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
+    rapidLambda: loadedAdjustments.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
+    rapidStrength: loadedAdjustments.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
+    rapidAdaptive: loadedAdjustments.rapidAdaptive ?? INITIAL_ADJUSTMENTS.rapidAdaptive,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,
     lensBlurShape: loadedAdjustments.lensBlurShape ?? INITIAL_ADJUSTMENTS.lensBlurShape,
@@ -810,6 +853,10 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     {
       label: 'modals.copyPaste.groups.lowlight',
       keys: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
+    },
+    {
+      label: 'modals.copyPaste.groups.blurRecovery',
+      keys: Object.values(BlurRecoveryAdjustment),
     },
   ],
   effects: [
@@ -928,5 +975,6 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     Effect.LensBlurMaxFade,
   ],
   lowlight: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
+  blurRecovery: Object.values(BlurRecoveryAdjustment),
   upscale: [],
 };

@@ -293,6 +293,20 @@
         "pasteSettings": "Paste Settings",
         "resetSectionSettings": "Reset {{section}} Settings"
       },
+      "blurRecovery": {
+        "adaptive": "Adaptive regularization",
+        "angle": "Blur Angle",
+        "defocus": "Defocus",
+        "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Blur Recovery",
+        "gaussian": "Gaussian",
+        "lambda": "Regularization",
+        "length": "Blur Length",
+        "motion": "Motion",
+        "radius": "Blur Radius",
+        "sigma": "Blur Sigma",
+        "strength": "Strength"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -306,6 +320,7 @@
       },
       "sections": {
         "basic": "Basic",
+        "blurRecovery": "Blur Recovery",
         "color": "Color",
         "curves": "Curves",
         "details": "Details",
@@ -1144,6 +1159,7 @@
       "descMerge": "Adds your copied changes, leaving other settings untouched.",
       "descReplace": "Overwrites all selected settings, resetting the rest to their defaults.",
       "groups": {
+        "blurRecovery": "Blur Recovery",
         "chromaticAberration": "Chromatic Aberration",
         "clarityDehaze": "Clarity & Dehaze",
         "colorCalibration": "Color Calibration",

@@ -293,6 +293,20 @@
         "pasteSettings": "貼上設定",
         "resetSectionSettings": "重置 {{section}} 設定"
       },
+      "blurRecovery": {
+        "adaptive": "Adaptive regularization",
+        "angle": "Blur Angle",
+        "defocus": "Defocus",
+        "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Blur Recovery",
+        "gaussian": "Gaussian",
+        "lambda": "Regularization",
+        "length": "Blur Length",
+        "motion": "Motion",
+        "radius": "Blur Radius",
+        "sigma": "Blur Sigma",
+        "strength": "Strength"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -306,6 +320,7 @@
       },
       "sections": {
         "basic": "基礎",
+        "blurRecovery": "Blur Recovery",
         "color": "顏色",
         "curves": "曲線",
         "details": "細節",
@@ -1142,6 +1157,7 @@
       "descMerge": "新增您複製的更改，保留其他設定不變。",
       "descReplace": "覆蓋所有選中的設定，其餘重置為預設值。",
       "groups": {
+        "blurRecovery": "Blur Recovery",
         "chromaticAberration": "色差",
         "clarityDehaze": "清晰度與去朦朧",
         "colorCalibration": "顏色校準",

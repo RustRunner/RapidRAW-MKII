@@ -8,6 +8,7 @@ import CurveGraph from '../../adjustments/Curves';
 import ColorPanel from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
+import BlurRecoveryPanel from '../../adjustments/BlurRecovery';
 import LowLightPanel from '../../adjustments/LowLight';
 import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
@@ -282,6 +283,7 @@ export default function Controls() {
             details: DetailsPanel,
             effects: EffectsPanel,
             lowlight: LowLightPanel,
+            blurRecovery: BlurRecoveryPanel,
             upscale: UpscalePanel,
           }[sectionName];
 

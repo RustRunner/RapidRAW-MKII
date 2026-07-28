@@ -293,6 +293,20 @@
         "pasteSettings": "설정 붙여넣기",
         "resetSectionSettings": "{{section}} 설정 초기화"
       },
+      "blurRecovery": {
+        "adaptive": "Adaptive regularization",
+        "angle": "Blur Angle",
+        "defocus": "Defocus",
+        "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Blur Recovery",
+        "gaussian": "Gaussian",
+        "lambda": "Regularization",
+        "length": "Blur Length",
+        "motion": "Motion",
+        "radius": "Blur Radius",
+        "sigma": "Blur Sigma",
+        "strength": "Strength"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -306,6 +320,7 @@
       },
       "sections": {
         "basic": "기본",
+        "blurRecovery": "Blur Recovery",
         "color": "색상",
         "curves": "커브",
         "details": "디테일",
@@ -1142,6 +1157,7 @@
       "descMerge": "복사한 변경 사항을 추가하며 다른 설정은 그대로 둡니다.",
       "descReplace": "선택한 모든 설정을 덮어쓰고 나머지는 기본값으로 초기화합니다.",
       "groups": {
+        "blurRecovery": "Blur Recovery",
         "chromaticAberration": "색수차",
         "clarityDehaze": "명료도 및 디헤이즈",
         "colorCalibration": "색상 보정",

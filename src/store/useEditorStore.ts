@@ -58,6 +58,8 @@ interface EditorState {
   overlayMode: OverlayMode;
   overlayRotation: number;
   isStraightenActive: boolean;
+  isBlurAngleAdjusting: boolean;
+  blurOverlayAngle: number;
   isWbPickerActive: boolean;
   liveRotation: number | null;
   brushSettings: BrushSettings | null;
@@ -122,6 +124,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   overlayRotation: 0,
   transformedOriginalUrl: null,
   isStraightenActive: false,
+  isBlurAngleAdjusting: false,
+  blurOverlayAngle: 0,
   isWbPickerActive: false,
   liveRotation: null,
 
