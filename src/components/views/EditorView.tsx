@@ -219,14 +219,7 @@ export default function EditorView({
             {renderedRightPanel === Panel.Metadata && <MetadataPanel />}
             {renderedRightPanel === Panel.Crop && <CropPanel />}
             {renderedRightPanel === Panel.Masks && <MasksPanel />}
-            {renderedRightPanel === Panel.Presets && (
-              <PresetsPanel
-                onNavigateToCommunity={() => {
-                  handleBackToLibrary();
-                  setUI({ activeView: 'community' });
-                }}
-              />
-            )}
+            {renderedRightPanel === Panel.Presets && <PresetsPanel />}
             {renderedRightPanel === Panel.Export && (
               <ExportPanel
                 exportState={exportState}

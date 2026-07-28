@@ -25,7 +25,6 @@ import {
   Plus,
   SortAsc,
   Trash2,
-  Users,
   Layers,
   Crop,
   Save,
@@ -91,9 +90,7 @@ interface PresetItemDisplayProps {
   onDragStateChange?: (isDragging: boolean) => void;
 }
 
-interface PresetsPanelProps {
-  onNavigateToCommunity(): void;
-}
+interface PresetsPanelProps {}
 
 const itemVariants = {
   hidden: { opacity: 0, x: -15 },
@@ -473,7 +470,7 @@ function DroppableFolderItem({ folder, onContextMenu, children, onToggle, isExpa
   );
 }
 
-export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProps) {
+export default function PresetsPanel({}: PresetsPanelProps) {
   const { t } = useTranslation();
   const selectedImage = useEditorStore((s) => s.selectedImage);
   const adjustments = useEditorStore((s) => s.adjustments);
@@ -1140,13 +1137,6 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
           <div className="flex items-center gap-1">
             <button
               className="p-2 rounded-full hover:bg-surface transition-colors"
-              onClick={onNavigateToCommunity}
-              data-tooltip={t('editor.presets.tooltips.explore')}
-            >
-              <Users size={18} />
-            </button>
-            <button
-              className="p-2 rounded-full hover:bg-surface transition-colors"
               disabled={isLoading}
               onClick={handleImportPresets}
               data-tooltip={t('editor.presets.tooltips.import')}
@@ -1193,10 +1183,6 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
           {!isLoading && presets.length === 0 ? (
             <div className="text-center text-text-secondary flex flex-col items-center gap-4 pt-4">
               <Text className="max-w-xs">{t('editor.presets.status.empty')}</Text>
-              <Button variant="secondary" onClick={onNavigateToCommunity}>
-                <Users size={16} className="mr-2" />
-                {t('editor.presets.status.getCommunity')}
-              </Button>
             </div>
           ) : (
             <>

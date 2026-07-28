@@ -65,7 +65,6 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
- "tempfile",
  "tokenizers",
  "tokio",
  "trash",

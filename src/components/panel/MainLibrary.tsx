@@ -11,7 +11,6 @@ import {
   RefreshCw,
   Settings,
   Search,
-  Users,
   LayoutGrid,
   Columns,
   SlidersHorizontal,
@@ -88,7 +87,6 @@ interface MainLibraryProps {
   thumbnailAspectRatio: ThumbnailAspectRatio;
   thumbnailProgress: Progress;
   thumbnailSize: ThumbnailSize;
-  onNavigateToCommunity(): void;
 }
 
 export interface ColumnWidths {
@@ -556,15 +554,6 @@ export default function MainLibrary(props: MainLibraryProps) {
               editedStatusOptions={translatedEditedStatusOptions}
               sortOptions={translatedSortOptions}
             />
-            {!props.isAndroid && (
-              <Button
-                className="h-12 w-12 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
-                onClick={props.onNavigateToCommunity}
-                data-tooltip={t('library.tooltips.communityPresets')}
-              >
-                <Users className="w-5 h-5" />
-              </Button>
-            )}
             <Button
               className="h-12 w-12 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
               onClick={props.onGoHome}

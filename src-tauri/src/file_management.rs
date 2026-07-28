@@ -3101,61 +3101,6 @@ pub fn handle_export_presets_to_file(
 }
 
 #[tauri::command]
-pub fn save_community_preset(
-    name: String,
-    adjustments: Value,
-    app_handle: AppHandle,
-    include_masks: Option<bool>,
-    include_crop_transform: Option<bool>,
-    preset_type: Option<String>,
-) -> Result<(), String> {
-    let mut current_presets = load_presets(app_handle.clone())?;
-
-    let community_folder_name = "Community";
-    let community_folder_id = match current_presets.iter_mut().find(|item| {
-        if let PresetItem::Folder(f) = item {
-            f.name == community_folder_name
-        } else {
-            false
-        }
-    }) {
-        Some(PresetItem::Folder(folder)) => folder.id.clone(),
-        _ => {
-            let new_folder_id = Uuid::new_v4().to_string();
-            let new_folder = PresetItem::Folder(PresetFolder {
-                id: new_folder_id.clone(),
-                name: community_folder_name.to_string(),
-                children: Vec::new(),
-            });
-            current_presets.insert(0, new_folder);
-            new_folder_id
-        }
-    };
-
-    let new_preset = Preset {
-        id: Uuid::new_v4().to_string(),
-        name,
-        adjustments,
-        include_masks,
-        include_crop_transform,
-        preset_type: preset_type.or(Some("style".to_string())),
-    };
-
-    if let Some(PresetItem::Folder(folder)) = current_presets.iter_mut().find(|item| {
-        if let PresetItem::Folder(f) = item {
-            f.id == community_folder_id
-        } else {
-            false
-        }
-    }) {
-        folder.children.retain(|p| p.name != new_preset.name);
-        folder.children.push(new_preset);
-    }
-
-    save_presets(current_presets, app_handle)
-}
-
-#[tauri::command]
 pub fn clear_all_sidecars(root_path: String) -> Result<usize, String> {
     if !Path::new(&root_path).exists() {
         return Err(format!("Root path does not exist: {}", root_path));
