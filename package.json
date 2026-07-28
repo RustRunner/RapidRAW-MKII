@@ -1,6 +1,6 @@
 {
-  "name": "rapidraw",
-  "author": "Timon Käch",
+  "name": "rapidraw-mkii",
+  "author": "Timon Käch (Original), Modified Version",
   "private": true,
   "scripts": {
     "dev": "vite",

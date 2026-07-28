@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "RapidRAW"
+name = "RapidRAW-MKII"
 version = "0.0.0"
 dependencies = [
  "anyhow",
