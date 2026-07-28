@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './assets/fonts/poppins.css';
 @source not "../src-tauri";
 
 @theme {
