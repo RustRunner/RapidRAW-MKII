@@ -140,23 +140,34 @@ pub fn generate_transformed_preview(
     loaded_image: &LoadedImage,
     adjustments: &serde_json::Value,
     preview_dim: u32,
+    rapid_scale: f32,
 ) -> Result<(DynamicImage, f32, (f32, f32)), String> {
     let transform_hash = calculate_transform_hash(adjustments);
 
+    // An approximate (preview-scale) blur recovery result must never be cached:
+    // the settled job after a drag carries the same transform hash and would
+    // silently reuse it as exact.
+    let approx = rapid_scale < 0.999 && rapid_processing::is_rapid_active(adjustments);
+    let rapid_scale = if approx { rapid_scale } else { 1.0 };
+
     let (transformed_full_res, unscaled_crop_offset) = {
         let mut cache_lock = state.full_transformed_cache.lock().unwrap();
-        if let Some((hash, img, offset)) = cache_lock.as_ref() {
-            if *hash == transform_hash {
-                (Arc::clone(img), *offset)
-            } else {
-                let (arc_img, offset) = compute_full_transformed_res(loaded_image, adjustments)?;
-                *cache_lock = Some((transform_hash, Arc::clone(&arc_img), offset));
+        let hit = match cache_lock.as_ref() {
+            Some((hash, img, offset)) if *hash == transform_hash => {
+                Some((Arc::clone(img), *offset))
+            }
+            _ => None,
+        };
+        match hit {
+            Some(cached) => cached,
+            None => {
+                let (arc_img, offset) =
+                    compute_full_transformed_res(loaded_image, adjustments, rapid_scale)?;
+                if !approx {
+                    *cache_lock = Some((transform_hash, Arc::clone(&arc_img), offset));
+                }
                 (arc_img, offset)
             }
-        } else {
-            let (arc_img, offset) = compute_full_transformed_res(loaded_image, adjustments)?;
-            *cache_lock = Some((transform_hash, Arc::clone(&arc_img), offset));
-            (arc_img, offset)
         }
     };
 
@@ -180,6 +191,7 @@ pub fn generate_transformed_preview(
 fn compute_full_transformed_res(
     loaded_image: &LoadedImage,
     adjustments: &serde_json::Value,
+    rapid_scale: f32,
 ) -> Result<(Arc<DynamicImage>, (f32, f32)), String> {
     let has_patches = adjustments
         .get("aiPatches")
@@ -194,7 +206,8 @@ fn compute_full_transformed_res(
         Cow::Borrowed(loaded_image.image.as_ref())
     };
 
-    let (transformed_img, offset) = apply_all_transformations(patched_original_image, adjustments);
+    let (transformed_img, offset) =
+        apply_all_transformations_scaled(patched_original_image, adjustments, rapid_scale);
     Ok((Arc::new(transformed_img.into_owned()), offset))
 }
 
@@ -350,6 +363,21 @@ fn process_preview_job(
             .as_ref()
             .is_some_and(|c| c.interactive_divisor == interactive_divisor);
 
+    // Interactive scrubbing runs the blur-recovery pre-pass at preview scale
+    // (fast approximation); settled jobs recompute at full resolution.
+    let rapid_scale = if is_interactive {
+        let full_max_dim = loaded_image.image.width().max(loaded_image.image.height()) as f32;
+        if full_max_dim > 0.0 {
+            (preview_dim as f32 / full_max_dim).min(1.0)
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+    let preview_is_approx =
+        !base_valid && rapid_scale < 0.999 && rapid_processing::is_rapid_active(&adjustments_clone);
+
     let (final_preview_base, scale_for_gpu, unscaled_crop_offset) = if base_valid {
         let cached = cached_preview_lock.as_ref().unwrap();
         (
@@ -360,8 +388,13 @@ fn process_preview_job(
     } else {
         *state.gpu_image_cache.lock().unwrap() = None;
 
-        let (base, scale, offset) =
-            generate_transformed_preview(&state, &loaded_image, &adjustments_clone, preview_dim)?;
+        let (base, scale, offset) = generate_transformed_preview(
+            &state,
+            &loaded_image,
+            &adjustments_clone,
+            preview_dim,
+            rapid_scale,
+        )?;
         (Arc::new(base), scale, offset)
     };
 
@@ -394,15 +427,19 @@ fn process_preview_job(
         small
     };
 
-    *cached_preview_lock = Some(CachedPreview {
-        image: Arc::clone(&final_preview_base),
-        small_image: Arc::clone(&small_preview_base),
-        transform_hash: new_transform_hash,
-        scale: scale_for_gpu,
-        unscaled_crop_offset,
-        preview_dim,
-        interactive_divisor,
-    });
+    // Approximate bases stay out of the cache: the settled job that follows a
+    // drag has the same transform hash and must recompute exactly.
+    if !preview_is_approx {
+        *cached_preview_lock = Some(CachedPreview {
+            image: Arc::clone(&final_preview_base),
+            small_image: Arc::clone(&small_preview_base),
+            transform_hash: new_transform_hash,
+            scale: scale_for_gpu,
+            unscaled_crop_offset,
+            preview_dim,
+            interactive_divisor,
+        });
+    }
 
     drop(cached_preview_lock);
 
@@ -1117,7 +1154,7 @@ fn generate_preset_preview(
     const PRESET_PREVIEW_DIM: u32 = 400;
 
     let (preview_image, scale_for_gpu, unscaled_crop_offset) =
-        generate_transformed_preview(&state, &loaded_image, &js_adjustments, PRESET_PREVIEW_DIM)?;
+        generate_transformed_preview(&state, &loaded_image, &js_adjustments, PRESET_PREVIEW_DIM, 1.0)?;
 
     let (img_w, img_h) = preview_image.dimensions();
 

@@ -125,6 +125,19 @@ impl RapidParams {
             adaptive,
         }
     }
+
+    /// Rescale the spatial kernel parameters for a working image that has been
+    /// downscaled by `scale`. Lambda and strength describe frequency-domain
+    /// behavior and blending, not pixel extents, so they stay unchanged. The
+    /// floors keep degenerate scales from collapsing the PSF to a no-op.
+    pub fn scaled(&self, scale: f32) -> Self {
+        Self {
+            motion_length: (self.motion_length * scale).max(1.0),
+            defocus_radius: (self.defocus_radius * scale).max(0.5),
+            gaussian_sigma: (self.gaussian_sigma * scale).max(0.3),
+            ..*self
+        }
+    }
 }
 
 // ============================================================================
@@ -2220,12 +2233,26 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
     })
 }
 
+/// True when blur recovery would actually run for these adjustments
+/// (enabled and its section not hidden).
+pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
+    parse_rapid_params(adjustments).is_some()
+}
+
 /// Full-image FFT deconvolution pre-pass. Runs before geometry transforms so
 /// the PSF stays defined in sensor pixel space. No-ops (with a warning) when
 /// the GPU is unavailable or processing fails.
-pub fn apply_blur_recovery<'a>(
+///
+/// With `rapid_scale < 1.0` the deconvolution runs on a proportionally
+/// downscaled copy (with kernel parameters rescaled to match) and the result
+/// is resampled back to the input dimensions - a fast approximation for
+/// interactive previews; exact output requires 1.0. Output dimensions always
+/// equal input dimensions either way, so downstream geometry (crop/rotation
+/// coordinates) is unaffected.
+pub fn apply_blur_recovery_scaled<'a>(
     image: std::borrow::Cow<'a, image::DynamicImage>,
     adjustments: &serde_json::Value,
+    rapid_scale: f32,
 ) -> std::borrow::Cow<'a, image::DynamicImage> {
     let Some(params) = parse_rapid_params(adjustments) else {
         return image;
@@ -2240,6 +2267,31 @@ pub fn apply_blur_recovery<'a>(
         deconvolver,
     } = &mut *gpu;
     let start = std::time::Instant::now();
+
+    if rapid_scale < 0.999 {
+        let (w, h) = (image.width(), image.height());
+        let small_w = ((w as f32 * rapid_scale).round() as u32).max(1);
+        let small_h = ((h as f32 * rapid_scale).round() as u32).max(1);
+        let small = image.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
+        return match deconvolver.deconvolve_image(device, queue, &small, &params.scaled(rapid_scale)) {
+            Ok(out) => {
+                let restored = out.resize_exact(w, h, image::imageops::FilterType::Triangle);
+                log::info!(
+                    "RAPID: preview-scale blur recovery pre-pass ({}x{} @ {:.3}) took {:?}",
+                    small_w,
+                    small_h,
+                    rapid_scale,
+                    start.elapsed()
+                );
+                std::borrow::Cow::Owned(restored)
+            }
+            Err(e) => {
+                log::warn!("RAPID: preview-scale blur recovery failed ({e}); using original image");
+                image
+            }
+        };
+    }
+
     match deconvolver.deconvolve_image(device, queue, image.as_ref(), &params) {
         Ok(out) => {
             log::info!("RAPID: blur recovery pre-pass took {:?}", start.elapsed());
@@ -2692,5 +2744,57 @@ mod tests {
         assert!(center[0] > 150, "bright square lost after deconvolution: {:?}", center);
         let outside = rgb.get_pixel(15, 15);
         assert!(outside[0] < 150, "background blown out after deconvolution: {:?}", outside);
+    }
+
+    #[test]
+    fn test_rapid_params_scaled() {
+        let p = RapidParams {
+            motion_length: 100.0,
+            motion_angle: 35.0,
+            defocus_radius: 40.0,
+            gaussian_sigma: 4.0,
+            lambda: 0.02,
+            strength: 0.8,
+            ..Default::default()
+        };
+
+        let s = p.scaled(0.25);
+        assert!((s.motion_length - 25.0).abs() < 1e-6);
+        assert!((s.defocus_radius - 10.0).abs() < 1e-6);
+        assert!((s.gaussian_sigma - 1.0).abs() < 1e-6);
+        // Non-spatial parameters must be untouched by scaling.
+        assert_eq!(s.lambda, p.lambda);
+        assert_eq!(s.strength, p.strength);
+        assert_eq!(s.motion_angle, p.motion_angle);
+
+        // Degenerate scales hit the kernel floors instead of collapsing.
+        let tiny = p.scaled(0.001);
+        assert!(tiny.motion_length >= 1.0);
+        assert!(tiny.defocus_radius >= 0.5);
+        assert!(tiny.gaussian_sigma >= 0.3);
+
+        let unit = p.scaled(1.0);
+        assert!((unit.motion_length - p.motion_length).abs() < 1e-6);
+        assert!((unit.defocus_radius - p.defocus_radius).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_blur_recovery_scaled_preserves_dimensions() {
+        // Output dimensions must equal input dimensions so downstream
+        // geometry (crop/rotation coordinates) is unaffected. Holds both
+        // with a GPU (downscale-deconvolve-upscale) and without (pass-through).
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(200, 150, |x, y| {
+            image::Rgba([((x * 7 + y * 13) % 255) as u8, 128, 64, 255])
+        }));
+        let adjustments = serde_json::json!({
+            "rapidEnabled": true,
+            "rapidBlurType": "motion",
+            "rapidLength": 20.0,
+            "rapidAngle": 0.0,
+            "rapidLambda": 0.01,
+            "rapidStrength": 100.0,
+        });
+        let out = apply_blur_recovery_scaled(std::borrow::Cow::Owned(img), &adjustments, 0.5);
+        assert_eq!((out.width(), out.height()), (200, 150));
     }
 }

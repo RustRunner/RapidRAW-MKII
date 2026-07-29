@@ -637,7 +637,7 @@ pub fn generate_lut_previews(
 
     let base_json = serde_json::json!({});
     let (base_image, _scale, _offset) =
-        crate::generate_transformed_preview(&state, &loaded_image, &base_json, size)?;
+        crate::generate_transformed_preview(&state, &loaded_image, &base_json, size, 1.0)?;
 
     let tm_override = resolve_tonemapper_override_from_handle(&app_handle, is_raw);
     let lut_json = serde_json::json!({

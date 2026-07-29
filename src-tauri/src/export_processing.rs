@@ -1465,11 +1465,12 @@ pub async fn estimate_export_sizes(
                     &loaded_image,
                     &adjustments_clone,
                     preview_dim,
+                    1.0,
                 )?
             }
         } else {
             drop(cached_preview_lock);
-            generate_transformed_preview(&state, &loaded_image, &adjustments_clone, preview_dim)?
+            generate_transformed_preview(&state, &loaded_image, &adjustments_clone, preview_dim, 1.0)?
         };
 
         let (img_w, img_h) = preview_image.dimensions();

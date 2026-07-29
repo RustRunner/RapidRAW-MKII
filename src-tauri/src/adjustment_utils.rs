@@ -94,9 +94,22 @@ pub fn apply_all_transformations<'a, I: IntoCowImage<'a>>(
     image: I,
     adjustments: &serde_json::Value,
 ) -> (Cow<'a, DynamicImage>, (f32, f32)) {
+    apply_all_transformations_scaled(image, adjustments, 1.0)
+}
+
+/// Like [`apply_all_transformations`], but with `rapid_scale < 1.0` the blur
+/// recovery pre-pass runs as a preview-resolution approximation (see
+/// `rapid_processing::apply_blur_recovery_scaled`). Callers producing cached,
+/// exported, or otherwise persistent output must pass 1.0.
+pub fn apply_all_transformations_scaled<'a, I: IntoCowImage<'a>>(
+    image: I,
+    adjustments: &serde_json::Value,
+    rapid_scale: f32,
+) -> (Cow<'a, DynamicImage>, (f32, f32)) {
     let start_time = std::time::Instant::now();
     let image = image.into_cow();
-    let recovered_image = crate::rapid_processing::apply_blur_recovery(image, adjustments);
+    let recovered_image =
+        crate::rapid_processing::apply_blur_recovery_scaled(image, adjustments, rapid_scale);
     let warped_image = apply_geometry_warp(recovered_image, adjustments);
     let blurred_image = crate::lens_blur::apply_lens_blur(warped_image, adjustments);
 
