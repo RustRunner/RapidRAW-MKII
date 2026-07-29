@@ -849,6 +849,7 @@ fn generate_original_transformed_preview(
             "lensBlurEnabled".to_string(),
             serde_json::Value::Bool(false),
         );
+        obj.insert("rapidEnabled".to_string(), serde_json::Value::Bool(false));
     }
 
     hydrate_adjustments(&state, &mut adjustments_clone);
