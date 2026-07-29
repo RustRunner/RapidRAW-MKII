@@ -13,6 +13,8 @@ interface BlurRecoveryPanelProps {
 }
 
 const BLUR_TYPES = ['motion', 'defocus', 'gaussian'] as const;
+const MOTION_LENGTH_PRESETS = [50, 100, 150, 200];
+const DEFOCUS_RADIUS_PRESETS = [25, 50, 75, 100];
 
 export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragStateChange }: BlurRecoveryPanelProps) {
   const { t } = useTranslation();
@@ -76,9 +78,29 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
 
             {adjustments.rapidBlurType === 'motion' && (
               <>
+                <div className="flex gap-1">
+                  {MOTION_LENGTH_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                        adjustments.rapidLength === preset
+                          ? 'bg-primary text-white'
+                          : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
+                      }`}
+                      onClick={() =>
+                        setAdjustments((prev: Adjustments) => ({
+                          ...prev,
+                          [BlurRecoveryAdjustment.RapidLength]: preset,
+                        }))
+                      }
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
                 <Slider
                   label={t('editor.adjustments.blurRecovery.length')}
-                  max={100}
+                  max={200}
                   min={1}
                   onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidLength, e)}
                   step={1}
@@ -98,15 +120,37 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
             )}
 
             {adjustments.rapidBlurType === 'defocus' && (
-              <Slider
-                label={t('editor.adjustments.blurRecovery.radius')}
-                max={50}
-                min={1}
-                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
-                step={0.5}
-                value={adjustments.rapidRadius}
-                onDragStateChange={onDragStateChange}
-              />
+              <>
+                <div className="flex gap-1">
+                  {DEFOCUS_RADIUS_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                        adjustments.rapidRadius === preset
+                          ? 'bg-primary text-white'
+                          : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
+                      }`}
+                      onClick={() =>
+                        setAdjustments((prev: Adjustments) => ({
+                          ...prev,
+                          [BlurRecoveryAdjustment.RapidRadius]: preset,
+                        }))
+                      }
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <Slider
+                  label={t('editor.adjustments.blurRecovery.radius')}
+                  max={100}
+                  min={1}
+                  onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
+                  step={0.5}
+                  value={adjustments.rapidRadius}
+                  onDragStateChange={onDragStateChange}
+                />
+              </>
             )}
 
             {adjustments.rapidBlurType === 'gaussian' && (
