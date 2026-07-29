@@ -897,46 +897,42 @@ impl RapidDeconvolver {
         })
     }
 
-    /// Check if RAPID can process an image of the given size
-    pub fn can_process_size(&self, width: u32, height: u32, available_vram_mb: u64) -> bool {
-        let padded_w = width.next_power_of_two();
-        let padded_h = height.next_power_of_two();
+    /// Estimated peak device memory for a width×height deconvolution: the
+    /// pow2-padded Rgba32Float input (16 B/px), three Rg32Float frequency
+    /// textures (24 B/px), and the readback staging buffer (8 B/px), with
+    /// 20% headroom. Everything is sized at the padded extent.
+    pub fn required_vram_mb(width: u32, height: u32) -> u64 {
+        let (padded_w, padded_h) = Self::get_padded_dimensions(width, height);
+        let bytes = padded_w as u64 * padded_h as u64 * (16 + 24 + 8);
+        (bytes * 12 / 10) / (1024 * 1024)
+    }
 
-        // Check against max texture size
-        if padded_w > self.max_texture_size || padded_h > self.max_texture_size {
-            log::warn!(
-                "RAPID: Padded size {}x{} exceeds max texture size {}",
-                padded_w,
-                padded_h,
-                self.max_texture_size
-            );
-            return false;
+    /// Largest working scale in (0, 1] whose padded pipeline fits both the
+    /// max texture dimension and the VRAM budget. Walks power-of-two
+    /// boundaries downward, since the padded allocations only change there.
+    pub fn max_scale_for_vram(
+        width: u32,
+        height: u32,
+        budget_mb: u64,
+        max_texture_size: u32,
+    ) -> f32 {
+        let mut scale = 1.0f32;
+        for _ in 0..20 {
+            let w = ((width as f32 * scale).round() as u32).max(1);
+            let h = ((height as f32 * scale).round() as u32).max(1);
+            let (padded_w, padded_h) = Self::get_padded_dimensions(w, h);
+            let fits_texture = padded_w <= max_texture_size && padded_h <= max_texture_size;
+            if fits_texture && Self::required_vram_mb(w, h) <= budget_mb {
+                return scale;
+            }
+            // Shrink the dominant padded axis under its next boundary.
+            scale = if padded_w >= padded_h {
+                (padded_w / 2) as f32 / width as f32
+            } else {
+                (padded_h / 2) as f32 / height as f32
+            };
         }
-
-        // 3 frequency textures × Rg32Float (8 bytes/pixel)
-        let freq_memory_mb = (padded_w as u64 * padded_h as u64 * 8 * 3) / (1024 * 1024);
-
-        // Input/output RGBA16F textures (8 bytes/pixel)
-        let rgba_memory_mb = (width as u64 * height as u64 * 8 * 2) / (1024 * 1024);
-
-        // Total with 20% safety margin
-        let total_required_mb = ((freq_memory_mb + rgba_memory_mb) as f64 * 1.2) as u64;
-
-        let can_process = total_required_mb < available_vram_mb;
-
-        if !can_process {
-            log::warn!(
-                "RAPID: Image {}x{} (padded {}x{}) requires ~{}MB, available ~{}MB",
-                width,
-                height,
-                padded_w,
-                padded_h,
-                total_required_mb,
-                available_vram_mb
-            );
-        }
-
-        can_process
+        scale
     }
 
     /// Ensure frequency textures are allocated for the given image size
@@ -2025,6 +2021,15 @@ impl RapidDeconvolver {
         // Get padded dimensions for FFT
         let (padded_w, padded_h) = Self::get_padded_dimensions(width, height);
 
+        log::debug!(
+            "RAPID: estimated peak VRAM ~{} MB for {}x{} (padded {}x{})",
+            Self::required_vram_mb(width, height),
+            width,
+            height,
+            padded_w,
+            padded_h
+        );
+
         // Ensure frequency textures are allocated
         self.ensure_textures(device, width, height);
 
@@ -2343,6 +2348,17 @@ pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
 /// interactive previews; exact output requires 1.0. Output dimensions always
 /// equal input dimensions either way, so downstream geometry (crop/rotation
 /// coordinates) is unaffected.
+/// VRAM budget for the deconvolution pipeline. wgpu's AdapterInfo exposes no
+/// memory size on any backend, so this is a flat default; the RAPID_VRAM_MB
+/// environment variable overrides it (useful for exercising the scaled
+/// fallback, and the hook for a vendor-specific query later).
+fn rapid_vram_budget_mb() -> u64 {
+    std::env::var("RAPID_VRAM_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4096)
+}
+
 pub fn apply_blur_recovery_scaled<'a>(
     image: std::borrow::Cow<'a, image::DynamicImage>,
     adjustments: &serde_json::Value,
@@ -2362,25 +2378,43 @@ pub fn apply_blur_recovery_scaled<'a>(
     } = &mut *gpu;
     let start = std::time::Instant::now();
 
-    if rapid_scale < 0.999 {
-        let (w, h) = (image.width(), image.height());
-        let small_w = ((w as f32 * rapid_scale).round() as u32).max(1);
-        let small_h = ((h as f32 * rapid_scale).round() as u32).max(1);
+    // VRAM budget: cap the working scale so the padded pipeline fits.
+    // Preview and export share the same cap, so a machine that can't run
+    // full resolution still renders both identically.
+    let (w, h) = (image.width(), image.height());
+    let budget_mb = rapid_vram_budget_mb();
+    let vram_scale =
+        RapidDeconvolver::max_scale_for_vram(w, h, budget_mb, deconvolver.max_texture_size);
+    if vram_scale < rapid_scale {
+        log::warn!(
+            "RAPID: {}x{} needs ~{} MB against a {} MB budget; capping working scale at {:.3}",
+            w,
+            h,
+            RapidDeconvolver::required_vram_mb(w, h),
+            budget_mb,
+            vram_scale
+        );
+    }
+    let scale = rapid_scale.min(vram_scale);
+
+    if scale < 0.999 {
+        let small_w = ((w as f32 * scale).round() as u32).max(1);
+        let small_h = ((h as f32 * scale).round() as u32).max(1);
         let small = image.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
-        return match deconvolver.deconvolve_image(device, queue, &small, &params.scaled(rapid_scale)) {
+        return match deconvolver.deconvolve_image(device, queue, &small, &params.scaled(scale)) {
             Ok(out) => {
                 let restored = out.resize_exact(w, h, image::imageops::FilterType::Triangle);
                 log::info!(
-                    "RAPID: preview-scale blur recovery pre-pass ({}x{} @ {:.3}) took {:?}",
+                    "RAPID: scaled blur recovery pre-pass ({}x{} @ {:.3}) took {:?}",
                     small_w,
                     small_h,
-                    rapid_scale,
+                    scale,
                     start.elapsed()
                 );
                 std::borrow::Cow::Owned(restored)
             }
             Err(e) => {
-                log::warn!("RAPID: preview-scale blur recovery failed ({e}); using original image");
+                log::warn!("RAPID: scaled blur recovery failed ({e}); using original image");
                 image
             }
         };
@@ -3337,6 +3371,31 @@ mod tests {
             "estimator hallucinated a blur on a sharp image (confidence {:.1})",
             sharp.confidence
         );
+    }
+
+    #[test]
+    fn test_vram_estimator_and_scale_cap() {
+        // Motivating 45 MP case: 8192x5464 pads to 8192x8192; input (16 B/px)
+        // + 3 freq textures (24 B/px) + staging (8 B/px), x1.2 headroom
+        // = ~3686 MB, inside the 4 GB default budget thanks to the luma-only
+        // pipeline.
+        let mb = RapidDeconvolver::required_vram_mb(8192, 5464);
+        assert!((3600..3750).contains(&mb), "unexpected estimate: {mb} MB");
+        assert_eq!(RapidDeconvolver::max_scale_for_vram(8192, 5464, 4096, 8192), 1.0);
+
+        // A tighter budget steps the working scale down to the next
+        // power-of-two boundary that fits.
+        let capped = RapidDeconvolver::max_scale_for_vram(8192, 5464, 1000, 8192);
+        assert!((capped - 0.5).abs() < 1e-6, "expected 0.5, got {capped}");
+        assert!(RapidDeconvolver::required_vram_mb(4096, 2732) <= 1000);
+
+        // A small max texture dimension caps the scale even with VRAM to
+        // spare.
+        let tex_capped = RapidDeconvolver::max_scale_for_vram(8192, 5464, u64::MAX, 4096);
+        assert!((tex_capped - 0.5).abs() < 1e-6, "expected 0.5, got {tex_capped}");
+
+        // Small images pass through untouched.
+        assert_eq!(RapidDeconvolver::max_scale_for_vram(1920, 1080, 4096, 8192), 1.0);
     }
 
     /// Old sidecars may still carry rapidAdaptive; the key is ignored and
