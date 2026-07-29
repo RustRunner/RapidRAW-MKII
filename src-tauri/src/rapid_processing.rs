@@ -69,8 +69,10 @@ pub struct RapidParams {
     pub lambda: f32,
     /// Deconvolution strength (0-1, blend with original)
     pub strength: f32,
-    /// Tukey window alpha for edge tapering (0-0.5)
-    pub window_alpha: f32,
+    /// Seam-free boundary handling (reflect-101 margins + PSF-consistent
+    /// border taper). Always on in production; off gives the raw zero-pad
+    /// baseline for A/B tests of boundary ringing.
+    pub edge_taper: bool,
     /// Minimum denominator to prevent division by zero
     pub noise_floor: f32,
     /// Use adaptive regularization based on local variance
@@ -88,8 +90,7 @@ impl Default for RapidParams {
             gaussian_sigma: 2.0,
             lambda: 0.01,
             strength: 1.0,
-            window_alpha: 0.0, // Tukey window off by default: full-frame windowing vignettes edges;
-            // revisit with reflected-padding edge taper instead.
+            edge_taper: true,
             noise_floor: 1e-6,
             adaptive: false,
         }
@@ -107,7 +108,6 @@ impl RapidParams {
         gaussian_sigma: f32,
         lambda: f32,
         strength: f32,
-        window_alpha: f32,
         noise_floor: f32,
         adaptive: bool,
     ) -> Self {
@@ -120,7 +120,7 @@ impl RapidParams {
             gaussian_sigma,
             lambda,
             strength: strength / 100.0, // Convert 0-100 to 0-1
-            window_alpha,
+            edge_taper: true,
             noise_floor,
             adaptive,
         }
@@ -138,6 +138,257 @@ impl RapidParams {
             ..*self
         }
     }
+}
+
+// ============================================================================
+// Edge taper: seam-free FFT padding built CPU-side before upload
+// ============================================================================
+//
+// FFT deconvolution is circular: the frame's left/right (and top/bottom)
+// edges are neighbors. Zero-padding leaves a hard image-to-black step at the
+// wrap, and the Wiener inverse amplifies exactly the frequencies where the
+// PSF spectrum is near zero, ringing that step across the frame as periodic
+// banding. Two mechanisms remove the amplified seam energy, chosen per axis
+// at upload time:
+//
+// (a) Axes with pow2 headroom: continue the image into the margin with
+//     reflect-101 content cosine-faded to zero, at both ends of the wrap.
+//     The discontinuity moves off the visible frame and stays
+//     derivative-continuous, so residual wrap-seam ringing decays before the
+//     readback crop.
+// (b) Axes whose margin cannot absorb the kernel extent (notably exact-pow2
+//     axes with no headroom): PSF-consistent border taper (the MATLAB
+//     `edgetaper` approach) — cross-fade the border strips toward a copy
+//     blurred with the PSF's projection onto that axis. By the
+//     projection-slice theorem the strip's spectrum along the axis is
+//     pre-multiplied by the PSF spectrum, which is attenuated exactly where
+//     the Wiener inverse amplifies, so the seam deconvolves to a soft step
+//     instead of ringing.
+
+/// Spatial extent of the active PSF in pixels: how far the circular wrap can
+/// smear content across the frame boundary.
+fn kernel_extent(params: &RapidParams) -> usize {
+    let extent = match params.blur_type {
+        BlurType::Motion => params.motion_length,
+        BlurType::Defocus => 2.0 * params.defocus_radius,
+        BlurType::Gaussian => 6.0 * params.gaussian_sigma,
+    };
+    (extent.ceil() as usize).max(1)
+}
+
+/// Projection of the active PSF onto one axis (0 = x, 1 = y), normalized to
+/// sum 1; `[1.0]` when the projection is sub-pixel (identity).
+fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
+    // Half-extent and unnormalized density of the projected PSF at signed
+    // distance t from its center. These must match the spectra the Wiener
+    // filter divides by (psf_generate.wgsl), not an idealized blur model.
+    let (half_extent, density): (f32, Box<dyn Fn(f32) -> f32>) = match params.blur_type {
+        BlurType::Motion => {
+            // The engine's motion OTF is a zero-free Gaussian envelope with
+            // sigma_freq = 1/L (motion_blur_spectrum), i.e. spatially a
+            // Gaussian of sigma = L/(2π) along the motion direction, which
+            // projects onto an axis as a Gaussian of sigma·|cos| / sigma·|sin|.
+            let dir = params.motion_angle.to_radians();
+            let along = if axis == 0 { dir.cos() } else { dir.sin() };
+            let s = (params.motion_length * along).abs() / (2.0 * std::f32::consts::PI);
+            (3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s).max(1e-6)).exp()))
+        }
+        BlurType::Defocus => {
+            // jinc spectrum = uniform disk, which projects as its chord length.
+            let r = params.defocus_radius.max(0.0);
+            (r, Box::new(move |t: f32| (r * r - t * t).max(0.0).sqrt()))
+        }
+        BlurType::Gaussian => {
+            // gaussian_blur_spectrum caps effective sigma at 8; mirror that.
+            let s = params.gaussian_sigma.clamp(1e-3, 8.0);
+            (3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s)).exp()))
+        }
+    };
+
+    let radius = half_extent.ceil() as i32;
+    if radius < 1 {
+        return vec![1.0];
+    }
+    // Midpoint-integrate the density over each tap cell [i-0.5, i+0.5].
+    let mut kernel: Vec<f32> = (-radius..=radius)
+        .map(|i| {
+            (0..4)
+                .map(|k| density(i as f32 - 0.5 + (k as f32 + 0.5) / 4.0))
+                .sum::<f32>()
+        })
+        .collect();
+    let sum: f32 = kernel.iter().sum();
+    if sum <= f32::EPSILON {
+        return vec![1.0];
+    }
+    for w in &mut kernel {
+        *w /= sum;
+    }
+    kernel
+}
+
+/// PSF-consistent border taper along one axis: cross-fade each border strip
+/// toward a copy blurred with the PSF's projection onto that axis, sampling
+/// circularly (as MATLAB `edgetaper` does) so the blurred border mixes both
+/// sides of the wrap seam — the fade then replaces the hard seam step with a
+/// PSF-smooth transition. Only valid on axes where the frame edges really
+/// are FFT neighbors (no pad headroom). The interior beyond `taper` px of
+/// the edges is untouched.
+fn edge_taper_axis(
+    pixels: &mut [f32],
+    width: usize,
+    height: usize,
+    axis: usize,
+    taper: usize,
+    kernel: &[f32],
+) {
+    use rayon::prelude::*;
+
+    let len = if axis == 0 { width } else { height };
+    let lines = if axis == 0 { height } else { width };
+    let taper = taper.min(len / 2);
+    if taper == 0 || kernel.len() <= 1 {
+        return;
+    }
+    let radius = (kernel.len() / 2) as isize;
+
+    // Flat component index of (position d along the axis, line l across it).
+    let idx = |d: usize, l: usize| -> usize {
+        if axis == 0 { (l * width + d) * 4 } else { (d * width + l) * 4 }
+    };
+
+    // Pass 1 (read-only, parallel over lines): blend each border-strip sample
+    // toward its blurred value. Layout per line: 2 sides × taper × RGB.
+    let blended: Vec<Vec<f32>> = (0..lines)
+        .into_par_iter()
+        .map(|l| {
+            let mut out = Vec::with_capacity(taper * 6);
+            for side in 0..2 {
+                for d in 0..taper {
+                    let pos = if side == 0 { d } else { len - 1 - d };
+                    // Cosine ramp: fully blurred at the edge, original again
+                    // at the interior end of the strip.
+                    let alpha =
+                        0.5 - 0.5 * (std::f32::consts::PI * d as f32 / taper as f32).cos();
+                    for c in 0..3 {
+                        let mut blurred = 0.0f32;
+                        for (j, &w) in kernel.iter().enumerate() {
+                            let t =
+                                (pos as isize + j as isize - radius).rem_euclid(len as isize);
+                            blurred += w * pixels[idx(t as usize, l) + c];
+                        }
+                        let orig = pixels[idx(pos, l) + c];
+                        out.push(alpha * orig + (1.0 - alpha) * blurred);
+                    }
+                }
+            }
+            out
+        })
+        .collect();
+
+    // Pass 2: write back.
+    for (l, vals) in blended.iter().enumerate() {
+        let mut it = vals.iter();
+        for side in 0..2 {
+            for d in 0..taper {
+                let pos = if side == 0 { d } else { len - 1 - d };
+                let base = idx(pos, l);
+                for c in 0..3 {
+                    pixels[base + c] = *it.next().unwrap();
+                }
+            }
+        }
+    }
+}
+
+/// Per-axis map from padded index to (source index, fade weight): identity
+/// inside the frame, reflect-101 content cosine-faded to zero through the
+/// margin at both ends of the circular wrap, zero weight elsewhere.
+fn mirror_fade_map(size: usize, padded: usize, margin: usize) -> Vec<(usize, f32)> {
+    let mut map = vec![(0usize, 0.0f32); padded];
+    for (i, entry) in map.iter_mut().enumerate().take(size) {
+        *entry = (i, 1.0);
+    }
+    for k in 0..margin {
+        // ~1 adjacent to the frame, ~0 approaching the zero fill.
+        let w =
+            0.5 + 0.5 * ((k as f32 + 1.0) * std::f32::consts::PI / (margin as f32 + 1.0)).cos();
+        // Just past the last sample: reflect-101 about size-1.
+        map[size + k] = (size - 2 - k, w);
+        // Just before wrapping back to sample 0: reflect-101 about 0.
+        map[padded - 1 - k] = (1 + k, w);
+    }
+    map
+}
+
+/// Build the pow2-padded RGBA f32 upload buffer for `deconvolve_image`.
+/// With `params.edge_taper` off this is a plain zero-pad — the A/B baseline
+/// for boundary-ringing tests.
+fn build_padded_input(
+    rgba: &image::Rgba32FImage,
+    padded_w: u32,
+    padded_h: u32,
+    params: &RapidParams,
+) -> Vec<f32> {
+    use rayon::prelude::*;
+
+    let (width, height) = (rgba.width() as usize, rgba.height() as usize);
+    let (padded_w, padded_h) = (padded_w as usize, padded_h as usize);
+    let mut pixels = rgba.as_raw().clone();
+
+    let extent = kernel_extent(params);
+    let (margin_x, margin_y) = if params.edge_taper {
+        // Mirror margins claim at most half the headroom per end of the wrap.
+        (
+            ((padded_w - width) / 2).min(extent),
+            ((padded_h - height) / 2).min(extent),
+        )
+    } else {
+        (0, 0)
+    };
+
+    if params.edge_taper {
+        // (b) on axes with no mirror margin, where the frame edges are
+        // direct FFT neighbors (notably exact-pow2 axes with no headroom).
+        // The cross-fade spans 2x the kernel extent, matching the support of
+        // the PSF autocorrelation that MATLAB's edgetaper fades over.
+        if margin_x == 0 {
+            edge_taper_axis(&mut pixels, width, height, 0, 2 * extent, &psf_axis_projection(params, 0));
+        }
+        if margin_y == 0 {
+            edge_taper_axis(&mut pixels, width, height, 1, 2 * extent, &psf_axis_projection(params, 1));
+        }
+    }
+
+    // (a) separable reflect-101 + fade fill through the margins; identity
+    // weight inside the frame, zero weight beyond the margins.
+    let map_x = mirror_fade_map(width, padded_w, margin_x);
+    let map_y = mirror_fade_map(height, padded_h, margin_y);
+
+    let mut padded = vec![0.0f32; padded_w * padded_h * 4];
+    padded
+        .par_chunks_exact_mut(padded_w * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let (sy, wy) = map_y[y];
+            if wy == 0.0 {
+                return;
+            }
+            let src_row = &pixels[sy * width * 4..(sy + 1) * width * 4];
+            for (x, out) in row.chunks_exact_mut(4).enumerate() {
+                let (sx, wx) = map_x[x];
+                let w = wy * wx;
+                if w == 0.0 {
+                    continue;
+                }
+                let src = &src_row[sx * 4..sx * 4 + 4];
+                out[0] = src[0] * w;
+                out[1] = src[1] * w;
+                out[2] = src[2] * w;
+                out[3] = src[3];
+            }
+        });
+    padded
 }
 
 // ============================================================================
@@ -197,10 +448,9 @@ struct UtilityParams {
     src_height: u32,
     dst_width: u32,
     dst_height: u32,
-    window_alpha: f32,
     normalize_factor: f32,
     channel: u32,  // 0=R, 1=G, 2=B
-    _pad: u32,
+    _pad: [u32; 2],
 }
 
 // ============================================================================
@@ -556,7 +806,7 @@ impl RapidDeconvolver {
                 label: Some("RAPID Real to Complex"),
                 layout: Some(&utility_pipeline_layout),
                 module: &utility_shader,
-                entry_point: Some("real_to_complex_windowed"),
+                entry_point: Some("real_to_complex_pad"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -1543,10 +1793,11 @@ impl RapidDeconvolver {
     // Utility Operations (Phase 3)
     // ========================================================================
 
-    /// Convert a single channel from RGBA to complex with windowing
+    /// Convert a single channel from RGBA to complex
     ///
-    /// Extracts one channel (R, G, or B), applies Tukey window for edge
-    /// tapering, and zero-pads to the destination size.
+    /// Extracts one channel (R, G, or B) and zero-pads to the destination
+    /// size. Edge tapering happens CPU-side before upload, so in the normal
+    /// pipeline the source already spans the destination.
     pub fn encode_real_to_complex(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1559,7 +1810,6 @@ impl RapidDeconvolver {
         dst_width: u32,
         dst_height: u32,
         channel: u32,
-        window_alpha: f32,
     ) {
         // Set up utility parameters
         let utility_params = UtilityParams {
@@ -1567,10 +1817,9 @@ impl RapidDeconvolver {
             src_height,
             dst_width,
             dst_height,
-            window_alpha,
             normalize_factor: 1.0,
             channel,
-            _pad: 0,
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.utility_params_buffer, 0, bytemuck::bytes_of(&utility_params));
 
@@ -1628,10 +1877,9 @@ impl RapidDeconvolver {
             src_height: height,
             dst_width: width,
             dst_height: height,
-            window_alpha: 0.0,
             normalize_factor,
             channel: 0,
-            _pad: 0,
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.utility_params_buffer, 0, bytemuck::bytes_of(&utility_params));
 
@@ -1781,13 +2029,15 @@ impl RapidDeconvolver {
         // Ensure frequency textures are allocated
         self.ensure_textures(device, width, height);
 
-        // Step 1: Create input RGBA texture and upload image data
+        // Step 1: Build the seam-free padded buffer CPU-side (edge taper)
+        // and upload it at the full FFT extent.
         let rgba_image = image.to_rgba32f();
+        let padded_pixels = build_padded_input(&rgba_image, padded_w, padded_h, params);
         let input_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("RAPID Input RGBA"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: padded_w,
+                height: padded_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1798,18 +2048,18 @@ impl RapidDeconvolver {
             view_formats: &[],
         });
 
-        // Upload image data to texture
+        // Upload padded image data to texture
         queue.write_texture(
             input_texture.as_image_copy(),
-            bytemuck::cast_slice(rgba_image.as_raw()),
+            bytemuck::cast_slice(&padded_pixels),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width * 16), // 4 channels * 4 bytes per f32
-                rows_per_image: Some(height),
+                bytes_per_row: Some(padded_w * 16), // 4 channels * 4 bytes per f32
+                rows_per_image: Some(padded_h),
             },
             wgpu::Extent3d {
-                width,
-                height,
+                width: padded_w,
+                height: padded_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -1837,9 +2087,8 @@ impl RapidDeconvolver {
         self.encode_real_to_complex(
             &mut encoder, device, queue,
             &input_view, &freq_views.freq_r,
-            width, height, padded_w, padded_h,
+            padded_w, padded_h, padded_w, padded_h,
             0, // channel R
-            params.window_alpha,
         );
         // Submit and create new encoder to ensure params buffer is read correctly
         queue.submit(std::iter::once(encoder.finish()));
@@ -1851,9 +2100,8 @@ impl RapidDeconvolver {
         self.encode_real_to_complex(
             &mut encoder, device, queue,
             &input_view, &freq_views.freq_g,
-            width, height, padded_w, padded_h,
+            padded_w, padded_h, padded_w, padded_h,
             1, // channel G
-            params.window_alpha,
         );
         queue.submit(std::iter::once(encoder.finish()));
         encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1864,15 +2112,14 @@ impl RapidDeconvolver {
         self.encode_real_to_complex(
             &mut encoder, device, queue,
             &input_view, &freq_views.freq_b,
-            width, height, padded_w, padded_h,
+            padded_w, padded_h, padded_w, padded_h,
             2, // channel B
-            params.window_alpha,
         );
 
         // DEBUG_LEVEL 2: Skip FFT, PSF, Wiener - just test real_to_complex + readback
         let mut encoder = if DEBUG_LEVEL == 2 {
             log::info!("RAPID DEBUG: Testing real_to_complex only (no FFT)");
-            // Skip directly to readback - freq_r/g/b contain the windowed padded image
+            // Skip directly to readback - freq_r/g/b contain the padded image
             encoder
         } else {
             // Forward FFT on each channel (each call takes ownership and returns new encoder)
@@ -2746,6 +2993,135 @@ mod tests {
         assert!(outside[0] < 150, "background blown out after deconvolution: {:?}", outside);
     }
 
+    /// Banding metric: Hann-windowed spectral power of the red channel over
+    /// an interior span of `n` columns starting at `x0`, averaged across
+    /// rows, summed over bins [k_lo, k_hi]. The window isolates the span
+    /// from its own endpoints, so what remains in the band is periodic
+    /// banding that reached the frame interior — the artifact the edge taper
+    /// kills — and not the (legitimate, localized) softened border strips.
+    fn interior_band_energy(
+        img: &image::DynamicImage,
+        x0: usize,
+        n: usize,
+        k_lo: usize,
+        k_hi: usize,
+    ) -> f64 {
+        let rgb = img.to_rgb32f();
+        let h = rgb.height() as usize;
+        let mut energy = 0.0f64;
+        for y in 0..h {
+            let mut row: Vec<Complex> = (0..n)
+                .map(|i| {
+                    let hann = 0.5 - 0.5 * (2.0 * PI * i as f32 / n as f32).cos();
+                    Complex::new(rgb.get_pixel((x0 + i) as u32, y as u32)[0] * hann, 0.0)
+                })
+                .collect();
+            fft_1d_reference(&mut row, true);
+            for v in &row[k_lo..=k_hi] {
+                energy += (v.re as f64).powi(2) + (v.im as f64).powi(2);
+            }
+        }
+        energy / h as f64
+    }
+
+    /// Exit test: the edge taper must collapse FFT wrap-seam banding by
+    /// an order of magnitude versus raw zero-pad. Width is an exact power of
+    /// two (no pad headroom -> PSF-consistent border taper) while height pads
+    /// 200 -> 256 (reflect-101 mirror margins), so both mechanisms run.
+    #[test]
+    fn test_gpu_edge_taper_reduces_banding() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU banding test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID banding test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // Bright-edge image: flat interior with a dark block on the left
+        // frame edge and a bright block on the right. The circular wrap seam
+        // is a 0.9 step; the interior is constant, so any periodic energy
+        // that shows up there is boundary ringing, not content.
+        let (width, height) = (256u32, 200u32);
+        let img = image::RgbaImage::from_fn(width, height, |x, _| {
+            let v: f32 = if x < 8 {
+                0.05
+            } else if x >= width - 8 {
+                0.95
+            } else {
+                0.4
+            };
+            let b = (v * 255.0).round() as u8;
+            image::Rgba([b, b, b, 255])
+        });
+        let input = image::DynamicImage::ImageRgba8(img);
+
+        let blur_len = 32usize;
+        let base_params = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Motion,
+            motion_length: blur_len as f32,
+            motion_angle: 0.0,
+            lambda: 0.002,
+            strength: 1.0,
+            edge_taper: false,
+            ..Default::default()
+        };
+        let tapered_params = RapidParams { edge_taper: true, ..base_params };
+
+        let base = deconv
+            .deconvolve_image(&device, &queue, &input, &base_params)
+            .expect("baseline deconvolve failed");
+        let tapered = deconv
+            .deconvolve_image(&device, &queue, &input, &tapered_params)
+            .expect("tapered deconvolve failed");
+
+        // The motion OTF is H(k) = exp(-0.5·(k·L/N)²); the Wiener amplitude
+        // gain H/(H²+λ) peaks ~11x near k=19 at N=256, L=32, λ=0.002. Over
+        // the central 128 columns that band maps to bins ~[5, 14] (periods
+        // 9-26 px). The baseline's seam ringing reaches the interior; the
+        // tapered output must not.
+        let e_base = interior_band_energy(&base, 64, 128, 5, 14);
+        let e_tapered = interior_band_energy(&tapered, 64, 128, 5, 14);
+        eprintln!(
+            "edge taper banding reduction: {:.1}x (baseline {:.3e}, tapered {:.3e})",
+            e_base / e_tapered,
+            e_base,
+            e_tapered
+        );
+        assert!(
+            e_base > 10.0 * e_tapered,
+            "edge taper reduced banding only {:.1}x (baseline {:.3e}, tapered {:.3e})",
+            e_base / e_tapered,
+            e_base,
+            e_tapered
+        );
+
+        // The taper must not disturb the interior: the center of a smooth
+        // blur-consistent ramp should survive deconvolution nearly unchanged.
+        let in_rgb = input.to_rgb32f();
+        let out_rgb = tapered.to_rgb32f();
+        let y = height / 2;
+        let mut max_dev = 0.0f32;
+        for x in 64..192 {
+            let d = (out_rgb.get_pixel(x, y)[0] - in_rgb.get_pixel(x, y)[0]).abs();
+            max_dev = max_dev.max(d);
+        }
+        assert!(max_dev < 0.05, "interior drifted by {max_dev} after tapered deconvolution");
+    }
+
     #[test]
     fn test_rapid_params_scaled() {
         let p = RapidParams {
@@ -2776,6 +3152,59 @@ mod tests {
         let unit = p.scaled(1.0);
         assert!((unit.motion_length - p.motion_length).abs() < 1e-6);
         assert!((unit.defocus_radius - p.defocus_radius).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_psf_axis_projection() {
+        // Horizontal motion: box along x, identity along y.
+        let p = RapidParams {
+            blur_type: BlurType::Motion,
+            motion_length: 32.0,
+            motion_angle: 0.0,
+            ..Default::default()
+        };
+        let kx = psf_axis_projection(&p, 0);
+        assert!(kx.len() >= 31, "x projection should span the blur length, got {}", kx.len());
+        assert!((kx.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+        let ky = psf_axis_projection(&p, 1);
+        assert_eq!(ky.len(), 1, "vertical projection of a horizontal line must be identity");
+
+        // Defocus and gaussian project onto both axes.
+        for p in [
+            RapidParams { blur_type: BlurType::Defocus, defocus_radius: 5.0, ..Default::default() },
+            RapidParams { blur_type: BlurType::Gaussian, gaussian_sigma: 2.0, ..Default::default() },
+        ] {
+            for axis in 0..2 {
+                let k = psf_axis_projection(&p, axis);
+                assert!(k.len() > 1);
+                assert!((k.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mirror_fade_map() {
+        // 200 -> 256 with a 24 px margin: identity inside the frame, mirrored
+        // fading content at both ends of the wrap, zeros between.
+        let map = mirror_fade_map(200, 256, 24);
+        assert_eq!(map[0], (0, 1.0));
+        assert_eq!(map[199], (199, 1.0));
+        // Just past the frame: reflect-101 of row 198, weight near 1.
+        assert_eq!(map[200].0, 198);
+        assert!(map[200].1 > 0.9);
+        // The near margin fades toward zero.
+        assert!(map[223].1 < 0.1);
+        // Just before wrapping to row 0: reflect-101 of row 1, weight near 1.
+        assert_eq!(map[255].0, 1);
+        assert!(map[255].1 > 0.9);
+        assert!(map[232].1 < 0.1);
+        // Zero fill between the margins.
+        for i in 224..232 {
+            assert_eq!(map[i].1, 0.0);
+        }
+        // Zero margin = plain zero pad.
+        let plain = mirror_fade_map(200, 256, 0);
+        assert!(plain[200..].iter().all(|&(_, w)| w == 0.0));
     }
 
     #[test]

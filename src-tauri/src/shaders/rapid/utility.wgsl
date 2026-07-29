@@ -1,20 +1,19 @@
 // ============================================================================
-// RAPID Utility Operations - Windowing, Padding, Conversion
+// RAPID Utility Operations - Padding, Conversion
 // ============================================================================
 //
 // This module provides utility operations for the RAPID pipeline:
-// - Tukey (cosine-tapered) window for edge artifact reduction
 // - Real to complex conversion with zero padding
 // - Complex to real conversion with cropping
 // - Channel extraction and combination
 //
+// Edge tapering is not done here: the upload path builds a seam-free padded
+// buffer CPU-side (reflect-101 margins + PSF-consistent border taper), so the
+// input texture already spans the full FFT extent.
+//
 // Author: RapidRAW Mod1 Team
 // Date: January 2026
 // ============================================================================
-
-// Mathematical constants
-const PI: f32 = 3.14159265358979323846;
-const TWO_PI: f32 = 6.28318530717958647692;
 
 // ============================================================================
 // Utility Parameters
@@ -25,71 +24,23 @@ struct UtilityParams {
     src_height: u32,
     dst_width: u32,
     dst_height: u32,
-    window_alpha: f32,    // Tukey window parameter (0 = rectangular, 1 = Hann)
     normalize_factor: f32,
     channel: u32,         // 0=R, 1=G, 2=B for channel extraction
-    _pad: u32,
+    _pad: vec2<u32>,
 }
 
 // ============================================================================
-// Window Functions
-// ============================================================================
-
-/// 1D Tukey (cosine-tapered) window
-/// alpha = 0: rectangular window
-/// alpha = 1: Hann window
-/// alpha in between: cosine-tapered edges with flat center
-fn tukey_window_1d(x: f32, N: f32, alpha: f32) -> f32 {
-    if (alpha <= 0.0) {
-        return 1.0;  // Rectangular window
-    }
-
-    if (alpha >= 1.0) {
-        // Hann window
-        return 0.5 * (1.0 - cos(TWO_PI * x / N));
-    }
-
-    let width = alpha * N / 2.0;
-
-    if (x < width) {
-        // Left taper
-        return 0.5 * (1.0 - cos(PI * x / width));
-    } else if (x > N - width) {
-        // Right taper
-        return 0.5 * (1.0 - cos(PI * (N - x) / width));
-    }
-
-    // Flat center
-    return 1.0;
-}
-
-/// 2D Tukey window (separable)
-fn tukey_window_2d(x: f32, y: f32, W: f32, H: f32, alpha: f32) -> f32 {
-    return tukey_window_1d(x, W, alpha) * tukey_window_1d(y, H, alpha);
-}
-
-/// Hann window (special case of Tukey with alpha=1)
-fn hann_window_1d(x: f32, N: f32) -> f32 {
-    return 0.5 * (1.0 - cos(TWO_PI * x / N));
-}
-
-/// 2D Hann window
-fn hann_window_2d(x: f32, y: f32, W: f32, H: f32) -> f32 {
-    return hann_window_1d(x, W) * hann_window_1d(y, H);
-}
-
-// ============================================================================
-// Real to Complex Conversion with Windowing and Zero Padding
+// Real to Complex Conversion with Zero Padding
 // ============================================================================
 
 @group(0) @binding(0) var input_rgba: texture_2d<f32>;
 @group(0) @binding(1) var output_complex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(2) var<uniform> params: UtilityParams;
 
-/// Convert single channel from RGBA to complex with windowing and zero padding
-/// Extracts one channel (R, G, or B) and applies Tukey window
+/// Convert single channel from RGBA to complex, zero-padding anything beyond
+/// the source extent (a no-op when the source already spans the destination)
 @compute @workgroup_size(16, 16, 1)
-fn real_to_complex_windowed(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn real_to_complex_pad(@builtin(global_invocation_id) gid: vec3<u32>) {
     let coord = vec2<u32>(gid.xy);
 
     // Bounds check against destination size
@@ -111,52 +62,10 @@ fn real_to_complex_windowed(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 2u: { value = rgba.b; }
             default: { value = rgba.r; }
         }
-
-        // Apply Tukey window
-        let window = tukey_window_2d(
-            f32(coord.x), f32(coord.y),
-            f32(params.src_width), f32(params.src_height),
-            params.window_alpha
-        );
-        value *= window;
     }
     // Else: zero padding (value stays 0.0)
 
     // Output as complex (real, 0)
-    textureStore(output_complex, coord, vec4<f32>(value, 0.0, 0.0, 1.0));
-}
-
-/// Convert all RGB channels to complex in a single pass
-/// Uses channel index from z coordinate
-@compute @workgroup_size(16, 16, 1)
-fn real_to_complex_all_channels(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let coord = vec2<u32>(gid.xy);
-
-    if (coord.x >= params.dst_width || coord.y >= params.dst_height) {
-        return;
-    }
-
-    var value: f32 = 0.0;
-
-    if (coord.x < params.src_width && coord.y < params.src_height) {
-        let rgba = textureLoad(input_rgba, coord, 0);
-
-        // Channel is passed via params for single-channel operation
-        switch (params.channel) {
-            case 0u: { value = rgba.r; }
-            case 1u: { value = rgba.g; }
-            case 2u: { value = rgba.b; }
-            default: { value = rgba.r; }
-        }
-
-        let window = tukey_window_2d(
-            f32(coord.x), f32(coord.y),
-            f32(params.src_width), f32(params.src_height),
-            params.window_alpha
-        );
-        value *= window;
-    }
-
     textureStore(output_complex, coord, vec4<f32>(value, 0.0, 0.0, 1.0));
 }
 
