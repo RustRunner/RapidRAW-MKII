@@ -1,10 +1,21 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { Info } from 'lucide-react';
+import { toast } from 'react-toastify';
 
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, BlurRecoveryAdjustment } from '../../utils/adjustments';
+import { Invokes } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
+
+interface BlurEstimate {
+  length: number;
+  angle: number;
+  confidence: number;
+  confident: boolean;
+}
 
 interface BlurRecoveryPanelProps {
   adjustments: Adjustments;
@@ -19,10 +30,39 @@ const DEFOCUS_RADIUS_PRESETS = [25, 50, 75, 100];
 export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragStateChange }: BlurRecoveryPanelProps) {
   const { t } = useTranslation();
   const setEditor = useEditorStore((state: any) => state.setEditor);
+  const [isEstimating, setIsEstimating] = useState(false);
 
   const handleValueChange = (key: BlurRecoveryAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
     setAdjustments((prev: Adjustments) => ({ ...prev, [key]: numericValue }));
+  };
+
+  const handleEstimateBlur = async () => {
+    if (isEstimating) {
+      return;
+    }
+    setIsEstimating(true);
+    try {
+      const estimate = await invoke<BlurEstimate>(Invokes.EstimateBlurKernel);
+      if (!estimate?.confident) {
+        toast.error(t('editor.adjustments.blurRecovery.estimateFailed'));
+        return;
+      }
+      const length = Math.min(200, Math.max(1, Math.round(estimate.length)));
+      const angle = Math.min(180, Math.max(0, Math.round(estimate.angle)));
+      setAdjustments((prev: Adjustments) => ({
+        ...prev,
+        [BlurRecoveryAdjustment.RapidLength]: length,
+        [BlurRecoveryAdjustment.RapidAngle]: angle,
+      }));
+      // Flash the angle overlay so the detected direction is visible.
+      setEditor({ isBlurAngleAdjusting: true, blurOverlayAngle: angle });
+      setTimeout(() => setEditor({ isBlurAngleAdjusting: false }), 1200);
+    } catch (err) {
+      toast.error(`${t('editor.adjustments.blurRecovery.estimateFailed')} (${err})`);
+    } finally {
+      setIsEstimating(false);
+    }
   };
 
   const handleAngleChange = (e: any) => {
@@ -78,6 +118,19 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
 
             {adjustments.rapidBlurType === 'motion' && (
               <>
+                <button
+                  className={`w-full py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
+                    isEstimating
+                      ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
+                      : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
+                  }`}
+                  onClick={handleEstimateBlur}
+                  disabled={isEstimating}
+                >
+                  {isEstimating
+                    ? t('editor.adjustments.blurRecovery.estimating')
+                    : t('editor.adjustments.blurRecovery.estimate')}
+                </button>
                 <div className="flex gap-1">
                   {MOTION_LENGTH_PRESETS.map((preset) => (
                     <button

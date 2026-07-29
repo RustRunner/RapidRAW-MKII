@@ -12,6 +12,7 @@ mod android_integration;
 mod app_settings;
 mod app_state;
 mod cache_utils;
+mod cpu_fft;
 mod culling;
 mod denoising;
 mod exif_processing;
@@ -2114,6 +2115,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             apply_adjustments,
+            rapid_processing::estimate_blur_kernel,
             generate_preview_for_path,
             generate_original_transformed_preview,
             generate_preset_preview,

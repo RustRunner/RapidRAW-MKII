@@ -16,7 +16,7 @@
 
 // Unused for now but will be needed in later phases
 #[allow(unused_imports)]
-use std::sync::Arc;
+use crate::cpu_fft;
 #[allow(unused_imports)]
 use wgpu::util::DeviceExt;
 
@@ -2393,137 +2393,206 @@ pub fn apply_blur_recovery_scaled<'a>(
     }
 }
 
+// ============================================================================
+// Blur-kernel estimation (cepstral analysis)
+// ============================================================================
+
+/// Result of cepstral blur-kernel estimation. `length` is in full-resolution
+/// pixels; `angle` follows psf_generate.wgsl's motion_angle convention
+/// (degrees, 0-180, image-space Y-down). `confident` applies the gate so the
+/// threshold lives in one place; `confidence` is the raw score (how many
+/// standard deviations the cepstral peak sits below the search-region mean).
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct BlurEstimate {
+    pub length: f32,
+    pub angle: f32,
+    pub confidence: f32,
+    pub confident: bool,
+}
+
+/// Estimates below this score are reported as not confident: the deepest
+/// negative excursion of pure noise over a ~100k-sample search region already
+/// reaches ~4-5 sigma, so a real cepstral peak must clear that comfortably.
+const BLUR_CONFIDENCE_GATE: f32 = 6.0;
+
+/// Estimate linear motion blur via cepstral analysis.
+///
+/// The luma of a working copy (downscaled to <=1024 px, Hann-windowed so the
+/// frame boundary doesn't dominate) goes through 2D FFT -> log(1 + |F|) ->
+/// inverse 2D FFT. A linear motion blur multiplies the spectrum by a comb of
+/// near-zeros at 1/L spacing, which the log turns into an additive periodic
+/// component: the real cepstrum shows a negative peak pair at distance L
+/// along the blur direction. Search radius 3-250 working px; the detection
+/// floor is ~2-3 working px, so short blurs on large images come back
+/// low-confidence rather than wrong.
+pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
+    use image::GenericImageView;
+
+    let (full_w, full_h) = image.dimensions();
+    let scale = (1024.0 / full_w.max(full_h).max(1) as f32).min(1.0);
+    let working;
+    let working_ref = if scale < 1.0 {
+        let w = ((full_w as f32 * scale).round() as u32).max(1);
+        let h = ((full_h as f32 * scale).round() as u32).max(1);
+        working = image.resize_exact(w, h, image::imageops::FilterType::Triangle);
+        &working
+    } else {
+        image
+    };
+    let rgb = working_ref.to_rgb32f();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    let (pw, ph) = (w.next_power_of_two(), h.next_power_of_two());
+
+    // Luma, mean-subtracted and Hann-windowed over the image extent,
+    // zero-padded into the pow2 grid.
+    let raw = rgb.as_raw();
+    let mut mean = 0.0f64;
+    let mut luma = vec![0.0f32; w * h];
+    for (i, px) in raw.chunks_exact(3).enumerate() {
+        let y = px[0] * LUMA_COEFF[0] + px[1] * LUMA_COEFF[1] + px[2] * LUMA_COEFF[2];
+        luma[i] = y;
+        mean += y as f64;
+    }
+    let mean = (mean / (w * h) as f64) as f32;
+
+    let mut data = vec![cpu_fft::Complex::new(0.0, 0.0); pw * ph];
+    for y in 0..h {
+        let hann_y = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * y as f32 / h as f32).cos();
+        for x in 0..w {
+            let hann_x = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * x as f32 / w as f32).cos();
+            data[y * pw + x] =
+                cpu_fft::Complex::new((luma[y * w + x] - mean) * hann_x * hann_y, 0.0);
+        }
+    }
+
+    // Real cepstrum: FFT -> log magnitude -> inverse FFT.
+    cpu_fft::fft_2d(&mut data, pw, ph, true);
+    for v in data.iter_mut() {
+        *v = cpu_fft::Complex::new((1.0 + v.magnitude()).ln(), 0.0);
+    }
+    cpu_fft::fft_2d(&mut data, pw, ph, false);
+
+    // Search the half-plane (the cepstrum of a real signal is symmetric) for
+    // the most negative peak in the valid radius band.
+    let r_min = 3.0f32;
+    let r_max = 250.0f32.min(w.min(h) as f32 / 2.0 - 1.0);
+    let sample = |dx: i32, dy: i32| -> f32 {
+        let sx = (dx as isize).rem_euclid(pw as isize) as usize;
+        let sy = (dy as isize).rem_euclid(ph as isize) as usize;
+        data[sy * pw + sx].re
+    };
+    let mut peak_val = f32::INFINITY;
+    let mut peak_dx = 0i32;
+    let mut peak_dy = 0i32;
+    let max_r = r_max.ceil() as i32;
+    for dy in 0..=max_r {
+        for dx in -max_r..=max_r {
+            if dy == 0 && dx <= 0 {
+                continue;
+            }
+            let r = ((dx * dx + dy * dy) as f32).sqrt();
+            if !(r_min..=r_max).contains(&r) {
+                continue;
+            }
+            let v = sample(dx, dy);
+            if v < peak_val {
+                peak_val = v;
+                peak_dx = dx;
+                peak_dy = dy;
+            }
+        }
+    }
+
+    // Local noise floor (the spec's confidence definition): statistics over
+    // the annulus at the peak's own radius, excluding the peak's immediate
+    // neighborhood. The cepstrum's magnitude decays steeply with radius, so
+    // a global z-score would let the smooth near-origin envelope of any
+    // sharp image masquerade as a deep peak; against same-radius neighbors
+    // only a genuine spectral comb stands out.
+    let r_peak = ((peak_dx * peak_dx + peak_dy * peak_dy) as f32).sqrt();
+    let band = (r_peak * 0.15).max(3.0);
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut count = 0u64;
+    for dy in 0..=max_r {
+        for dx in -max_r..=max_r {
+            if dy == 0 && dx <= 0 {
+                continue;
+            }
+            let r = ((dx * dx + dy * dy) as f32).sqrt();
+            if !(r_min..=r_max).contains(&r) || (r - r_peak).abs() > band {
+                continue;
+            }
+            let ex = dx - peak_dx;
+            let ey = dy - peak_dy;
+            if ex * ex + ey * ey <= 9 {
+                continue;
+            }
+            let v = sample(dx, dy) as f64;
+            sum += v;
+            sum_sq += v * v;
+            count += 1;
+        }
+    }
+
+    if count < 16 {
+        // Image too small to search meaningfully.
+        return BlurEstimate { length: 0.0, angle: 0.0, confidence: 0.0, confident: false };
+    }
+    let n = count as f64;
+    let mean_c = sum / n;
+    let std_c = ((sum_sq / n - mean_c * mean_c).max(1e-20)).sqrt();
+    let confidence = ((mean_c - peak_val as f64) / std_c) as f32;
+
+    let length = ((peak_dx * peak_dx + peak_dy * peak_dy) as f32).sqrt() / scale;
+    let mut angle = (peak_dy as f32).atan2(peak_dx as f32).to_degrees();
+    if angle >= 180.0 {
+        angle -= 180.0;
+    }
+
+    BlurEstimate {
+        length,
+        angle,
+        confidence,
+        confident: confidence >= BLUR_CONFIDENCE_GATE,
+    }
+}
+
+/// Tauri command: estimate the motion-blur kernel of the currently loaded
+/// image from its cepstrum. Returns full-resolution length, angle in the PSF
+/// convention, and the confidence score/gate; the frontend leaves the sliders
+/// untouched when `confident` is false.
+#[tauri::command]
+pub async fn estimate_blur_kernel(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<BlurEstimate, String> {
+    let image = {
+        let guard = state.original_image.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|loaded| loaded.image.clone())
+            .ok_or("No image loaded")?
+    };
+    let start = std::time::Instant::now();
+    let estimate = tokio::task::spawn_blocking(move || estimate_blur(&image))
+        .await
+        .map_err(|e| format!("Blur estimation task failed: {e}"))?;
+    log::info!(
+        "RAPID: blur estimate L={:.1}px A={:.1}° confidence={:.1} ({}confident) in {:?}",
+        estimate.length,
+        estimate.angle,
+        estimate.confidence,
+        if estimate.confident { "" } else { "not " },
+        start.elapsed()
+    );
+    Ok(estimate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpu_fft::{fft_1d, fft_2d, Complex};
     use std::f32::consts::PI;
-
-    // ========================================================================
-    // CPU Reference FFT Implementation for Validation
-    // ========================================================================
-
-    /// Complex number for CPU testing
-    #[derive(Clone, Copy, Debug)]
-    struct Complex {
-        re: f32,
-        im: f32,
-    }
-
-    impl Complex {
-        fn new(re: f32, im: f32) -> Self {
-            Self { re, im }
-        }
-
-        fn from_polar(r: f32, theta: f32) -> Self {
-            Self {
-                re: r * theta.cos(),
-                im: r * theta.sin(),
-            }
-        }
-
-        fn add(self, other: Self) -> Self {
-            Self {
-                re: self.re + other.re,
-                im: self.im + other.im,
-            }
-        }
-
-        fn sub(self, other: Self) -> Self {
-            Self {
-                re: self.re - other.re,
-                im: self.im - other.im,
-            }
-        }
-
-        fn mul(self, other: Self) -> Self {
-            Self {
-                re: self.re * other.re - self.im * other.im,
-                im: self.re * other.im + self.im * other.re,
-            }
-        }
-
-        fn scale(self, s: f32) -> Self {
-            Self {
-                re: self.re * s,
-                im: self.im * s,
-            }
-        }
-
-        fn magnitude(self) -> f32 {
-            (self.re * self.re + self.im * self.im).sqrt()
-        }
-    }
-
-    /// CPU reference implementation of 1D FFT (Cooley-Tukey radix-2)
-    fn fft_1d_reference(data: &mut [Complex], forward: bool) {
-        let n = data.len();
-        assert!(n.is_power_of_two(), "FFT size must be power of 2");
-
-        // Bit-reversal permutation
-        let mut j = 0;
-        for i in 0..n {
-            if i < j {
-                data.swap(i, j);
-            }
-            let mut m = n / 2;
-            while m > 0 && j >= m {
-                j -= m;
-                m /= 2;
-            }
-            j += m;
-        }
-
-        // Cooley-Tukey FFT
-        let sign = if forward { -1.0 } else { 1.0 };
-        let mut len = 2;
-        while len <= n {
-            let half_len = len / 2;
-            let angle_step = sign * 2.0 * PI / len as f32;
-
-            for start in (0..n).step_by(len) {
-                let mut angle = 0.0;
-                for k in 0..half_len {
-                    let twiddle = Complex::from_polar(1.0, angle);
-                    let even = data[start + k];
-                    let odd = data[start + k + half_len].mul(twiddle);
-
-                    data[start + k] = even.add(odd);
-                    data[start + k + half_len] = even.sub(odd);
-
-                    angle += angle_step;
-                }
-            }
-            len *= 2;
-        }
-
-        // Normalize for inverse FFT
-        if !forward {
-            let scale = 1.0 / n as f32;
-            for x in data.iter_mut() {
-                *x = x.scale(scale);
-            }
-        }
-    }
-
-    /// CPU reference implementation of 2D FFT
-    fn fft_2d_reference(data: &mut [Complex], width: usize, height: usize, forward: bool) {
-        // Transform rows
-        for row in 0..height {
-            let start = row * width;
-            let mut row_data: Vec<Complex> = data[start..start + width].to_vec();
-            fft_1d_reference(&mut row_data, forward);
-            data[start..start + width].copy_from_slice(&row_data);
-        }
-
-        // Transform columns
-        for col in 0..width {
-            let mut col_data: Vec<Complex> = (0..height).map(|row| data[row * width + col]).collect();
-            fft_1d_reference(&mut col_data, forward);
-            for (row, &val) in col_data.iter().enumerate() {
-                data[row * width + col] = val;
-            }
-        }
-    }
 
     // ========================================================================
     // Unit Tests
@@ -2578,7 +2647,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_fft_1d_reference_impulse() {
+    fn test_fft_1d_impulse() {
         // FFT of impulse [1, 0, 0, 0] should be [1, 1, 1, 1]
         let mut data = vec![
             Complex::new(1.0, 0.0),
@@ -2587,7 +2656,7 @@ mod tests {
             Complex::new(0.0, 0.0),
         ];
 
-        fft_1d_reference(&mut data, true);
+        fft_1d(&mut data, true);
 
         for (i, x) in data.iter().enumerate() {
             assert!(
@@ -2599,7 +2668,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fft_1d_reference_dc() {
+    fn test_fft_1d_dc() {
         // FFT of constant [1, 1, 1, 1] should be [4, 0, 0, 0]
         let mut data = vec![
             Complex::new(1.0, 0.0),
@@ -2608,7 +2677,7 @@ mod tests {
             Complex::new(1.0, 0.0),
         ];
 
-        fft_1d_reference(&mut data, true);
+        fft_1d(&mut data, true);
 
         assert!((data[0].re - 4.0).abs() < 1e-5, "DC component should be 4");
         for i in 1..4 {
@@ -2621,7 +2690,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fft_1d_reference_roundtrip() {
+    fn test_fft_1d_roundtrip() {
         // FFT followed by IFFT should recover original signal
         let original = vec![
             Complex::new(1.0, 0.0),
@@ -2635,8 +2704,8 @@ mod tests {
         ];
 
         let mut data = original.clone();
-        fft_1d_reference(&mut data, true);
-        fft_1d_reference(&mut data, false);
+        fft_1d(&mut data, true);
+        fft_1d(&mut data, false);
 
         for (i, (orig, result)) in original.iter().zip(data.iter()).enumerate() {
             assert!(
@@ -2648,7 +2717,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fft_1d_reference_sine() {
+    fn test_fft_1d_sine() {
         // FFT of a single sine wave should have two peaks
         let n = 8;
         let freq = 1; // One cycle
@@ -2659,7 +2728,7 @@ mod tests {
             })
             .collect();
 
-        fft_1d_reference(&mut data, true);
+        fft_1d(&mut data, true);
 
         // For a sine wave, energy should be at indices 1 and n-1
         let peak1 = data[freq].magnitude();
@@ -2673,7 +2742,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fft_2d_reference_roundtrip() {
+    fn test_fft_2d_roundtrip() {
         // 2D FFT roundtrip test
         let width = 4;
         let height = 4;
@@ -2682,8 +2751,8 @@ mod tests {
             .collect();
 
         let mut data = original.clone();
-        fft_2d_reference(&mut data, width, height, true);
-        fft_2d_reference(&mut data, width, height, false);
+        fft_2d(&mut data, width, height, true);
+        fft_2d(&mut data, width, height, false);
 
         for (i, (orig, result)) in original.iter().zip(data.iter()).enumerate() {
             assert!(
@@ -2695,7 +2764,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fft_2d_reference_separable() {
+    fn test_fft_2d_separable() {
         // Test that 2D FFT is separable (row FFT then col FFT = 2D FFT)
         let width = 4;
         let height = 4;
@@ -2705,9 +2774,9 @@ mod tests {
 
         // Method 1: Direct 2D FFT
         let mut data1 = original.clone();
-        fft_2d_reference(&mut data1, width, height, true);
+        fft_2d(&mut data1, width, height, true);
 
-        // Method 2: Row FFT then column FFT (which is what fft_2d_reference does)
+        // Method 2: Row FFT then column FFT (which is what fft_2d does)
         // This test verifies the implementation is correct by checking consistency
         let mut data2 = original.clone();
 
@@ -2715,14 +2784,14 @@ mod tests {
         for row in 0..height {
             let start = row * width;
             let mut row_data: Vec<Complex> = data2[start..start + width].to_vec();
-            fft_1d_reference(&mut row_data, true);
+            fft_1d(&mut row_data, true);
             data2[start..start + width].copy_from_slice(&row_data);
         }
 
         // Column transforms
         for col in 0..width {
             let mut col_data: Vec<Complex> = (0..height).map(|row| data2[row * width + col]).collect();
-            fft_1d_reference(&mut col_data, true);
+            fft_1d(&mut col_data, true);
             for (row, &val) in col_data.iter().enumerate() {
                 data2[row * width + col] = val;
             }
@@ -2756,7 +2825,7 @@ mod tests {
         let time_energy: f32 = original.iter().map(|x| x.re * x.re + x.im * x.im).sum();
 
         let mut freq = original.clone();
-        fft_1d_reference(&mut freq, true);
+        fft_1d(&mut freq, true);
         let freq_energy: f32 = freq.iter().map(|x| x.re * x.re + x.im * x.im).sum();
 
         // time_energy should equal freq_energy / N
@@ -2858,7 +2927,7 @@ mod tests {
                     Complex::new(rgb.get_pixel((x0 + i) as u32, y as u32)[0] * hann, 0.0)
                 })
                 .collect();
-            fft_1d_reference(&mut row, true);
+            fft_1d(&mut row, true);
             for v in &row[k_lo..=k_hi] {
                 energy += (v.re as f64).powi(2) + (v.im as f64).powi(2);
             }
@@ -3159,6 +3228,110 @@ mod tests {
         // Zero margin = plain zero pad.
         let plain = mirror_fade_map(200, 256, 0);
         assert!(plain[200..].iter().all(|&(_, w)| w == 0.0));
+    }
+
+    /// Deterministic broadband scene (hash noise over smooth blobs) for the
+    /// cepstral estimator: enough spectral content at all frequencies that
+    /// the blur's spectral comb is observable. The hash needs full avalanche
+    /// — a linear-congruential mix leaves lattice periodicities that the
+    /// cepstrum (correctly) detects as structure.
+    fn synthetic_scene(w: u32, h: u32) -> image::RgbaImage {
+        let hash2 = |x: u32, y: u32| -> u32 {
+            let mut h = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7FEB_352D);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x846C_A68B);
+            h ^= h >> 16;
+            h
+        };
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            let noise = (hash2(x, y) & 0xff) as f32 / 255.0;
+            let blob = ((x as f32 / 37.0).sin() + (y as f32 / 29.0).cos()) * 0.25 + 0.5;
+            let v = (0.35 * noise + 0.65 * blob).clamp(0.0, 1.0);
+            let b = (v * 255.0) as u8;
+            image::Rgba([b, b, b, 255])
+        })
+    }
+
+    /// Convolve with a true line PSF (uniform box along the given direction,
+    /// image-space Y-down) — the real-world blur the estimator must detect,
+    /// as opposed to the engine's Gaussian-envelope deconvolution model.
+    fn motion_blur_line(img: &image::RgbaImage, length: f32, angle_deg: f32) -> image::RgbaImage {
+        let (w, h) = (img.width(), img.height());
+        let dir = angle_deg.to_radians();
+        let (dx, dy) = (dir.cos(), dir.sin());
+        let n = length.ceil().max(1.0) as i32;
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            let mut acc = [0.0f32; 3];
+            let mut count = 0.0f32;
+            for i in 0..n {
+                let t = i as f32 - (n as f32 - 1.0) / 2.0;
+                let sx = (x as f32 + t * dx).round() as i32;
+                let sy = (y as f32 + t * dy).round() as i32;
+                if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                    let p = img.get_pixel(sx as u32, sy as u32);
+                    for c in 0..3 {
+                        acc[c] += p[c] as f32;
+                    }
+                    count += 1.0;
+                }
+            }
+            image::Rgba([
+                (acc[0] / count).round() as u8,
+                (acc[1] / count).round() as u8,
+                (acc[2] / count).round() as u8,
+                255,
+            ])
+        })
+    }
+
+    /// Convention gate for the estimator: synthetic line blurs at four angles
+    /// must come back with the right length and angle in psf_generate.wgsl's
+    /// motion_angle convention (degrees, 0-180, image-space Y-down), and a
+    /// sharp image must fail the confidence gate rather than invent a blur.
+    #[test]
+    fn test_estimate_blur_four_angles() {
+        let scene = synthetic_scene(512, 512);
+        let blur_len = 25.0f32;
+        for &angle in &[0.0f32, 30.0, 90.0, 135.0] {
+            let blurred =
+                image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, angle));
+            let est = estimate_blur(&blurred);
+            eprintln!(
+                "blur estimate at {angle}°: L={:.1} A={:.1} confidence={:.1}",
+                est.length, est.angle, est.confidence
+            );
+            assert!(
+                est.confident,
+                "estimator not confident at {angle}° (confidence {:.1})",
+                est.confidence
+            );
+            assert!(
+                (est.length - blur_len).abs() <= 3.0,
+                "length off at {angle}°: got {:.1}, expected {blur_len}",
+                est.length
+            );
+            let diff = (est.angle - angle).abs();
+            let angular_error = diff.min(180.0 - diff);
+            assert!(
+                angular_error <= 4.0,
+                "angle off at {angle}°: got {:.1}",
+                est.angle
+            );
+        }
+
+        // Negative control: no blur -> no confident estimate.
+        let sharp = estimate_blur(&image::DynamicImage::ImageRgba8(scene));
+        eprintln!(
+            "sharp-image: L={:.1} A={:.1} confidence={:.1}",
+            sharp.length, sharp.angle, sharp.confidence
+        );
+        assert!(
+            !sharp.confident,
+            "estimator hallucinated a blur on a sharp image (confidence {:.1})",
+            sharp.confidence
+        );
     }
 
     #[test]
