@@ -126,8 +126,7 @@ export default function Controls() {
     setCollapsibleState((prev: any) => {
       const isCurrentlyOpen = prev[section];
       // Accordion: close everything, then open the clicked section (clicking
-      // the open section just closes it). Always on for adjustment sections;
-      // the Focus Mode setting still governs the masks panel.
+      // the open section just closes it).
       const allClosed = Object.keys(prev).reduce((acc: any, key: string) => {
         acc[key] = false;
         return acc;

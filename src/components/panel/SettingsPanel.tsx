@@ -976,18 +976,6 @@ export default function SettingsPanel({
                         />
                       </SettingItem>
 
-                      <SettingItem
-                        label={t('settings.general.focusMode')}
-                        description={t('settings.general.focusModeDesc')}
-                      >
-                        <Switch
-                          checked={appSettings?.enableFocusMode ?? false}
-                          id="focus-mode-toggle"
-                          label={t('settings.general.enableFocusMode')}
-                          onChange={(checked) => onSettingsChange({ ...appSettings, enableFocusMode: checked })}
-                        />
-                      </SettingItem>
-
                       <SettingItem label={t('settings.general.font')} description={t('settings.general.fontDesc')}>
                         <Dropdown
                           onChange={(value: any) => onSettingsChange({ ...appSettings, fontFamily: value })}

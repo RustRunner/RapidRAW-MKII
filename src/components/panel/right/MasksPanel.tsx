@@ -1945,7 +1945,9 @@ function SettingsPanel({
   const handleToggleSection = (section: string) => {
     setCollapsibleState((prev: any) => {
       const isOpening = !prev[section];
-      if (appSettings?.enableFocusMode && isOpening) {
+      // Accordion: opening a section closes the others (and the mask
+      // properties section); clicking the open section just closes it.
+      if (isOpening) {
         setSettingsSectionOpen(false);
         const newState = { ...prev };
         Object.keys(newState).forEach((key) => {
@@ -1954,7 +1956,7 @@ function SettingsPanel({
         newState[section] = true;
         return newState;
       }
-      return { ...prev, [section]: !prev[section] };
+      return { ...prev, [section]: false };
     });
   };
 
@@ -2056,7 +2058,8 @@ function SettingsPanel({
         onToggle={() => {
           const isOpening = !isSettingsSectionOpen;
           setSettingsSectionOpen(isOpening);
-          if (appSettings?.enableFocusMode && isOpening) {
+          // Accordion: opening mask properties closes the adjustment sections.
+          if (isOpening) {
             setCollapsibleState((prev: any) => {
               const newState = { ...prev };
               Object.keys(newState).forEach((key) => {
