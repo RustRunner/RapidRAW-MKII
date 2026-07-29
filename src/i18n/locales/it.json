@@ -784,6 +784,7 @@
         "redo": "Ripeti (Ctrl+Y) o Cronologia (Tasto destro)",
         "showEdited": "Mostra Modificata (B)",
         "showOriginal": "Mostra Originale (B)",
+        "splitView": "Vista divisa - Confronta originale e modificato (Maiusc+B)",
         "shutterSpeed": "Tempo di Esposizione",
         "undo": "Annulla (Ctrl+Z) o Cronologia (Tasto destro)"
       },
@@ -1587,6 +1588,7 @@
         "rotate_right": "Ruota 90° in senso orario",
         "select_all": "Seleziona tutte le immagini",
         "show_original": "Mostra originale (prima/dopo)",
+        "toggle_split_view": "Attiva/disattiva vista divisa",
         "toggle_adjustments": "Attiva/Disattiva pannello Regolazioni",
         "toggle_ai": "Attiva/Disattiva pannello AI",
         "toggle_analytics": "Attiva/Disattiva visualizzazione Analitiche",

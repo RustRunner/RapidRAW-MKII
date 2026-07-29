@@ -148,6 +148,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       setEditor({
         showOriginal: false,
+        splitView: false,
         activeMaskId: null,
         activeMaskContainerId: null,
         activeAiPatchContainerId: null,

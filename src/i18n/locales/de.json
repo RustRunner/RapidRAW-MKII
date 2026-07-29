@@ -763,6 +763,7 @@
         "redo": "Wiederholen (Strg+Y) oder Verlauf (Rechtsklick)",
         "showEdited": "Bearbeitet anzeigen (B)",
         "showOriginal": "Original anzeigen (B)",
+        "splitView": "Geteilte Ansicht - Original & Bearbeitet vergleichen (Umschalt+B)",
         "shutterSpeed": "Verschlusszeit",
         "undo": "Rückgängig (Strg+Z) oder Verlauf (Rechtsklick)"
       },
@@ -1554,6 +1555,7 @@
         "rotate_right": "90° im Uhrzeigersinn drehen",
         "select_all": "Alle Bilder auswählen",
         "show_original": "Original anzeigen (Vorher/Nachher)",
+        "toggle_split_view": "Geteilte Ansicht umschalten",
         "toggle_adjustments": "Anpassungen-Panel ein-/ausblenden",
         "toggle_ai": "KI-Panel ein-/ausblenden",
         "toggle_analytics": "Analyseanzeige ein-/ausblenden",

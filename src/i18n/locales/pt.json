@@ -784,6 +784,7 @@
         "redo": "Refazer (Ctrl+Y) ou Histórico (Botão Direito)",
         "showEdited": "Mostrar Editado (B)",
         "showOriginal": "Mostrar Original (B)",
+        "splitView": "Vista dividida - Comparar original e editado (Shift+B)",
         "shutterSpeed": "Velocidade do Obturador",
         "undo": "Desfazer (Ctrl+Z) ou Histórico (Botão Direito)"
       },
@@ -1587,6 +1588,7 @@
         "rotate_right": "Girar 90° no sentido horário",
         "select_all": "Selecionar todas as imagens",
         "show_original": "Mostrar original (antes/depois)",
+        "toggle_split_view": "Alternar vista dividida",
         "toggle_adjustments": "Alternar painel de Ajustes",
         "toggle_ai": "Alternar painel de IA",
         "toggle_analytics": "Alternar exibição de Análises",

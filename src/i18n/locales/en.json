@@ -763,6 +763,7 @@
         "redo": "Redo (Ctrl+Y) or History (Right-click)",
         "showEdited": "Show Edited (B)",
         "showOriginal": "Show Original (B)",
+        "splitView": "Split View - Compare Original & Edited (Shift+B)",
         "shutterSpeed": "Shutter Speed",
         "undo": "Undo (Ctrl+Z) or History (Right-click)"
       },
@@ -1554,6 +1555,7 @@
         "rotate_right": "Rotate 90° clockwise",
         "select_all": "Select all images",
         "show_original": "Show original (before/after)",
+        "toggle_split_view": "Toggle split view",
         "toggle_adjustments": "Toggle Adjustments panel",
         "toggle_ai": "Toggle AI panel",
         "toggle_analytics": "Toggle Analytics display",

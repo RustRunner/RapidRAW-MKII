@@ -63,6 +63,7 @@ interface ImageCanvasProps {
   setIsMaskHovered(isHovered: boolean): void;
   setIsMaskTouchInteracting(isInteracting: boolean): void;
   showOriginal: boolean;
+  splitView: boolean;
   transformedOriginalUrl: string | null;
   uncroppedAdjustedPreviewUrl: string | null;
   updateSubMask(id: string | null, subMask: Partial<SubMask>): void;
@@ -1175,6 +1176,7 @@ const ImageCanvas = memo(
     setIsMaskHovered,
     setIsMaskTouchInteracting,
     showOriginal,
+    splitView,
     transformedOriginalUrl,
     uncroppedAdjustedPreviewUrl,
     updateSubMask,
@@ -2485,6 +2487,7 @@ const ImageCanvas = memo(
     const cropPreviewUrl = uncroppedAdjustedPreviewUrl || selectedImage.thumbnailUrl;
     const originalSrc = transformedOriginalUrl;
     const isShowingOriginal = showOriginal && !!originalSrc;
+    const isSplitActive = splitView && !!originalSrc;
 
     useEffect(() => {
       if (!originalSrc) {
@@ -2506,6 +2509,34 @@ const ImageCanvas = memo(
         img.onload = null;
       };
     }, [originalSrc]);
+
+    const [splitPos, setSplitPos] = useState(0.5);
+    const originalImgRef = useRef<HTMLImageElement>(null);
+    const isDraggingSplitRef = useRef(false);
+
+    const handleSplitPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      e.preventDefault();
+      isDraggingSplitRef.current = true;
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    }, []);
+
+    const handleSplitPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingSplitRef.current) {
+        return;
+      }
+      const rect = originalImgRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) {
+        return;
+      }
+      e.stopPropagation();
+      setSplitPos(Math.min(0.95, Math.max(0.05, (e.clientX - rect.left) / rect.width)));
+    }, []);
+
+    const handleSplitPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+      isDraggingSplitRef.current = false;
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    }, []);
 
     const currentTarget = finalPreviewUrl || selectedImage.thumbnailUrl;
     const baseIsReady = displayState.base === currentTarget && !displayState.fade;
@@ -2743,6 +2774,7 @@ const ImageCanvas = memo(
               {originalSrc && (
                 <img
                   alt="Original"
+                  ref={originalImgRef}
                   className={
                     imageRenderSize.width > 0 && imageRenderSize.height > 0
                       ? 'pointer-events-none'
@@ -2758,13 +2790,15 @@ const ImageCanvas = memo(
                           width: `${imageRenderSize.width}px`,
                           height: `${imageRenderSize.height}px`,
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                          opacity: isShowingOriginal && originalLoaded ? 1 : 0,
+                          opacity: (isShowingOriginal || isSplitActive) && originalLoaded ? 1 : 0,
+                          clipPath: isSplitActive ? `inset(0 ${(1 - splitPos) * 100}% 0 0)` : undefined,
                           transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
                         }
                       : {
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                          opacity: isShowingOriginal && originalLoaded ? 1 : 0,
+                          opacity: (isShowingOriginal || isSplitActive) && originalLoaded ? 1 : 0,
+                          clipPath: isSplitActive ? `inset(0 ${(1 - splitPos) * 100}% 0 0)` : undefined,
                           transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
                         }
@@ -2784,9 +2818,72 @@ const ImageCanvas = memo(
                     transition: 'opacity 300ms ease-in-out',
                     width: `${imageRenderSize.width}px`,
                     imageRendering: isMaxZoom ? 'pixelated' : 'auto',
+                    clipPath: isSplitActive ? `inset(0 0 0 ${splitPos * 100}%)` : undefined,
                     zIndex: 3,
                   }}
                 />
+              )}
+              {isSplitActive && originalLoaded && imageRenderSize.width > 0 && imageRenderSize.height > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${imageRenderSize.offsetX + imageRenderSize.width * splitPos}px`,
+                    top: `${imageRenderSize.offsetY}px`,
+                    height: `${imageRenderSize.height}px`,
+                    width: '0px',
+                    zIndex: 5,
+                  }}
+                >
+                  <div
+                    className="pointer-events-none"
+                    style={{
+                      position: 'absolute',
+                      left: '-1px',
+                      top: 0,
+                      width: '2px',
+                      height: '100%',
+                      background: 'rgba(255, 255, 255, 0.85)',
+                      boxShadow: '0 0 4px rgba(0, 0, 0, 0.6)',
+                    }}
+                  />
+                  <div
+                    onPointerDown={handleSplitPointerDown}
+                    onPointerMove={handleSplitPointerMove}
+                    onPointerUp={handleSplitPointerUp}
+                    onPointerCancel={handleSplitPointerUp}
+                    style={{
+                      position: 'absolute',
+                      left: '-9px',
+                      top: 0,
+                      width: '18px',
+                      height: '100%',
+                      cursor: 'ew-resize',
+                      touchAction: 'none',
+                    }}
+                  />
+                  <div
+                    className="pointer-events-none"
+                    style={{
+                      position: 'absolute',
+                      left: '-12px',
+                      top: 'calc(50% - 12px)',
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: 'rgba(255, 255, 255, 0.9)',
+                      boxShadow: '0 0 4px rgba(0, 0, 0, 0.6)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'rgba(0, 0, 0, 0.75)',
+                      fontSize: '11px',
+                      lineHeight: 1,
+                      userSelect: 'none',
+                    }}
+                  >
+                    {'◀▶'}
+                  </div>
+                </div>
               )}
             </div>
 

@@ -761,6 +761,7 @@
         "redo": "다시 실행 (Ctrl+Y) 또는 기록 (우클릭)",
         "showEdited": "편집본 표시 (B)",
         "showOriginal": "원본 표시 (B)",
+        "splitView": "분할 보기 - 원본과 편집본 비교 (Shift+B)",
         "shutterSpeed": "셔터 속도",
         "undo": "실행 취소 (Ctrl+Z) 또는 기록 (우클릭)"
       },
@@ -1552,6 +1553,7 @@
         "rotate_right": "90° 시계 방향 회전",
         "select_all": "모든 이미지 선택",
         "show_original": "원본 표시 (전/후)",
+        "toggle_split_view": "분할 보기 전환",
         "toggle_adjustments": "조정 패널 전환",
         "toggle_ai": "AI 패널 전환",
         "toggle_analytics": "분석 표시 전환",

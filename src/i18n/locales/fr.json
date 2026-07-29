@@ -784,6 +784,7 @@
         "redo": "Rétablir (Ctrl+Y) ou Historique (Clic-droit)",
         "showEdited": "Afficher l'image modifiée (B)",
         "showOriginal": "Afficher l'original (B)",
+        "splitView": "Vue scindée - Comparer l'original et la version modifiée (Maj+B)",
         "shutterSpeed": "Vitesse d'obturation",
         "undo": "Annuler (Ctrl+Z) ou Historique (Clic-droit)"
       },
@@ -1587,6 +1588,7 @@
         "rotate_right": "Pivoter de 90° à droite",
         "select_all": "Sélectionner toutes les images",
         "show_original": "Afficher l'original (avant/après)",
+        "toggle_split_view": "Basculer la vue scindée",
         "toggle_adjustments": "Basculer le panneau des ajustements",
         "toggle_ai": "Basculer le panneau IA",
         "toggle_analytics": "Basculer l'affichage des analyses",

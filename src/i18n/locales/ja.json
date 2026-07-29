@@ -761,6 +761,7 @@
         "redo": "やり直し (Ctrl+Y) または履歴 (右クリック)",
         "showEdited": "編集後を表示 (B)",
         "showOriginal": "オリジナルを表示 (B)",
+        "splitView": "分割表示 - 元画像と編集後を比較 (Shift+B)",
         "shutterSpeed": "シャッタースピード",
         "undo": "元に戻す (Ctrl+Z) または履歴 (右クリック)"
       },
@@ -1552,6 +1553,7 @@
         "rotate_right": "時計回りに90°回転",
         "select_all": "すべての画像を選択",
         "show_original": "オリジナルを表示 (比較)",
+        "toggle_split_view": "分割表示を切り替え",
         "toggle_adjustments": "補正設定パネルの表示/非表示",
         "toggle_ai": "AIパネルの表示/非表示",
         "toggle_analytics": "アナリティクス表示の表示/非表示",

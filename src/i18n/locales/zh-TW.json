@@ -761,6 +761,7 @@
         "redo": "重做（Ctrl+Y）或歷史記錄（右鍵單擊）",
         "showEdited": "顯示編輯後（B）",
         "showOriginal": "顯示原始（B）",
+        "splitView": "分割檢視 - 比較原圖與編輯後 (Shift+B)",
         "shutterSpeed": "快門速度",
         "undo": "復原（Ctrl+Z）或歷史記錄（右鍵單擊）"
       },
@@ -1552,6 +1553,7 @@
         "rotate_right": "順時針旋轉 90°",
         "select_all": "選擇所有影像",
         "show_original": "顯示原始影像（前後對比）",
+        "toggle_split_view": "切換分割檢視",
         "toggle_adjustments": "切換調整面板",
         "toggle_ai": "切換 AI 面板",
         "toggle_analytics": "切換分析顯示",

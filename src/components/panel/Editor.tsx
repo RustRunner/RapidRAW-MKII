@@ -93,6 +93,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const transformedOriginalUrl = useEditorStore((s) => s.transformedOriginalUrl);
   const interactivePatch = useEditorStore((s) => s.interactivePatch);
   const showOriginal = useEditorStore((s) => s.showOriginal);
+  const splitView = useEditorStore((s) => s.splitView);
   const isSliderDragging = useEditorStore((s) => s.isSliderDragging);
   const targetZoom = useEditorStore((s) => s.zoom);
   const originalSize = useEditorStore((s) => s.originalSize);
@@ -192,7 +193,12 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const lastWgpuTransformRef = useRef<string | null>(null);
 
   const toggleShowOriginal = useCallback(
-    () => setEditor((state) => ({ showOriginal: !state.showOriginal })),
+    () => setEditor((state) => ({ showOriginal: !state.showOriginal, splitView: false })),
+    [setEditor],
+  );
+
+  const toggleSplitView = useCallback(
+    () => setEditor((state) => ({ splitView: !state.splitView, showOriginal: false })),
     [setEditor],
   );
 
@@ -1973,9 +1979,11 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           onRedo={redo}
           onToggleFullScreen={handleToggleFullScreen}
           onToggleShowOriginal={toggleShowOriginal}
+          onToggleSplitView={toggleSplitView}
           onUndo={undo}
           selectedImage={selectedImage}
           showOriginal={showOriginal}
+          splitView={splitView}
           showDateView={showExifDateView}
           onToggleDateView={() => setShowExifDateView((prev) => !prev)}
           adjustmentsHistory={adjustmentsHistory}
@@ -2055,6 +2063,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             setIsMaskHovered={setIsMaskHovered}
             setIsMaskTouchInteracting={setIsMaskTouchInteracting}
             showOriginal={showOriginal}
+            splitView={splitView}
             transformedOriginalUrl={transformedOriginalUrl}
             uncroppedAdjustedPreviewUrl={uncroppedAdjustedPreviewUrl}
             updateSubMask={updateSubMaskLocal}

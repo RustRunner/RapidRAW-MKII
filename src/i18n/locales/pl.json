@@ -805,6 +805,7 @@
         "redo": "Ponów (Ctrl+Y) lub Historia (Prawy przycisk)",
         "showEdited": "Pokaż po edycji (B)",
         "showOriginal": "Pokaż oryginał (B)",
+        "splitView": "Widok podzielony - porównanie oryginału i edycji (Shift+B)",
         "shutterSpeed": "Czas otwarcia migawki",
         "undo": "Cofnij (Ctrl+Z) lub Historia (Prawy przycisk)"
       },
@@ -1620,6 +1621,7 @@
         "rotate_right": "Obróć o 90° w prawo",
         "select_all": "Zaznacz wszystkie obrazy",
         "show_original": "Pokaż oryginał (przed/po)",
+        "toggle_split_view": "Przełącz widok podzielony",
         "toggle_adjustments": "Przełącz panel Ustawienia",
         "toggle_ai": "Przełącz panel AI",
         "toggle_analytics": "Przełącz wyświetlanie analityki",

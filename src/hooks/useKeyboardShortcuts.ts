@@ -261,7 +261,14 @@ export const useKeyboardShortcuts = ({
         shouldFire: (s: any) => !!s.editor.selectedImage,
         execute: (e: any, s: any) => {
           e.preventDefault();
-          s.editor.setEditor({ showOriginal: !s.editor.showOriginal });
+          s.editor.setEditor({ showOriginal: !s.editor.showOriginal, splitView: false });
+        },
+      },
+      toggle_split_view: {
+        shouldFire: (s: any) => !!s.editor.selectedImage,
+        execute: (e: any, s: any) => {
+          e.preventDefault();
+          s.editor.setEditor({ splitView: !s.editor.splitView, showOriginal: false });
         },
       },
       toggle_adjustments: {

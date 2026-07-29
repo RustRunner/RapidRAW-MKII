@@ -784,6 +784,7 @@
         "redo": "Rehacer (Ctrl+Y) o Historial (Clic derecho)",
         "showEdited": "Mostrar editado (B)",
         "showOriginal": "Mostrar original (B)",
+        "splitView": "Vista dividida - Comparar original y editado (Mayús+B)",
         "shutterSpeed": "Velocidad de obturación",
         "undo": "Deshacer (Ctrl+Z) o Historial (Clic derecho)"
       },
@@ -1587,6 +1588,7 @@
         "rotate_right": "Rotar 90° en sentido horario",
         "select_all": "Seleccionar todas las imágenes",
         "show_original": "Mostrar original (antes/después)",
+        "toggle_split_view": "Alternar vista dividida",
         "toggle_adjustments": "Alternar panel de Ajustes",
         "toggle_ai": "Alternar panel de IA",
         "toggle_analytics": "Alternar vista de análisis",
