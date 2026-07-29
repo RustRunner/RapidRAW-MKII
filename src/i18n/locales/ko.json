@@ -294,7 +294,6 @@
         "resetSectionSettings": "{{section}} 설정 초기화"
       },
       "blurRecovery": {
-        "adaptive": "Adaptive regularization",
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
@@ -303,7 +302,7 @@
         "estimateFailed": "모션 블러 방향을 감지하지 못했습니다. 길이와 각도를 직접 설정하세요.",
         "estimating": "추정 중...",
         "gaussian": "Gaussian",
-        "lambda": "Regularization",
+        "lambda": "아티팩트 억제",
         "length": "Blur Length",
         "motion": "Motion",
         "radius": "Blur Radius",

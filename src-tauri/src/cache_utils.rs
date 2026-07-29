@@ -170,7 +170,6 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
             "rapidSigma",
             "rapidLambda",
             "rapidStrength",
-            "rapidAdaptive",
         ] {
             if let Some(val) = adjustments.get(key) {
                 val.to_string().hash(&mut hasher);

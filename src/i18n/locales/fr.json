@@ -310,7 +310,6 @@
         "resetSectionSettings": "Réinitialiser les paramètres de la section {{section}}"
       },
       "blurRecovery": {
-        "adaptive": "Adaptive regularization",
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
@@ -319,7 +318,7 @@
         "estimateFailed": "Direction du flou de bougé non détectée - réglez la longueur et l'angle manuellement.",
         "estimating": "Estimation...",
         "gaussian": "Gaussian",
-        "lambda": "Regularization",
+        "lambda": "Suppression des artefacts",
         "length": "Blur Length",
         "motion": "Motion",
         "radius": "Blur Radius",

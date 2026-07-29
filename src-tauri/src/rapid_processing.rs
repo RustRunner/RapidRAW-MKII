@@ -75,7 +75,10 @@ pub struct RapidParams {
     pub edge_taper: bool,
     /// Minimum denominator to prevent division by zero
     pub noise_floor: f32,
-    /// Use adaptive regularization based on local variance
+    /// Adaptive per-frequency regularization. Always on in production
+    /// (parse_rapid_params hardcodes it); the fixed-λ Wiener variant stays
+    /// compiled as this code-level flag for A/B debugging, and tests that
+    /// need deterministic fixed-λ math rely on the `false` default.
     pub adaptive: bool,
 }
 
@@ -2317,7 +2320,9 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         lambda: adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32,
         strength: (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
             .clamp(0.0, 1.0),
-        adaptive: adjustments["rapidAdaptive"].as_bool().unwrap_or(false),
+        // Always on in production since the toggle was demoted; stale
+        // rapidAdaptive keys in old sidecars are ignored.
+        adaptive: true,
         ..Default::default()
     })
 }
@@ -3332,6 +3337,26 @@ mod tests {
             "estimator hallucinated a blur on a sharp image (confidence {:.1})",
             sharp.confidence
         );
+    }
+
+    /// Old sidecars may still carry rapidAdaptive; the key is ignored and
+    /// adaptive regularization is always on, while stored lambda keeps its
+    /// raw meaning (the log-scale "Artifact suppression" slider is a UI-only
+    /// view over it).
+    #[test]
+    fn test_parse_rapid_params_ignores_stale_adaptive_key() {
+        let adjustments = serde_json::json!({
+            "rapidEnabled": true,
+            "rapidBlurType": "motion",
+            "rapidLength": 200.0,
+            "rapidAngle": 0.0,
+            "rapidLambda": 0.076,
+            "rapidStrength": 100.0,
+            "rapidAdaptive": false,
+        });
+        let params = parse_rapid_params(&adjustments).expect("params should parse");
+        assert!(params.adaptive, "adaptive must be always-on regardless of stale sidecar keys");
+        assert!((params.lambda - 0.076).abs() < 1e-6, "lambda must stay raw");
     }
 
     #[test]

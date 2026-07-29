@@ -27,6 +27,18 @@ const BLUR_TYPES = ['motion', 'defocus', 'gaussian'] as const;
 const MOTION_LENGTH_PRESETS = [50, 100, 150, 200];
 const DEFOCUS_RADIUS_PRESETS = [25, 50, 75, 100];
 
+// The "Artifact suppression" slider is a log-scale view over the stored raw
+// lambda: s in [0, 100] maps to lambda = 0.001 x 100^(s/100), so the useful
+// 0.001-0.01 range gets half the travel instead of the first few pixels.
+// Lambda stays raw in adjustments/sidecars; s is derived for display only.
+const LAMBDA_MIN = 0.001;
+const LAMBDA_MAX = 0.1;
+const suppressionToLambda = (s: number) => LAMBDA_MIN * Math.pow(LAMBDA_MAX / LAMBDA_MIN, s / 100);
+const lambdaToSuppression = (lambda: number) => {
+  const clamped = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, lambda));
+  return (100 * Math.log10(clamped / LAMBDA_MIN)) / Math.log10(LAMBDA_MAX / LAMBDA_MIN);
+};
+
 export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragStateChange }: BlurRecoveryPanelProps) {
   const { t } = useTranslation();
   const setEditor = useEditorStore((state: any) => state.setEditor);
@@ -220,11 +232,17 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
 
             <Slider
               label={t('editor.adjustments.blurRecovery.lambda')}
-              max={0.1}
-              min={0.001}
-              onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidLambda, e)}
-              step={0.001}
-              value={adjustments.rapidLambda}
+              max={100}
+              min={0}
+              onChange={(e: any) => {
+                const s = parseFloat(e.target.value);
+                setAdjustments((prev: Adjustments) => ({
+                  ...prev,
+                  [BlurRecoveryAdjustment.RapidLambda]: suppressionToLambda(s),
+                }));
+              }}
+              step={1}
+              value={Math.round(lambdaToSuppression(adjustments.rapidLambda))}
               onDragStateChange={onDragStateChange}
             />
             <Slider
@@ -236,18 +254,6 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
               value={adjustments.rapidStrength}
               onDragStateChange={onDragStateChange}
             />
-
-            <div className="flex items-center justify-between pt-1">
-              <p className="text-xs text-text-secondary">{t('editor.adjustments.blurRecovery.adaptive')}</p>
-              <Switch
-                id="blur-recovery-adaptive-toggle"
-                label=""
-                checked={!!adjustments.rapidAdaptive}
-                onChange={(checked: boolean) =>
-                  setAdjustments((prev: Adjustments) => ({ ...prev, [BlurRecoveryAdjustment.RapidAdaptive]: checked }))
-                }
-              />
-            </div>
           </div>
         )}
       </div>
