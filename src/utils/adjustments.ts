@@ -75,6 +75,12 @@ export enum DetailsAdjustment {
 export enum LowLightAdjustment {
   HotPixelEnabled = 'hotPixelEnabled',
   HotPixelThreshold = 'hotPixelThreshold',
+  DenoiseEnabled = 'denoiseEnabled',
+  DenoiseStrength = 'denoiseStrength',
+  DenoiseDetail = 'denoiseDetail',
+  DenoiseChroma = 'denoiseChroma',
+  DenoiseAutoIso = 'denoiseAutoIso',
+  DenoiseIsoMultiplier = 'denoiseIsoMultiplier',
 }
 
 export enum BlurRecoveryAdjustment {
@@ -176,6 +182,12 @@ export interface ParametricCurve {
 export interface Adjustments {
   hotPixelEnabled: boolean;
   hotPixelThreshold: number;
+  denoiseEnabled: boolean;
+  denoiseStrength: number;
+  denoiseDetail: number;
+  denoiseChroma: number;
+  denoiseAutoIso: boolean;
+  denoiseIsoMultiplier: number;
   rapidEnabled: boolean;
   rapidBlurType: 'motion' | 'defocus' | 'gaussian';
   rapidLength: number;
@@ -534,6 +546,12 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 export const INITIAL_ADJUSTMENTS: Adjustments = {
   hotPixelEnabled: false,
   hotPixelThreshold: 50,
+  denoiseEnabled: false,
+  denoiseStrength: 50,
+  denoiseDetail: 50,
+  denoiseChroma: 50,
+  denoiseAutoIso: true,
+  denoiseIsoMultiplier: 1.0,
   rapidEnabled: false,
   rapidBlurType: 'motion',
   rapidLength: 10,
@@ -735,6 +753,13 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
     hotPixelEnabled: loadedAdjustments.hotPixelEnabled ?? INITIAL_ADJUSTMENTS.hotPixelEnabled,
     hotPixelThreshold: loadedAdjustments.hotPixelThreshold ?? INITIAL_ADJUSTMENTS.hotPixelThreshold,
+    denoiseEnabled: loadedAdjustments.denoiseEnabled ?? INITIAL_ADJUSTMENTS.denoiseEnabled,
+    denoiseStrength: loadedAdjustments.denoiseStrength ?? INITIAL_ADJUSTMENTS.denoiseStrength,
+    denoiseDetail: loadedAdjustments.denoiseDetail ?? INITIAL_ADJUSTMENTS.denoiseDetail,
+    denoiseChroma: loadedAdjustments.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
+    denoiseAutoIso: loadedAdjustments.denoiseAutoIso ?? INITIAL_ADJUSTMENTS.denoiseAutoIso,
+    denoiseIsoMultiplier:
+      loadedAdjustments.denoiseIsoMultiplier ?? INITIAL_ADJUSTMENTS.denoiseIsoMultiplier,
     rapidEnabled: loadedAdjustments.rapidEnabled ?? INITIAL_ADJUSTMENTS.rapidEnabled,
     rapidBlurType: loadedAdjustments.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
     rapidLength: loadedAdjustments.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
@@ -852,7 +877,7 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     },
     {
       label: 'modals.copyPaste.groups.lowlight',
-      keys: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
+      keys: Object.values(LowLightAdjustment),
     },
     {
       label: 'modals.copyPaste.groups.blurRecovery',
@@ -974,7 +999,7 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     Effect.LensBlurMinFade,
     Effect.LensBlurMaxFade,
   ],
-  lowlight: [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
+  lowlight: Object.values(LowLightAdjustment),
   blurRecovery: Object.values(BlurRecoveryAdjustment),
   upscale: [],
 };

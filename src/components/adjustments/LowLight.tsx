@@ -61,16 +61,36 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
     setDenoiseStrength(suggestedStrength);
   }, [suggestedStrength, path]);
 
-  const handleThresholdChange = (e: any) => {
+  // Keep the sidecar-persisted multiplier in sync with this image's ISO while
+  // the live denoiser is enabled; render stays reproducible from the sidecar
+  // alone. Guarded so untouched images are never marked edited.
+  const targetMultiplier = useMemo(() => {
+    if (!adjustments.denoiseAutoIso || iso <= 0) {
+      return 1.0;
+    }
+    return Math.round(calculateIsoMultiplier(iso) * 100) / 100;
+  }, [adjustments.denoiseAutoIso, iso]);
+
+  useEffect(() => {
+    if (!adjustments.denoiseEnabled || adjustments.denoiseIsoMultiplier === targetMultiplier) {
+      return;
+    }
+    setAdjustments((prev: Adjustments) => ({
+      ...prev,
+      [LowLightAdjustment.DenoiseIsoMultiplier]: targetMultiplier,
+    }));
+  }, [adjustments.denoiseEnabled, adjustments.denoiseIsoMultiplier, targetMultiplier, setAdjustments]);
+
+  const handleValueChange = (key: LowLightAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
-    setAdjustments((prev: Adjustments) => ({ ...prev, [LowLightAdjustment.HotPixelThreshold]: numericValue }));
+    setAdjustments((prev: Adjustments) => ({ ...prev, [key]: numericValue }));
   };
 
-  const handleHotPixelToggle = (checked: boolean) => {
-    setAdjustments((prev: Adjustments) => ({ ...prev, [LowLightAdjustment.HotPixelEnabled]: checked }));
+  const handleCheckedChange = (key: LowLightAdjustment, checked: boolean) => {
+    setAdjustments((prev: Adjustments) => ({ ...prev, [key]: checked }));
   };
 
-  const handleDenoise = async () => {
+  const handleDeepClean = async () => {
     if (!path || isDenoising) {
       return;
     }
@@ -101,7 +121,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
             id="hot-pixel-toggle"
             label=""
             checked={!!adjustments.hotPixelEnabled}
-            onChange={handleHotPixelToggle}
+            onChange={(checked: boolean) => handleCheckedChange(LowLightAdjustment.HotPixelEnabled, checked)}
           />
         </div>
         {adjustments.hotPixelEnabled && (
@@ -110,9 +130,82 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
               label={t('editor.adjustments.lowlight.threshold')}
               max={100}
               min={0}
-              onChange={handleThresholdChange}
+              onChange={(e: any) => handleValueChange(LowLightAdjustment.HotPixelThreshold, e)}
               step={1}
               value={adjustments.hotPixelThreshold}
+              onDragStateChange={onDragStateChange}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="mb-4 p-2 bg-bg-tertiary rounded-md">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.lowlight.denoise')}</p>
+          <Switch
+            id="denoise-toggle"
+            label=""
+            checked={!!adjustments.denoiseEnabled}
+            onChange={(checked: boolean) => handleCheckedChange(LowLightAdjustment.DenoiseEnabled, checked)}
+          />
+        </div>
+        {adjustments.denoiseEnabled && (
+          <div className="space-y-2 pt-2 border-t border-bg-secondary">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap size={14} className={adjustments.denoiseAutoIso ? 'text-primary' : 'text-text-secondary'} />
+                <label className="text-sm font-medium text-text-primary">
+                  {t('editor.adjustments.lowlight.autoIso')}
+                </label>
+              </div>
+              <Switch
+                id="denoise-auto-iso-toggle"
+                label=""
+                checked={!!adjustments.denoiseAutoIso}
+                onChange={(checked: boolean) => handleCheckedChange(LowLightAdjustment.DenoiseAutoIso, checked)}
+              />
+            </div>
+
+            {adjustments.denoiseAutoIso && (
+              <div className="p-2 bg-bg-secondary rounded text-xs text-text-secondary">
+                {iso > 0 ? (
+                  <span>
+                    {t('editor.adjustments.lowlight.isoMultiplier', {
+                      iso,
+                      multiplier: targetMultiplier.toFixed(2),
+                    })}
+                  </span>
+                ) : (
+                  <span>{t('editor.adjustments.lowlight.noIso')}</span>
+                )}
+              </div>
+            )}
+
+            <Slider
+              label={t('editor.adjustments.lowlight.strength')}
+              max={100}
+              min={0}
+              onChange={(e: any) => handleValueChange(LowLightAdjustment.DenoiseStrength, e)}
+              step={1}
+              value={adjustments.denoiseStrength}
+              onDragStateChange={onDragStateChange}
+            />
+            <Slider
+              label={t('editor.adjustments.lowlight.detail')}
+              max={100}
+              min={0}
+              onChange={(e: any) => handleValueChange(LowLightAdjustment.DenoiseDetail, e)}
+              step={1}
+              value={adjustments.denoiseDetail}
+              onDragStateChange={onDragStateChange}
+            />
+            <Slider
+              label={t('editor.adjustments.lowlight.chroma')}
+              max={100}
+              min={0}
+              onChange={(e: any) => handleValueChange(LowLightAdjustment.DenoiseChroma, e)}
+              step={1}
+              value={adjustments.denoiseChroma}
               onDragStateChange={onDragStateChange}
             />
           </div>
@@ -122,7 +215,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
       <div className="p-2 bg-bg-tertiary rounded-md">
         <div className="flex items-center gap-2 mb-2">
           <Zap size={14} className={iso > 0 ? 'text-primary' : 'text-text-secondary'} />
-          <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.lowlight.denoise')}</p>
+          <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.lowlight.deepClean')}</p>
         </div>
         <div className="p-2 mb-2 bg-bg-secondary rounded text-xs text-text-secondary">
           {iso > 0 ? (
@@ -146,7 +239,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
               ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
               : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
           }`}
-          onClick={handleDenoise}
+          onClick={handleDeepClean}
           disabled={isDenoising || !path}
         >
           {isDenoising ? t('editor.adjustments.lowlight.applying') : t('editor.adjustments.lowlight.apply')}

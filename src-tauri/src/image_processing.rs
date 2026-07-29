@@ -1498,8 +1498,12 @@ pub struct GlobalAdjustments {
     pub blue_curve_count: u32,
     pub hot_pixel_enabled: u32,
     pub hot_pixel_threshold: f32,
+    pub denoise_enabled: u32,
+    pub denoise_strength: f32,
+    pub denoise_detail: f32,
+    pub denoise_chroma: f32,
+    pub denoise_iso_multiplier: f32,
     _pad_end3: f32,
-    _pad_end4: f32,
 
     pub glow_amount: f32,
     pub halation_amount: f32,
@@ -2314,8 +2318,20 @@ fn get_global_adjustments_from_json(
             0
         },
         hot_pixel_threshold: js_adjustments["hotPixelThreshold"].as_f64().unwrap_or(50.0) as f32 / 100.0,
+        denoise_enabled: if js_adjustments["denoiseEnabled"].as_bool().unwrap_or(false)
+            && is_visible("lowlight")
+        {
+            1
+        } else {
+            0
+        },
+        // Strength/detail/chroma stay 0-100; the shader normalizes internally.
+        denoise_strength: js_adjustments["denoiseStrength"].as_f64().unwrap_or(50.0) as f32,
+        denoise_detail: js_adjustments["denoiseDetail"].as_f64().unwrap_or(50.0) as f32,
+        denoise_chroma: js_adjustments["denoiseChroma"].as_f64().unwrap_or(50.0) as f32,
+        denoise_iso_multiplier: js_adjustments["denoiseIsoMultiplier"].as_f64().unwrap_or(1.0)
+            as f32,
         _pad_end3: 0.0,
-        _pad_end4: 0.0,
 
         glow_amount: get_val("effects", "glowAmount", SCALES.glow, None),
         halation_amount: get_val("effects", "halationAmount", SCALES.halation, None),

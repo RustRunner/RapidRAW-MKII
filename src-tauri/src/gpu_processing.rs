@@ -1986,3 +1986,40 @@ fn process_and_get_dynamic_image_inner(
         .ok_or("Failed to create image buffer from GPU data")?;
     Ok(DynamicImage::ImageRgba8(img_buf))
 }
+
+#[cfg(test)]
+mod tests {
+    /// Validates the main mega-shader headlessly. WGSL only compiles at app
+    /// runtime, so without this a shader syntax/type error (e.g. a struct
+    /// edited on one side only) would pass `cargo test` and break at launch.
+    #[test]
+    fn test_main_shader_compiles() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping shader validation test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("shader validation test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+
+        let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("main shader validation"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+        });
+        let err = pollster::block_on(error_scope.pop());
+        assert!(err.is_none(), "shader.wgsl failed validation: {:#?}", err);
+    }
+}

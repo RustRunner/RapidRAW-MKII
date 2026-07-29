@@ -108,8 +108,12 @@ struct GlobalAdjustments {
     blue_curve_count: u32,
     hot_pixel_enabled: u32,
     hot_pixel_threshold: f32,
+    denoise_enabled: u32,
+    denoise_strength: f32,
+    denoise_detail: f32,
+    denoise_chroma: f32,
+    denoise_iso_multiplier: f32,
     _pad_end3: f32,
-    _pad_end4: f32,
 
     glow_amount: f32,
     halation_amount: f32,
@@ -1487,6 +1491,191 @@ fn apply_hot_pixel_correction(center_linear: vec3<f32>, coords_i: vec2<i32>, thr
     return result;
 }
 
+// ============================================================================
+// Low-light live denoiser (ported from Mod1: ISO-adaptive edge-aware bilateral
+// filter with luma/chroma separation). Operates in linear space, right after
+// hot-pixel correction. Samples are edge-clamped and linearized to match the
+// center value (Mod1 sampled raw texture values without clamping).
+// ============================================================================
+
+fn load_linear_sample(coord: vec2<i32>, is_raw: u32) -> vec3<f32> {
+    let dims = vec2<i32>(textureDimensions(input_texture));
+    let clamped = clamp(coord, vec2<i32>(0), dims - vec2<i32>(1));
+    var s = textureLoad(input_texture, vec2<u32>(clamped), 0).rgb;
+    if (is_raw == 0u) {
+        s = srgb_to_linear(s);
+    }
+    return s;
+}
+
+fn rgb_to_ycbcr(rgb: vec3<f32>) -> vec3<f32> {
+    let y = dot(rgb, LUMA_COEFF);
+    let cb = (rgb.b - y) * 0.565;
+    let cr = (rgb.r - y) * 0.713;
+    return vec3<f32>(y, cb, cr);
+}
+
+fn ycbcr_to_rgb(ycbcr: vec3<f32>) -> vec3<f32> {
+    let y = ycbcr.x;
+    let cb = ycbcr.y;
+    let cr = ycbcr.z;
+    let r = y + cr / 0.713;
+    let b = y + cb / 0.565;
+    let g = (y - LUMA_COEFF.r * r - LUMA_COEFF.b * b) / LUMA_COEFF.g;
+    return vec3<f32>(r, g, b);
+}
+
+fn denoise_spatial_weight(dist_sq: f32, sigma: f32) -> f32 {
+    return exp(-dist_sq / (2.0 * sigma * sigma));
+}
+
+fn denoise_range_weight(diff: f32, sigma: f32) -> f32 {
+    return exp(-(diff * diff) / (2.0 * sigma * sigma));
+}
+
+// Edge detection using a Sobel operator on luma
+fn detect_edge_strength(coord: vec2<i32>, is_raw: u32) -> f32 {
+    var gx: f32 = 0.0;
+    var gy: f32 = 0.0;
+
+    let sobel_x = array<f32, 9>(-1.0, 0.0, 1.0, -2.0, 0.0, 2.0, -1.0, 0.0, 1.0);
+    let sobel_y = array<f32, 9>(1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0);
+
+    var idx = 0;
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let luma = get_luma(load_linear_sample(coord + vec2<i32>(dx, dy), is_raw));
+            gx += luma * sobel_x[idx];
+            gy += luma * sobel_y[idx];
+            idx++;
+        }
+    }
+
+    return sqrt(gx * gx + gy * gy);
+}
+
+// Bilateral filter for the luma channel
+fn bilateral_filter_luma(
+    coord: vec2<i32>,
+    center_luma: f32,
+    spatial_sigma: f32,
+    range_sigma: f32,
+    radius: i32,
+    is_raw: u32
+) -> f32 {
+    var weighted_sum: f32 = 0.0;
+    var weight_sum: f32 = 0.0;
+
+    for (var dy = -radius; dy <= radius; dy++) {
+        for (var dx = -radius; dx <= radius; dx++) {
+            let sample_luma = get_luma(load_linear_sample(coord + vec2<i32>(dx, dy), is_raw));
+
+            let dist_sq = f32(dx * dx + dy * dy);
+            let w_spatial = denoise_spatial_weight(dist_sq, spatial_sigma);
+
+            let diff = abs(sample_luma - center_luma);
+            let w_range = denoise_range_weight(diff, range_sigma);
+
+            let w = w_spatial * w_range;
+            weighted_sum += sample_luma * w;
+            weight_sum += w;
+        }
+    }
+
+    return weighted_sum / max(weight_sum, 0.0001);
+}
+
+// Stronger smoothing for chroma channels (less perceptually important)
+fn smooth_chroma(
+    coord: vec2<i32>,
+    spatial_sigma: f32,
+    radius: i32,
+    is_raw: u32
+) -> vec2<f32> {
+    var cb_sum: f32 = 0.0;
+    var cr_sum: f32 = 0.0;
+    var weight_sum: f32 = 0.0;
+
+    for (var dy = -radius; dy <= radius; dy++) {
+        for (var dx = -radius; dx <= radius; dx++) {
+            let sample_ycbcr = rgb_to_ycbcr(load_linear_sample(coord + vec2<i32>(dx, dy), is_raw));
+
+            let dist_sq = f32(dx * dx + dy * dy);
+            let w = denoise_spatial_weight(dist_sq, spatial_sigma);
+
+            cb_sum += sample_ycbcr.y * w;
+            cr_sum += sample_ycbcr.z * w;
+            weight_sum += w;
+        }
+    }
+
+    return vec2<f32>(cb_sum, cr_sum) / max(weight_sum, 0.0001);
+}
+
+fn apply_denoise(
+    coord: vec2<i32>,
+    rgb: vec3<f32>,
+    strength: f32,          // 0-100: base denoise strength
+    detail: f32,            // 0-100: detail preservation (higher = more detail kept)
+    chroma: f32,            // 0-100: chroma smoothing strength
+    iso_multiplier: f32,    // ISO-based multiplier (~0.3-1.5, scales effective strength)
+    is_raw: u32
+) -> vec3<f32> {
+    let effective_strength = min(strength * iso_multiplier, 100.0);
+    let effective_chroma = min(chroma * iso_multiplier, 100.0);
+
+    if (effective_strength < 0.1 && effective_chroma < 0.1) {
+        return rgb;
+    }
+
+    let ycbcr = rgb_to_ycbcr(rgb);
+    let center_luma = ycbcr.x;
+
+    // Higher ISO = more noise = larger radius needed
+    let radius = i32(mix(1.0, 4.0, effective_strength / 100.0));
+    let base_spatial_sigma = mix(0.5, 3.0, effective_strength / 100.0);
+    // Higher detail = lower range sigma = more edge preservation
+    let range_sigma = mix(0.02, 0.15, 1.0 - detail / 100.0);
+
+    let edge_strength = detect_edge_strength(coord, is_raw);
+    let edge_preserve = smoothstep(0.05, 0.3, edge_strength);
+    let edge_factor = mix(1.0, 1.0 - edge_preserve, detail / 100.0);
+
+    var new_luma = center_luma;
+    let scaled_luma_strength = effective_strength * edge_factor;
+
+    if (scaled_luma_strength > 0.1) {
+        let luma_spatial_sigma = base_spatial_sigma * (scaled_luma_strength / 100.0);
+        let filtered_luma = bilateral_filter_luma(
+            coord,
+            center_luma,
+            luma_spatial_sigma,
+            range_sigma,
+            radius,
+            is_raw
+        );
+        let luma_blend = scaled_luma_strength / 100.0;
+        new_luma = mix(center_luma, filtered_luma, luma_blend);
+    }
+
+    var new_cb = ycbcr.y;
+    var new_cr = ycbcr.z;
+
+    if (effective_chroma > 0.1) {
+        let chroma_sigma = mix(1.0, 4.0, effective_chroma / 100.0);
+        let chroma_radius = max(radius, 2);
+
+        let smoothed_chroma = smooth_chroma(coord, chroma_sigma, chroma_radius, is_raw);
+
+        let chroma_blend = effective_chroma / 100.0;
+        new_cb = mix(ycbcr.y, smoothed_chroma.x, chroma_blend);
+        new_cr = mix(ycbcr.z, smoothed_chroma.y, chroma_blend);
+    }
+
+    let result = ycbcr_to_rgb(vec3<f32>(new_luma, new_cb, new_cr));
+    return max(result, vec3<f32>(0.0));
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let out_dims = vec2<u32>(textureDimensions(output_texture));
@@ -1521,6 +1710,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             initial_linear_rgb,
             absolute_coord_i,
             adjustments.global.hot_pixel_threshold,
+            is_raw
+        );
+    }
+
+    if (adjustments.global.denoise_enabled == 1u) {
+        initial_linear_rgb = apply_denoise(
+            absolute_coord_i,
+            initial_linear_rgb,
+            adjustments.global.denoise_strength,
+            adjustments.global.denoise_detail,
+            adjustments.global.denoise_chroma,
+            adjustments.global.denoise_iso_multiplier,
             is_raw
         );
     }
