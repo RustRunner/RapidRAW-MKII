@@ -154,7 +154,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   activeRightPanel: Panel.Adjustments,
   renderedRightPanel: Panel.Adjustments,
   slideDirection: 1,
-  collapsibleSectionsState: { basic: true, color: false, curves: true, details: false, effects: false, lowlight: false, blurRecovery: false, upscale: false },
+  // Accordion default: exactly one adjustment section (Basic) starts open.
+  collapsibleSectionsState: { basic: true, color: false, curves: false, details: false, effects: false, lowlight: false, blurRecovery: false, upscale: false },
 
   isCreateFolderModalOpen: false,
   isRenameFolderModalOpen: false,

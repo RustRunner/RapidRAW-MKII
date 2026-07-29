@@ -124,16 +124,15 @@ export default function Controls() {
 
   const handleToggleSection = (section: string) => {
     setCollapsibleState((prev: any) => {
-      const isOpening = !prev[section];
-      if (appSettings?.enableFocusMode && isOpening) {
-        const newState = { ...prev };
-        Object.keys(newState).forEach((key) => {
-          newState[key] = false;
-        });
-        newState[section] = true;
-        return newState;
-      }
-      return { ...prev, [section]: !prev[section] };
+      const isCurrentlyOpen = prev[section];
+      // Accordion: close everything, then open the clicked section (clicking
+      // the open section just closes it). Always on for adjustment sections;
+      // the Focus Mode setting still governs the masks panel.
+      const allClosed = Object.keys(prev).reduce((acc: any, key: string) => {
+        acc[key] = false;
+        return acc;
+      }, {});
+      return { ...allClosed, [section]: !isCurrentlyOpen };
     });
   };
 
