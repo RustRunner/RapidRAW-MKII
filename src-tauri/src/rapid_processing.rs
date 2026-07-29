@@ -140,6 +140,10 @@ impl RapidParams {
     }
 }
 
+/// Rec. 709 luma coefficients — must match LUMA_COEFF in utility.wgsl and
+/// shader.wgsl.
+const LUMA_COEFF: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
 // ============================================================================
 // Edge taper: seam-free FFT padding built CPU-side before upload
 // ============================================================================
@@ -457,24 +461,20 @@ struct UtilityParams {
 // Frequency Domain Textures
 // ============================================================================
 
-/// Collection of textures for frequency domain processing
+/// Collection of textures for frequency domain processing. Deconvolution is
+/// luma-only: a single Y channel goes through the FFT/Wiener round-trip and
+/// chroma is reapplied from the original image at readback via a gain map.
 struct FrequencyTextures {
-    /// Red channel frequency data
-    freq_r: wgpu::Texture,
-    /// Green channel frequency data
-    freq_g: wgpu::Texture,
-    /// Blue channel frequency data
-    freq_b: wgpu::Texture,
+    /// Luma channel frequency data
+    freq_y: wgpu::Texture,
     /// Ping-pong buffer for FFT passes
     freq_temp: wgpu::Texture,
-    /// PSF frequency data (shared across channels)
+    /// PSF frequency data
     psf_freq: wgpu::Texture,
 }
 
 struct FrequencyTextureViews {
-    freq_r: wgpu::TextureView,
-    freq_g: wgpu::TextureView,
-    freq_b: wgpu::TextureView,
+    freq_y: wgpu::TextureView,
     freq_temp: wgpu::TextureView,
     psf_freq: wgpu::TextureView,
 }
@@ -482,9 +482,7 @@ struct FrequencyTextureViews {
 impl FrequencyTextures {
     fn create_views(&self) -> FrequencyTextureViews {
         FrequencyTextureViews {
-            freq_r: self.freq_r.create_view(&Default::default()),
-            freq_g: self.freq_g.create_view(&Default::default()),
-            freq_b: self.freq_b.create_view(&Default::default()),
+            freq_y: self.freq_y.create_view(&Default::default()),
             freq_temp: self.freq_temp.create_view(&Default::default()),
             psf_freq: self.psf_freq.create_view(&Default::default()),
         }
@@ -912,8 +910,8 @@ impl RapidDeconvolver {
             return false;
         }
 
-        // 5 frequency textures × Rg32Float (8 bytes/pixel)
-        let freq_memory_mb = (padded_w as u64 * padded_h as u64 * 8 * 5) / (1024 * 1024);
+        // 3 frequency textures × Rg32Float (8 bytes/pixel)
+        let freq_memory_mb = (padded_w as u64 * padded_h as u64 * 8 * 3) / (1024 * 1024);
 
         // Input/output RGBA16F textures (8 bytes/pixel)
         let rgba_memory_mb = (width as u64 * height as u64 * 8 * 2) / (1024 * 1024);
@@ -977,9 +975,7 @@ impl RapidDeconvolver {
         };
 
         let textures = FrequencyTextures {
-            freq_r: create_freq_texture("RAPID freq_r"),
-            freq_g: create_freq_texture("RAPID freq_g"),
-            freq_b: create_freq_texture("RAPID freq_b"),
+            freq_y: create_freq_texture("RAPID freq_y"),
             freq_temp: create_freq_texture("RAPID freq_temp"),
             psf_freq: create_freq_texture("RAPID psf_freq"),
         };
@@ -991,7 +987,7 @@ impl RapidDeconvolver {
         self.allocated_width = padded_width;
         self.allocated_height = padded_height;
 
-        let memory_mb = (padded_width as u64 * padded_height as u64 * 8 * 5) / (1024 * 1024);
+        let memory_mb = (padded_width as u64 * padded_height as u64 * 8 * 3) / (1024 * 1024);
         log::info!("RAPID: Allocated {} MB for frequency textures", memory_mb);
     }
 
@@ -2077,67 +2073,28 @@ impl RapidDeconvolver {
             label: Some("RAPID Deconvolution"),
         });
 
-        // Step 2: Convert each RGB channel to complex and forward FFT
-        log::debug!("RAPID: Converting channels to frequency domain...");
-
-        // Process each channel with separate command submission to avoid buffer race
-        // This is needed because utility_params_buffer is shared and would be overwritten
-
-        // Red channel
+        // Step 2: Extract Rec. 709 luma to complex. Deconvolution is
+        // luma-only: chroma is reapplied from the original image at readback
+        // via a gain map, which suppresses the per-channel divergence that
+        // showed up as red/blue fringing on recovered edges.
+        log::debug!("RAPID: Converting luma to frequency domain...");
         self.encode_real_to_complex(
             &mut encoder, device, queue,
-            &input_view, &freq_views.freq_r,
+            &input_view, &freq_views.freq_y,
             padded_w, padded_h, padded_w, padded_h,
-            0, // channel R
-        );
-        // Submit and create new encoder to ensure params buffer is read correctly
-        queue.submit(std::iter::once(encoder.finish()));
-        encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("RAPID Deconvolution G"),
-        });
-
-        // Green channel
-        self.encode_real_to_complex(
-            &mut encoder, device, queue,
-            &input_view, &freq_views.freq_g,
-            padded_w, padded_h, padded_w, padded_h,
-            1, // channel G
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-        encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("RAPID Deconvolution B"),
-        });
-
-        // Blue channel
-        self.encode_real_to_complex(
-            &mut encoder, device, queue,
-            &input_view, &freq_views.freq_b,
-            padded_w, padded_h, padded_w, padded_h,
-            2, // channel B
+            3, // Rec. 709 luma
         );
 
         // DEBUG_LEVEL 2: Skip FFT, PSF, Wiener - just test real_to_complex + readback
         let mut encoder = if DEBUG_LEVEL == 2 {
             log::info!("RAPID DEBUG: Testing real_to_complex only (no FFT)");
-            // Skip directly to readback - freq_r/g/b contain the padded image
+            // Skip directly to readback - freq_y contains the padded luma
             encoder
         } else {
-            // Forward FFT on each channel (each call takes ownership and returns new encoder)
-            let encoder = self.forward_fft_2d(
-                encoder, device, queue,
-                &freq_textures.freq_r, &freq_views.freq_r,
-                &freq_textures.freq_temp, &freq_views.freq_temp,
-                padded_w, padded_h,
-            );
-            let encoder = self.forward_fft_2d(
-                encoder, device, queue,
-                &freq_textures.freq_g, &freq_views.freq_g,
-                &freq_textures.freq_temp, &freq_views.freq_temp,
-                padded_w, padded_h,
-            );
+            // Forward FFT (takes ownership and returns a new encoder)
             let mut encoder = self.forward_fft_2d(
                 encoder, device, queue,
-                &freq_textures.freq_b, &freq_views.freq_b,
+                &freq_textures.freq_y, &freq_views.freq_y,
                 &freq_textures.freq_temp, &freq_views.freq_temp,
                 padded_w, padded_h,
             );
@@ -2151,125 +2108,47 @@ impl RapidDeconvolver {
                 params,
             );
 
-            // Step 4: Apply Wiener filter to each channel
+            // Step 4: Apply Wiener filter. freq_temp is the output since
+            // input and output can't be the same texture in storage binding;
+            // copy back afterwards.
             log::debug!("RAPID: Applying Wiener deconvolution filter...");
-
-            // For Wiener filter, we need to use freq_temp as output since input and output
-            // can't be the same texture in storage binding. Then copy back.
-
-            // Red channel
             self.encode_wiener_filter(
                 &mut encoder, device, queue,
-                &freq_views.freq_r, &freq_views.psf_freq, &freq_views.freq_temp,
+                &freq_views.freq_y, &freq_views.psf_freq, &freq_views.freq_temp,
                 padded_w, padded_h, params,
             );
             encoder.copy_texture_to_texture(
                 freq_textures.freq_temp.as_image_copy(),
-                freq_textures.freq_r.as_image_copy(),
+                freq_textures.freq_y.as_image_copy(),
                 wgpu::Extent3d { width: padded_w, height: padded_h, depth_or_array_layers: 1 },
             );
 
-            // Green channel
-            self.encode_wiener_filter(
-                &mut encoder, device, queue,
-                &freq_views.freq_g, &freq_views.psf_freq, &freq_views.freq_temp,
-                padded_w, padded_h, params,
-            );
-            encoder.copy_texture_to_texture(
-                freq_textures.freq_temp.as_image_copy(),
-                freq_textures.freq_g.as_image_copy(),
-                wgpu::Extent3d { width: padded_w, height: padded_h, depth_or_array_layers: 1 },
-            );
-
-            // Blue channel
-            self.encode_wiener_filter(
-                &mut encoder, device, queue,
-                &freq_views.freq_b, &freq_views.psf_freq, &freq_views.freq_temp,
-                padded_w, padded_h, params,
-            );
-            encoder.copy_texture_to_texture(
-                freq_textures.freq_temp.as_image_copy(),
-                freq_textures.freq_b.as_image_copy(),
-                wgpu::Extent3d { width: padded_w, height: padded_h, depth_or_array_layers: 1 },
-            );
-
-            // Step 5: Inverse FFT each channel (includes normalization)
+            // Step 5: Inverse FFT (includes normalization)
             log::debug!("RAPID: Transforming back to spatial domain...");
-
-            let encoder = self.inverse_fft_2d(
-                encoder, device, queue,
-                &freq_textures.freq_r, &freq_views.freq_r,
-                &freq_textures.freq_temp, &freq_views.freq_temp,
-                padded_w, padded_h,
-            );
-            let encoder = self.inverse_fft_2d(
-                encoder, device, queue,
-                &freq_textures.freq_g, &freq_views.freq_g,
-                &freq_textures.freq_temp, &freq_views.freq_temp,
-                padded_w, padded_h,
-            );
             self.inverse_fft_2d(
                 encoder, device, queue,
-                &freq_textures.freq_b, &freq_views.freq_b,
+                &freq_textures.freq_y, &freq_views.freq_y,
                 &freq_textures.freq_temp, &freq_views.freq_temp,
                 padded_w, padded_h,
             )
         }; // end else (DEBUG_LEVEL != 2)
 
-        // Step 6: Read back the result from GPU
-        // Create staging buffers for readback
+        // Step 6: Read back the deconvolved luma from GPU
         let bytes_per_row = padded_w * 8; // 2 channels (RG) * 4 bytes per f32
         let aligned_bytes_per_row = (bytes_per_row + 255) & !255; // Align to 256 bytes
         let buffer_size = (aligned_bytes_per_row * padded_h) as u64;
 
-        let staging_r = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("RAPID Staging R"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let staging_g = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("RAPID Staging G"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let staging_b = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("RAPID Staging B"),
+        let staging_y = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RAPID Staging Y"),
             size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        // Copy textures to staging buffers
         encoder.copy_texture_to_buffer(
-            freq_textures.freq_r.as_image_copy(),
+            freq_textures.freq_y.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &staging_r,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(aligned_bytes_per_row),
-                    rows_per_image: Some(padded_h),
-                },
-            },
-            wgpu::Extent3d { width: padded_w, height: padded_h, depth_or_array_layers: 1 },
-        );
-        encoder.copy_texture_to_buffer(
-            freq_textures.freq_g.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging_g,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(aligned_bytes_per_row),
-                    rows_per_image: Some(padded_h),
-                },
-            },
-            wgpu::Extent3d { width: padded_w, height: padded_h, depth_or_array_layers: 1 },
-        );
-        encoder.copy_texture_to_buffer(
-            freq_textures.freq_b.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging_b,
+                buffer: &staging_y,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(aligned_bytes_per_row),
@@ -2282,37 +2161,23 @@ impl RapidDeconvolver {
         // Submit all GPU work
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Map and read back the buffers
+        // Map and read back the buffer
         let (tx, rx) = std::sync::mpsc::channel();
-        let tx_r = tx.clone();
-        let tx_g = tx.clone();
-        let tx_b = tx;
-
-        staging_r.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            tx_r.send(("r", result)).unwrap();
-        });
-        staging_g.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            tx_g.send(("g", result)).unwrap();
-        });
-        staging_b.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            tx_b.send(("b", result)).unwrap();
+        staging_y.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
         });
 
-        // Wait for all maps to complete
         device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(std::time::Duration::from_secs(60)),
         }).unwrap();
 
-        // Check for errors
-        for _ in 0..3 {
-            let (channel, result) = rx.recv().map_err(|e| format!("Channel receive error: {}", e))?;
-            result.map_err(|e| format!("Buffer map error for {}: {:?}", channel, e))?;
-        }
+        rx.recv()
+            .map_err(|e| format!("Channel receive error: {}", e))?
+            .map_err(|e| format!("Buffer map error for luma: {:?}", e))?;
 
-        // Read the data
-        let r_data: Vec<f32> = {
-            let view = staging_r.slice(..).get_mapped_range().map_err(|e| format!("Failed to map staging buffer: {e:?}"))?;
+        let y_data: Vec<f32> = {
+            let view = staging_y.slice(..).get_mapped_range().map_err(|e| format!("Failed to map staging buffer: {e:?}"))?;
             let data: &[f32] = bytemuck::cast_slice(&view);
             // Extract just the real part (every other value) with proper row alignment
             let mut result = Vec::with_capacity((padded_w * padded_h) as usize);
@@ -2325,46 +2190,23 @@ impl RapidDeconvolver {
             }
             result
         };
-        staging_r.unmap();
+        staging_y.unmap();
 
-        let g_data: Vec<f32> = {
-            let view = staging_g.slice(..).get_mapped_range().map_err(|e| format!("Failed to map staging buffer: {e:?}"))?;
-            let data: &[f32] = bytemuck::cast_slice(&view);
-            let mut result = Vec::with_capacity((padded_w * padded_h) as usize);
-            let f32_per_aligned_row = aligned_bytes_per_row as usize / 4;
-            for y in 0..padded_h as usize {
-                for x in 0..padded_w as usize {
-                    let idx = y * f32_per_aligned_row + x * 2;
-                    result.push(data[idx]);
-                }
-            }
-            result
-        };
-        staging_g.unmap();
-
-        let b_data: Vec<f32> = {
-            let view = staging_b.slice(..).get_mapped_range().map_err(|e| format!("Failed to map staging buffer: {e:?}"))?;
-            let data: &[f32] = bytemuck::cast_slice(&view);
-            let mut result = Vec::with_capacity((padded_w * padded_h) as usize);
-            let f32_per_aligned_row = aligned_bytes_per_row as usize / 4;
-            for y in 0..padded_h as usize {
-                for x in 0..padded_w as usize {
-                    let idx = y * f32_per_aligned_row + x * 2;
-                    result.push(data[idx]);
-                }
-            }
-            result
-        };
-        staging_b.unmap();
-
-        // Combine channels into output image (crop to original size)
+        // Step 7: Recombine (crop to original size). The deconvolved luma is
+        // applied as a gain map over the original RGB: hue and saturation
+        // survive exactly, and per-channel divergence cannot occur. The gain
+        // clamp and denominator floor keep near-black pixels from exploding.
         let mut output = RgbaImage::new(width, height);
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * padded_w + x) as usize;
-                let r = (r_data[idx].clamp(0.0, 1.0) * 255.0) as u8;
-                let g = (g_data[idx].clamp(0.0, 1.0) * 255.0) as u8;
-                let b = (b_data[idx].clamp(0.0, 1.0) * 255.0) as u8;
+                let src = rgba_image.get_pixel(x, y);
+                let y_in =
+                    src[0] * LUMA_COEFF[0] + src[1] * LUMA_COEFF[1] + src[2] * LUMA_COEFF[2];
+                let gain = (y_data[idx] / y_in.max(1e-4)).clamp(0.0, 4.0);
+                let r = ((src[0] * gain).clamp(0.0, 1.0) * 255.0) as u8;
+                let g = ((src[1] * gain).clamp(0.0, 1.0) * 255.0) as u8;
+                let b = ((src[2] * gain).clamp(0.0, 1.0) * 255.0) as u8;
                 output.put_pixel(x, y, Rgba([r, g, b, 255]));
             }
         }
@@ -3120,6 +2962,118 @@ mod tests {
             max_dev = max_dev.max(d);
         }
         assert!(max_dev < 0.05, "interior drifted by {max_dev} after tapered deconvolution");
+    }
+
+    /// Luma-only deconvolution with gain-map recombine must preserve chroma
+    /// even when the source carries per-channel misregistration (chromatic
+    /// aberration) — the per-channel pipeline amplified that into red/blue
+    /// fringes. Luma edge energy must still increase (detail recovered).
+    #[test]
+    fn test_gpu_luma_deconvolve_preserves_chroma() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU chroma test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID chroma test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // Vertical bars with ~2 px per-channel misregistration (R shifted
+        // left, B right — simulated CA), then gaussian-blurred so the
+        // deconvolution has real detail to recover.
+        let (width, height) = (192u32, 160u32);
+        let bar = |x: i64| -> f32 {
+            if (x.rem_euclid(48)) < 24 { 0.25 } else { 0.75 }
+        };
+        let sharp = image::RgbaImage::from_fn(width, height, |x, _| {
+            let r = bar(x as i64 - 2);
+            let g = bar(x as i64);
+            let b = bar(x as i64 + 2);
+            image::Rgba([
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+                255,
+            ])
+        });
+        let input = image::DynamicImage::ImageRgba8(sharp).blur(1.5);
+
+        let params = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Gaussian,
+            gaussian_sigma: 1.5,
+            lambda: 0.01,
+            strength: 1.0,
+            ..Default::default()
+        };
+        let out = deconv
+            .deconvolve_image(&device, &queue, &input, &params)
+            .expect("deconvolve_image failed");
+
+        // Chroma: rg-chromaticity is scale-invariant, so the gain map must
+        // leave it untouched outside clipped pixels (where chroma loss is
+        // expected and legitimate).
+        let (i_rgb, o_rgb) = (input.to_rgb32f(), out.to_rgb32f());
+        let mut max_chroma_delta = 0.0f32;
+        let mut judged = 0u32;
+        for y in 4..height - 4 {
+            for x in 4..width - 4 {
+                let ip = i_rgb.get_pixel(x, y);
+                let op = o_rgb.get_pixel(x, y);
+                let is = ip[0] + ip[1] + ip[2];
+                let os = op[0] + op[1] + op[2];
+                if os < 0.2 || op.0.iter().any(|&c| c > 0.98) {
+                    continue;
+                }
+                let dr = (ip[0] / is - op[0] / os).abs();
+                let db = (ip[2] / is - op[2] / os).abs();
+                max_chroma_delta = max_chroma_delta.max(dr.max(db));
+                judged += 1;
+            }
+        }
+        assert!(judged > 1000, "too few unclipped pixels to judge chroma ({judged})");
+        assert!(
+            max_chroma_delta < 0.02,
+            "chroma drifted by {max_chroma_delta} after luma-only deconvolution"
+        );
+
+        // Luma edge energy must increase against the blurred input.
+        let edge_energy = |img: &image::Rgb32FImage| -> f64 {
+            let luma = |p: &image::Rgb<f32>| -> f64 {
+                (p[0] * LUMA_COEFF[0] + p[1] * LUMA_COEFF[1] + p[2] * LUMA_COEFF[2]) as f64
+            };
+            let mut e = 0.0f64;
+            for y in 0..height {
+                for x in 1..width {
+                    let d = luma(img.get_pixel(x, y)) - luma(img.get_pixel(x - 1, y));
+                    e += d * d;
+                }
+            }
+            e
+        };
+        let (e_in, e_out) = (edge_energy(&i_rgb), edge_energy(&o_rgb));
+        eprintln!(
+            "luma deconvolve: chroma delta {:.4}, edge energy {:.2}x ({} pixels judged)",
+            max_chroma_delta,
+            e_out / e_in,
+            judged
+        );
+        assert!(
+            e_out > 1.15 * e_in,
+            "no luma detail recovered: in={e_in:.3}, out={e_out:.3}"
+        );
     }
 
     #[test]

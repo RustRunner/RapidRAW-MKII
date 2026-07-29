@@ -25,9 +25,13 @@ struct UtilityParams {
     dst_width: u32,
     dst_height: u32,
     normalize_factor: f32,
-    channel: u32,         // 0=R, 1=G, 2=B for channel extraction
+    channel: u32,         // 0=R, 1=G, 2=B, 3=Rec.709 luma
     _pad: vec2<u32>,
 }
+
+// Rec. 709 luma coefficients — must match shader.wgsl and the CPU-side
+// recombine in rapid_processing.rs
+const LUMA_COEFF = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 // ============================================================================
 // Real to Complex Conversion with Zero Padding
@@ -37,8 +41,9 @@ struct UtilityParams {
 @group(0) @binding(1) var output_complex: texture_storage_2d<rg32float, write>;
 @group(0) @binding(2) var<uniform> params: UtilityParams;
 
-/// Convert single channel from RGBA to complex, zero-padding anything beyond
-/// the source extent (a no-op when the source already spans the destination)
+/// Convert single channel (or Rec. 709 luma) from RGBA to complex,
+/// zero-padding anything beyond the source extent (a no-op when the source
+/// already spans the destination)
 @compute @workgroup_size(16, 16, 1)
 fn real_to_complex_pad(@builtin(global_invocation_id) gid: vec3<u32>) {
     let coord = vec2<u32>(gid.xy);
@@ -60,6 +65,7 @@ fn real_to_complex_pad(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 0u: { value = rgba.r; }
             case 1u: { value = rgba.g; }
             case 2u: { value = rgba.b; }
+            case 3u: { value = dot(rgba.rgb, LUMA_COEFF); }
             default: { value = rgba.r; }
         }
     }
