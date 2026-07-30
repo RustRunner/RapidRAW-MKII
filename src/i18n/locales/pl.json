@@ -334,6 +334,7 @@
         "estimateFailed": "Nie wykryto kierunku rozmycia ruchu - ustaw długość i kąt ręcznie.",
         "estimating": "Szacowanie...",
         "gaussian": "Gaussian",
+        "hardness": "Twardość krawędzi",
         "lambda": "Tłumienie artefaktów",
         "length": "Blur Length",
         "motion": "Motion",

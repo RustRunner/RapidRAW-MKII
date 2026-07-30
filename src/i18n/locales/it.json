@@ -318,6 +318,7 @@
         "estimateFailed": "Direzione del mosso non rilevata: imposta lunghezza e angolo manualmente.",
         "estimating": "Stima in corso...",
         "gaussian": "Gaussian",
+        "hardness": "Durezza dei bordi",
         "lambda": "Soppressione artefatti",
         "length": "Blur Length",
         "motion": "Motion",

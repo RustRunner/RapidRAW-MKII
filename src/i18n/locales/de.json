@@ -302,6 +302,7 @@
         "estimateFailed": "Keine Bewegungsunschärfe-Richtung erkannt - Länge und Winkel manuell einstellen.",
         "estimating": "Schätzung läuft...",
         "gaussian": "Gaussian",
+        "hardness": "Kantenhärte",
         "lambda": "Artefaktunterdrückung",
         "length": "Blur Length",
         "motion": "Motion",

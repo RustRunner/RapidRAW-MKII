@@ -181,6 +181,15 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                   value={adjustments.rapidAngle}
                   onDragStateChange={handleAngleDragState}
                 />
+                <Slider
+                  label={t('editor.adjustments.blurRecovery.hardness')}
+                  max={100}
+                  min={0}
+                  onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidHardness, e)}
+                  step={1}
+                  value={adjustments.rapidHardness}
+                  onDragStateChange={onDragStateChange}
+                />
               </>
             )}
 

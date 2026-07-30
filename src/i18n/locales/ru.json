@@ -334,6 +334,7 @@
         "estimateFailed": "Направление смаза не обнаружено - задайте длину и угол вручную.",
         "estimating": "Оценка...",
         "gaussian": "Gaussian",
+        "hardness": "Жёсткость краёв",
         "lambda": "Подавление артефактов",
         "length": "Blur Length",
         "motion": "Motion",

@@ -80,6 +80,11 @@ pub struct RapidParams {
     /// compiled as this code-level flag for A/B debugging, and tests that
     /// need deterministic fixed-λ math rely on the `false` default.
     pub adaptive: bool,
+    /// Motion-OTF shape: 0 = legacy zero-free Gaussian envelope, 1 = physical
+    /// hard-line OTF (signed sinc with true zeros). The `0.0` default keeps
+    /// existing tests on the exact legacy math; parse_rapid_params supplies
+    /// the production value.
+    pub hardness: f32,
 }
 
 impl Default for RapidParams {
@@ -96,6 +101,7 @@ impl Default for RapidParams {
             edge_taper: true,
             noise_floor: 1e-6,
             adaptive: false,
+            hardness: 0.0,
         }
     }
 }
@@ -126,6 +132,7 @@ impl RapidParams {
             edge_taper: true,
             noise_floor,
             adaptive,
+            hardness: 0.0,
         }
     }
 
@@ -186,44 +193,82 @@ fn kernel_extent(params: &RapidParams) -> usize {
 /// Projection of the active PSF onto one axis (0 = x, 1 = y), normalized to
 /// sum 1; `[1.0]` when the projection is sub-pixel (identity).
 fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
-    // Half-extent and unnormalized density of the projected PSF at signed
-    // distance t from its center. These must match the spectra the Wiener
-    // filter divides by (psf_generate.wgsl), not an idealized blur model.
-    let (half_extent, density): (f32, Box<dyn Fn(f32) -> f32>) = match params.blur_type {
+    // Weighted components (weight, half-extent, unnormalized density at
+    // signed distance t from center). These must match the spectra the
+    // Wiener filter divides by (psf_generate.wgsl), not an idealized blur
+    // model — and the motion OTF is a hardness blend of two spectra, whose
+    // projection is the same blend of the two projections.
+    type Density = Box<dyn Fn(f32) -> f32>;
+    let components: Vec<(f32, f32, Density)> = match params.blur_type {
         BlurType::Motion => {
-            // The engine's motion OTF is a zero-free Gaussian envelope with
-            // sigma_freq = 1/L (motion_blur_spectrum), i.e. spatially a
-            // Gaussian of sigma = L/(2π) along the motion direction, which
-            // projects onto an axis as a Gaussian of sigma·|cos| / sigma·|sin|.
+            // Soft arm: the zero-free Gaussian envelope with sigma_freq = 1/L
+            // (motion_blur_spectrum), i.e. spatially a Gaussian of
+            // sigma = L/(2π) along the motion direction, which projects onto
+            // an axis as a Gaussian of sigma·|cos| / sigma·|sin|. Hard arm:
+            // the line segment itself, a box over the projected extent.
             let dir = params.motion_angle.to_radians();
             let along = if axis == 0 { dir.cos() } else { dir.sin() };
-            let s = (params.motion_length * along).abs() / (2.0 * std::f32::consts::PI);
-            (3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s).max(1e-6)).exp()))
+            let proj = (params.motion_length * along).abs();
+            let s = proj / (2.0 * std::f32::consts::PI);
+            let half_box = proj / 2.0;
+            let h = params.hardness.clamp(0.0, 1.0);
+            vec![
+                (
+                    1.0 - h,
+                    3.0 * s,
+                    Box::new(move |t: f32| (-t * t / (2.0 * s * s).max(1e-6)).exp()) as Density,
+                ),
+                (
+                    h,
+                    half_box,
+                    Box::new(move |t: f32| if t.abs() <= half_box { 1.0f32 } else { 0.0 }) as Density,
+                ),
+            ]
         }
         BlurType::Defocus => {
             // jinc spectrum = uniform disk, which projects as its chord length.
             let r = params.defocus_radius.max(0.0);
-            (r, Box::new(move |t: f32| (r * r - t * t).max(0.0).sqrt()))
+            vec![(1.0, r, Box::new(move |t: f32| (r * r - t * t).max(0.0).sqrt()) as Density)]
         }
         BlurType::Gaussian => {
             // gaussian_blur_spectrum caps effective sigma at 8; mirror that.
             let s = params.gaussian_sigma.clamp(1e-3, 8.0);
-            (3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s)).exp()))
+            vec![(1.0, 3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s)).exp()) as Density)]
         }
     };
 
-    let radius = half_extent.ceil() as i32;
+    let radius = components
+        .iter()
+        .filter(|(weight, _, _)| *weight > 0.0)
+        .map(|(_, half_extent, _)| half_extent.ceil() as i32)
+        .max()
+        .unwrap_or(0);
     if radius < 1 {
         return vec![1.0];
     }
-    // Midpoint-integrate the density over each tap cell [i-0.5, i+0.5].
-    let mut kernel: Vec<f32> = (-radius..=radius)
-        .map(|i| {
-            (0..4)
-                .map(|k| density(i as f32 - 0.5 + (k as f32 + 0.5) / 4.0))
-                .sum::<f32>()
-        })
-        .collect();
+    // Midpoint-integrate each density over the tap cells [i-0.5, i+0.5] and
+    // normalize it to unit mass before weighting, so the blend keeps the
+    // requested mass split regardless of each density's raw scale.
+    let mut kernel = vec![0.0f32; (2 * radius + 1) as usize];
+    for (weight, _, density) in &components {
+        if *weight <= 0.0 {
+            continue;
+        }
+        let taps: Vec<f32> = (-radius..=radius)
+            .map(|i| {
+                (0..4)
+                    .map(|k| density(i as f32 - 0.5 + (k as f32 + 0.5) / 4.0))
+                    .sum::<f32>()
+            })
+            .collect();
+        let sum: f32 = taps.iter().sum();
+        if sum <= f32::EPSILON {
+            continue;
+        }
+        for (out, tap) in kernel.iter_mut().zip(&taps) {
+            *out += weight * tap / sum;
+        }
+    }
     let sum: f32 = kernel.iter().sum();
     if sum <= f32::EPSILON {
         return vec![1.0];
@@ -433,7 +478,7 @@ struct PSFParams {
     motion_angle: f32,
     defocus_radius: f32,
     gaussian_sigma: f32,
-    _pad: f32,
+    hardness: f32,
 }
 
 #[repr(C)]
@@ -1673,7 +1718,7 @@ impl RapidDeconvolver {
             motion_angle: params.motion_angle,
             defocus_radius: params.defocus_radius,
             gaussian_sigma: params.gaussian_sigma,
-            _pad: 0.0,
+            hardness: params.hardness,
         };
         queue.write_buffer(&self.psf_params_buffer, 0, bytemuck::bytes_of(&psf_params));
 
@@ -2328,6 +2373,10 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         // Always on in production since the toggle was demoted; stale
         // rapidAdaptive keys in old sidecars are ignored.
         adaptive: true,
+        // Sidecars saved before this key exist get the hard-line model on
+        // their next render: the ghosting it fixes is a defect, not a look.
+        hardness: (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0)
+            .clamp(0.0, 1.0),
         ..Default::default()
     })
 }
@@ -2974,12 +3023,18 @@ mod tests {
         energy / h as f64
     }
 
-    /// Exit test: the edge taper must collapse FFT wrap-seam banding by
+    /// Exit test body: the edge taper must collapse FFT wrap-seam banding by
     /// an order of magnitude versus raw zero-pad. Width is an exact power of
     /// two (no pad headroom -> PSF-consistent border taper) while height pads
     /// 200 -> 256 (reflect-101 mirror margins), so both mechanisms run.
-    #[test]
-    fn test_gpu_edge_taper_reduces_banding() {
+    /// Parameterized over the motion-OTF hardness: h = 0 is the legacy
+    /// Gaussian envelope, h = 1 the hard-line OTF whose sinc zeros are
+    /// exactly the amplification the Gaussian was introduced to avoid.
+    /// `drift_gate` bounds interior drift: the scene is sharp, so the h = 1
+    /// inverse legitimately rings the content steps at the frame edges with
+    /// echoes at multiples of L, which reach the interior window — filter
+    /// physics on unblurred input, not a taper defect, hence a looser gate.
+    fn assert_edge_taper_reduces_banding(hardness: f32, drift_gate: f32) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -3027,6 +3082,7 @@ mod tests {
             lambda: 0.002,
             strength: 1.0,
             edge_taper: false,
+            hardness,
             ..Default::default()
         };
         let tapered_params = RapidParams { edge_taper: true, ..base_params };
@@ -3065,11 +3121,133 @@ mod tests {
         let out_rgb = tapered.to_rgb32f();
         let y = height / 2;
         let mut max_dev = 0.0f32;
+        let mut max_x = 0u32;
         for x in 64..192 {
             let d = (out_rgb.get_pixel(x, y)[0] - in_rgb.get_pixel(x, y)[0]).abs();
-            max_dev = max_dev.max(d);
+            if d > max_dev {
+                max_dev = d;
+                max_x = x;
+            }
         }
-        assert!(max_dev < 0.05, "interior drifted by {max_dev} after tapered deconvolution");
+        eprintln!("interior drift: {max_dev:.4} at x={max_x}");
+        assert!(
+            max_dev < drift_gate,
+            "interior drifted by {max_dev} after tapered deconvolution"
+        );
+    }
+
+    #[test]
+    fn test_gpu_edge_taper_reduces_banding() {
+        assert_edge_taper_reduces_banding(0.0, 0.05);
+    }
+
+    /// "The edge taper makes the zeros safe" made falsifiable: the h = 1
+    /// line OTF has true sinc zeros, the worst case for seam amplification.
+    #[test]
+    fn test_gpu_edge_taper_reduces_banding_at_full_hardness() {
+        assert_edge_taper_reduces_banding(1.0, 0.10);
+    }
+
+    /// The hardness blend is the ghost fix: deconvolving hard-line-blurred
+    /// data with the legacy Gaussian-envelope OTF factors into a sharpening
+    /// kernel convolved with the *unmodeled* L-px box, so every feature
+    /// reconstructs as a bright copy at each end of the smear — the double
+    /// image at ±L/2 around the feature, separation L. The h = 1 line OTF
+    /// absorbs the box into the model and reconstructs one centered copy.
+    /// Measured as peak *positive* profile deviation in the copy windows
+    /// relative to the principal reconstruction: the positive part excludes
+    /// the dark notch-loss dips at ±L (spectral lines the blur truly
+    /// zeroed), which no model shape can restore.
+    #[test]
+    fn test_gpu_hardness_collapses_ghost_pair() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU ghost test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID ghost test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // Isolated bright bar on mid-gray, hard-line blurred: the ground
+        // truth has a single feature, so anything at ±L is a model artifact.
+        // The bar sits clear of the border-taper strips (2·L from each edge)
+        // and the gray levels leave headroom for ringing in both directions.
+        // Odd blur length: motion_blur_line then hits exact integer taps, a
+        // true 31-px box whose spectral zeros sit at k/31 where the h = 1
+        // model puts them — an even length rounds the half-integer taps into
+        // a holed kernel whose zeros match no sinc.
+        let (width, height) = (256u32, 200u32);
+        let bar_center = 128i32;
+        let blur_len = 31i32;
+        let sharp = image::RgbaImage::from_fn(width, height, |x, _| {
+            let v: f32 = if (x as i32 - bar_center).abs() <= 2 { 0.9 } else { 0.4 };
+            let b = (v * 255.0).round() as u8;
+            image::Rgba([b, b, b, 255])
+        });
+        let input = image::DynamicImage::ImageRgba8(motion_blur_line(&sharp, blur_len as f32, 0.0));
+
+        let soft_params = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Motion,
+            motion_length: blur_len as f32,
+            motion_angle: 0.0,
+            lambda: 0.002,
+            strength: 1.0,
+            ..Default::default()
+        };
+        let hard_params = RapidParams { hardness: 1.0, ..soft_params };
+
+        // Peak positive deviation from the far-field background of the
+        // row-averaged column profile over an inclusive column window. The
+        // bar is 5 px, so the smear ends — the ghost copies — sit near
+        // ±(L + 5)/2 = ±18; windows [10, 22] cover them with margin while
+        // staying clear of the principal window and the ±L echo dips.
+        let profile_pos_peak = |img: &image::DynamicImage, x_lo: i32, x_hi: i32| -> f32 {
+            let rgb = img.to_rgb32f();
+            let col = |x: i32| -> f32 {
+                (0..rgb.height()).map(|y| rgb.get_pixel(x as u32, y)[0]).sum::<f32>()
+                    / rgb.height() as f32
+            };
+            let bg: f32 = (70..86).chain(170..186).map(col).sum::<f32>() / 32.0;
+            (x_lo..=x_hi).map(|x| col(x) - bg).fold(0.0, f32::max)
+        };
+        let ghost_ratio = |img: &image::DynamicImage| -> f32 {
+            let principal = profile_pos_peak(img, bar_center - 4, bar_center + 4);
+            let left = profile_pos_peak(img, bar_center - 22, bar_center - 10);
+            let right = profile_pos_peak(img, bar_center + 10, bar_center + 22);
+            left.max(right) / principal.max(1e-6)
+        };
+
+        let soft = deconv
+            .deconvolve_image(&device, &queue, &input, &soft_params)
+            .expect("soft deconvolve failed");
+        let hard = deconv
+            .deconvolve_image(&device, &queue, &input, &hard_params)
+            .expect("hard deconvolve failed");
+
+        let r_soft = ghost_ratio(&soft);
+        let r_hard = ghost_ratio(&hard);
+        eprintln!(
+            "ghost ratio: soft {r_soft:.3}, hard {r_hard:.3}, reduction {:.1}x",
+            r_soft / r_hard
+        );
+        assert!(
+            r_soft > 3.0 * r_hard,
+            "hard-line OTF reduced the ghost pair only {:.1}x (soft {r_soft:.3}, hard {r_hard:.3})",
+            r_soft / r_hard
+        );
     }
 
     /// Luma-only deconvolution with gain-map recombine must preserve chroma

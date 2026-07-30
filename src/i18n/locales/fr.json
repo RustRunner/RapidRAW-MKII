@@ -318,6 +318,7 @@
         "estimateFailed": "Direction du flou de bougé non détectée - réglez la longueur et l'angle manuellement.",
         "estimating": "Estimation...",
         "gaussian": "Gaussian",
+        "hardness": "Dureté des bords",
         "lambda": "Suppression des artefacts",
         "length": "Blur Length",
         "motion": "Motion",

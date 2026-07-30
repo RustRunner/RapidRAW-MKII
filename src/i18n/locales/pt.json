@@ -318,6 +318,7 @@
         "estimateFailed": "Direção do borrão de movimento não detectada - ajuste comprimento e ângulo manualmente.",
         "estimating": "Estimando...",
         "gaussian": "Gaussian",
+        "hardness": "Dureza das bordas",
         "lambda": "Supressão de artefatos",
         "length": "Blur Length",
         "motion": "Motion",

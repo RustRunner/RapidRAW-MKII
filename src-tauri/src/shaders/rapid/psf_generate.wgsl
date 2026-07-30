@@ -35,7 +35,7 @@ struct PSFParams {
     motion_angle: f32,   // Degrees
     defocus_radius: f32, // In pixels
     gaussian_sigma: f32, // In pixels
-    _pad: f32,
+    hardness: f32,       // Motion OTF shape: 0 = Gaussian envelope, 1 = hard line
 }
 
 // Note on frequency scaling:
@@ -130,12 +130,17 @@ fn jinc_safe(x: f32) -> f32 {
 // ============================================================================
 
 /// Motion blur PSF in frequency domain
-/// Uses Gaussian-windowed approach for stability instead of pure sinc
+/// Blend between a Gaussian envelope and the physical line-blur OTF.
 ///
-/// Pure sinc has many zeros which cause severe ringing artifacts.
-/// Instead, we use a Gaussian envelope that smoothly attenuates high frequencies
-/// along the motion direction, which is more stable for deconvolution.
-fn motion_blur_spectrum(u: f32, v: f32, length: f32, angle_deg: f32) -> vec2<f32> {
+/// A constant-velocity motion blur is a hard line segment whose OTF is a
+/// signed sinc with true zeros at k/L; deconvolving with anything else
+/// reconstructs each feature as a ghost pair at +/-L. At hardness 1 this is
+/// that sinc, unfloored: the Wiener form |H|/(|H|^2+lambda) is self-limiting,
+/// so the zeros yield zero gain instead of floor-fabricated amplification.
+/// At hardness 0 it is the legacy zero-free Gaussian envelope (floored),
+/// kept for A/B compatibility; intermediate values partially fill the
+/// notches for motion with acceleration or shake-smoothed endpoints.
+fn motion_blur_spectrum(u: f32, v: f32, length: f32, angle_deg: f32, hardness: f32) -> vec2<f32> {
     let angle_rad = angle_deg * PI / 180.0;
     let cos_a = cos(angle_rad);
     let sin_a = sin(angle_rad);
@@ -143,18 +148,19 @@ fn motion_blur_spectrum(u: f32, v: f32, length: f32, angle_deg: f32) -> vec2<f32
     // Frequency component along motion direction
     let freq_along = u * cos_a + v * sin_a;
 
-    // Use Gaussian envelope instead of sinc to avoid zeros
-    // The sigma is proportional to blur length - longer blur = narrower frequency response
-    // For blur length L, effective sigma in frequency domain is ~1/L
+    // Gaussian envelope with sigma ~1/L: narrower response for longer blur
     let sigma_freq = 1.0 / max(length, 1.0);
+    let gauss = max(
+        exp(-0.5 * (freq_along * freq_along) / (sigma_freq * sigma_freq)),
+        MAGNITUDE_FLOOR
+    );
 
-    // Gaussian: exp(-0.5 * (f/sigma)^2)
-    let magnitude = exp(-0.5 * (freq_along * freq_along) / (sigma_freq * sigma_freq));
+    // Line-blur OTF: signed sinc, zeros at k/L, no floor
+    let line = sinc(length * freq_along);
 
-    // Ensure minimum magnitude for stability
-    let safe_magnitude = max(magnitude, MAGNITUDE_FLOOR);
+    let magnitude = mix(gauss, line, hardness);
 
-    return vec2<f32>(safe_magnitude, 0.0);
+    return vec2<f32>(magnitude, 0.0);
 }
 
 /// Defocus (pillbox/disk) PSF in frequency domain
@@ -243,7 +249,7 @@ fn generate_psf_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
         switch (params.blur_type) {
             case 0u: {
                 // Motion blur
-                H = motion_blur_spectrum(u, v, params.motion_length, params.motion_angle);
+                H = motion_blur_spectrum(u, v, params.motion_length, params.motion_angle, params.hardness);
             }
             case 1u: {
                 // Defocus blur

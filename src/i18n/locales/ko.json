@@ -302,6 +302,7 @@
         "estimateFailed": "모션 블러 방향을 감지하지 못했습니다. 길이와 각도를 직접 설정하세요.",
         "estimating": "추정 중...",
         "gaussian": "Gaussian",
+        "hardness": "가장자리 경도",
         "lambda": "아티팩트 억제",
         "length": "Blur Length",
         "motion": "Motion",

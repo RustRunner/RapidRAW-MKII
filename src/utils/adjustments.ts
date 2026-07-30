@@ -91,6 +91,7 @@ export enum BlurRecoveryAdjustment {
   RapidRadius = 'rapidRadius',
   RapidSigma = 'rapidSigma',
   RapidLambda = 'rapidLambda',
+  RapidHardness = 'rapidHardness',
   RapidStrength = 'rapidStrength',
 }
 
@@ -194,6 +195,7 @@ export interface Adjustments {
   rapidRadius: number;
   rapidSigma: number;
   rapidLambda: number;
+  rapidHardness: number;
   rapidStrength: number;
   [index: string]: any;
   aiPatches: Array<AiPatch>;
@@ -557,6 +559,7 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   rapidRadius: 5,
   rapidSigma: 2,
   rapidLambda: 0.01,
+  rapidHardness: 100,
   rapidStrength: 100,
   aiPatches: [],
   aspectRatio: null,
@@ -764,6 +767,7 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     rapidRadius: loadedAdjustments.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
     rapidSigma: loadedAdjustments.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
     rapidLambda: loadedAdjustments.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
+    rapidHardness: loadedAdjustments.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
     rapidStrength: loadedAdjustments.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,

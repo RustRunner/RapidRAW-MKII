@@ -302,6 +302,7 @@
         "estimateFailed": "未能检测到运动模糊方向，请手动设置长度和角度。",
         "estimating": "估算中...",
         "gaussian": "Gaussian",
+        "hardness": "边缘硬度",
         "lambda": "伪影抑制",
         "length": "Blur Length",
         "motion": "Motion",

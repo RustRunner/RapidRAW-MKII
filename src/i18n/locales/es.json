@@ -318,6 +318,7 @@
         "estimateFailed": "No se detectó la dirección del desenfoque de movimiento: ajusta longitud y ángulo manualmente.",
         "estimating": "Estimando...",
         "gaussian": "Gaussian",
+        "hardness": "Dureza de bordes",
         "lambda": "Supresión de artefactos",
         "length": "Blur Length",
         "motion": "Motion",

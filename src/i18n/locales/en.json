@@ -302,6 +302,7 @@
         "estimateFailed": "Could not detect a motion-blur direction - set length and angle manually.",
         "estimating": "Estimating...",
         "gaussian": "Gaussian",
+        "hardness": "Edge hardness",
         "lambda": "Artifact suppression",
         "length": "Blur Length",
         "motion": "Motion",

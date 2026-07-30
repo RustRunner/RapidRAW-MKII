@@ -302,6 +302,7 @@
         "estimateFailed": "ブレの方向を検出できませんでした。長さと角度を手動で設定してください。",
         "estimating": "推定中...",
         "gaussian": "Gaussian",
+        "hardness": "エッジ硬度",
         "lambda": "アーティファクト抑制",
         "length": "Blur Length",
         "motion": "Motion",
