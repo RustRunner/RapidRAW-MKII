@@ -112,8 +112,8 @@ struct GlobalAdjustments {
     denoise_strength: f32,
     denoise_detail: f32,
     denoise_chroma: f32,
-    denoise_iso_multiplier: f32,
     _pad_end3: f32,
+    _pad_end4: f32,
 
     glow_amount: f32,
     halation_amount: f32,
@@ -1618,11 +1618,10 @@ fn apply_denoise(
     strength: f32,          // 0-100: base denoise strength
     detail: f32,            // 0-100: detail preservation (higher = more detail kept)
     chroma: f32,            // 0-100: chroma smoothing strength
-    iso_multiplier: f32,    // ISO-based multiplier (~0.3-1.5, scales effective strength)
     is_raw: u32
 ) -> vec3<f32> {
-    let effective_strength = min(strength * iso_multiplier, 100.0);
-    let effective_chroma = min(chroma * iso_multiplier, 100.0);
+    let effective_strength = min(strength, 100.0);
+    let effective_chroma = min(chroma, 100.0);
 
     if (effective_strength < 0.1 && effective_chroma < 0.1) {
         return rgb;
@@ -1721,7 +1720,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             adjustments.global.denoise_strength,
             adjustments.global.denoise_detail,
             adjustments.global.denoise_chroma,
-            adjustments.global.denoise_iso_multiplier,
             is_raw
         );
     }

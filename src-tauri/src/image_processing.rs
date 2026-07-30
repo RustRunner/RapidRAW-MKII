@@ -1502,8 +1502,8 @@ pub struct GlobalAdjustments {
     pub denoise_strength: f32,
     pub denoise_detail: f32,
     pub denoise_chroma: f32,
-    pub denoise_iso_multiplier: f32,
     _pad_end3: f32,
+    _pad_end4: f32,
 
     pub glow_amount: f32,
     pub halation_amount: f32,
@@ -2324,12 +2324,15 @@ fn get_global_adjustments_from_json(
             0
         },
         // Strength/detail/chroma stay 0-100; the shader normalizes internally.
+        // Stale denoiseIsoMultiplier keys in old sidecars are deliberately
+        // ignored: the ISO-multiplier mechanism was replaced by measured
+        // noise estimation, and honoring a stored throttle would silently
+        // weaken denoising with no control left to undo it.
         denoise_strength: js_adjustments["denoiseStrength"].as_f64().unwrap_or(50.0) as f32,
         denoise_detail: js_adjustments["denoiseDetail"].as_f64().unwrap_or(50.0) as f32,
         denoise_chroma: js_adjustments["denoiseChroma"].as_f64().unwrap_or(50.0) as f32,
-        denoise_iso_multiplier: js_adjustments["denoiseIsoMultiplier"].as_f64().unwrap_or(1.0)
-            as f32,
         _pad_end3: 0.0,
+        _pad_end4: 0.0,
 
         glow_amount: get_val("effects", "glowAmount", SCALES.glow, None),
         halation_amount: get_val("effects", "halationAmount", SCALES.halation, None),

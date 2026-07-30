@@ -79,8 +79,6 @@ export enum LowLightAdjustment {
   DenoiseStrength = 'denoiseStrength',
   DenoiseDetail = 'denoiseDetail',
   DenoiseChroma = 'denoiseChroma',
-  DenoiseAutoIso = 'denoiseAutoIso',
-  DenoiseIsoMultiplier = 'denoiseIsoMultiplier',
 }
 
 export enum BlurRecoveryAdjustment {
@@ -186,8 +184,6 @@ export interface Adjustments {
   denoiseStrength: number;
   denoiseDetail: number;
   denoiseChroma: number;
-  denoiseAutoIso: boolean;
-  denoiseIsoMultiplier: number;
   rapidEnabled: boolean;
   rapidBlurType: 'motion' | 'defocus' | 'gaussian';
   rapidLength: number;
@@ -526,8 +522,6 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   denoiseStrength: 50,
   denoiseDetail: 50,
   denoiseChroma: 50,
-  denoiseAutoIso: true,
-  denoiseIsoMultiplier: 1.0,
   rapidEnabled: false,
   rapidBlurType: 'motion',
   rapidLength: 10,
@@ -719,9 +713,6 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     denoiseStrength: loadedAdjustments.denoiseStrength ?? INITIAL_ADJUSTMENTS.denoiseStrength,
     denoiseDetail: loadedAdjustments.denoiseDetail ?? INITIAL_ADJUSTMENTS.denoiseDetail,
     denoiseChroma: loadedAdjustments.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
-    denoiseAutoIso: loadedAdjustments.denoiseAutoIso ?? INITIAL_ADJUSTMENTS.denoiseAutoIso,
-    denoiseIsoMultiplier:
-      loadedAdjustments.denoiseIsoMultiplier ?? INITIAL_ADJUSTMENTS.denoiseIsoMultiplier,
     rapidEnabled: loadedAdjustments.rapidEnabled ?? INITIAL_ADJUSTMENTS.rapidEnabled,
     rapidBlurType: loadedAdjustments.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
     rapidLength: loadedAdjustments.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,

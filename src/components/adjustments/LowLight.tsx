@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
@@ -12,74 +12,34 @@ import { Invokes } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
 import { useProcessStore } from '../../store/useProcessStore';
 
+interface NoiseEstimate {
+  sigma_luma: number;
+  sigma_chroma: number;
+  strength: number;
+  chroma: number;
+}
+
 interface LowLightPanelProps {
   adjustments: Adjustments;
   setAdjustments(adjustments: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)): any;
   onDragStateChange?(dragging: boolean): void;
 }
 
-// ISO-to-strength curve: gentle at base ISO, aggressive at ISO 12800+.
-function calculateIsoMultiplier(iso: number): number {
-  if (!iso || iso <= 0) {
-    return 1.0;
-  }
-  const logIso = Math.log2(iso / 100);
-  if (iso <= 400) {
-    return 0.3 + (logIso / 2) * 0.2;
-  }
-  if (iso <= 1600) {
-    return 0.5 + ((logIso - 2) / 2) * 0.3;
-  }
-  if (iso <= 6400) {
-    return 0.8 + ((logIso - 4) / 2) * 0.4;
-  }
-  return Math.min(1.5, 1.2 + ((logIso - 6) / 2) * 0.3);
-}
-
 export default function LowLightPanel({ adjustments, setAdjustments, onDragStateChange }: LowLightPanelProps) {
   const { t } = useTranslation();
   const selectedImage = useEditorStore((state: any) => state.selectedImage);
   const [isDenoising, setIsDenoising] = useState(false);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [noiseEstimate, setNoiseEstimate] = useState<NoiseEstimate | null>(null);
 
   const path: string | null = selectedImage?.path ?? null;
 
-  const iso = useMemo(() => {
-    const raw =
-      selectedImage?.exif?.PhotographicSensitivity ??
-      selectedImage?.exif?.ISOSpeedRatings ??
-      selectedImage?.exif?.ISO ??
-      '0';
-    return parseInt(String(raw), 10) || 0;
-  }, [selectedImage?.exif]);
-
-  const suggestedStrength = useMemo(
-    () => (iso > 0 ? Math.round(Math.min(100, 50 * calculateIsoMultiplier(iso))) : 50),
-    [iso],
-  );
-  const [denoiseStrength, setDenoiseStrength] = useState(suggestedStrength);
+  // Deep Clean strength: per-image scratch value, seeded by Estimate noise.
+  const [denoiseStrength, setDenoiseStrength] = useState(50);
   useEffect(() => {
-    setDenoiseStrength(suggestedStrength);
-  }, [suggestedStrength, path]);
-
-  // Keep the sidecar-persisted multiplier in sync with this image's ISO while
-  // the live denoiser is enabled; render stays reproducible from the sidecar
-  // alone. Guarded so untouched images are never marked edited.
-  const targetMultiplier = useMemo(() => {
-    if (!adjustments.denoiseAutoIso || iso <= 0) {
-      return 1.0;
-    }
-    return Math.round(calculateIsoMultiplier(iso) * 100) / 100;
-  }, [adjustments.denoiseAutoIso, iso]);
-
-  useEffect(() => {
-    if (!adjustments.denoiseEnabled || adjustments.denoiseIsoMultiplier === targetMultiplier) {
-      return;
-    }
-    setAdjustments((prev: Adjustments) => ({
-      ...prev,
-      [LowLightAdjustment.DenoiseIsoMultiplier]: targetMultiplier,
-    }));
-  }, [adjustments.denoiseEnabled, adjustments.denoiseIsoMultiplier, targetMultiplier, setAdjustments]);
+    setDenoiseStrength(50);
+    setNoiseEstimate(null);
+  }, [path]);
 
   const handleValueChange = (key: LowLightAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
@@ -88,6 +48,29 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
 
   const handleCheckedChange = (key: LowLightAdjustment, checked: boolean) => {
     setAdjustments((prev: Adjustments) => ({ ...prev, [key]: checked }));
+  };
+
+  const handleEstimateNoise = async () => {
+    if (isEstimating) {
+      return;
+    }
+    setIsEstimating(true);
+    try {
+      const estimate = await invoke<NoiseEstimate>(Invokes.EstimateNoiseLevel);
+      const strength = Math.round(estimate.strength);
+      const chroma = Math.round(estimate.chroma);
+      setNoiseEstimate(estimate);
+      setDenoiseStrength(Math.max(1, strength));
+      setAdjustments((prev: Adjustments) => ({
+        ...prev,
+        [LowLightAdjustment.DenoiseStrength]: strength,
+        [LowLightAdjustment.DenoiseChroma]: chroma,
+      }));
+    } catch (err) {
+      toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${err})`);
+    } finally {
+      setIsEstimating(false);
+    }
   };
 
   const handleDeepClean = async () => {
@@ -151,36 +134,27 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
         </div>
         {adjustments.denoiseEnabled && (
           <div className="space-y-2 pt-2 border-t border-bg-secondary">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Zap size={14} className={adjustments.denoiseAutoIso ? 'text-primary' : 'text-text-secondary'} />
-                <label className="text-sm font-medium text-text-primary">
-                  {t('editor.adjustments.lowlight.autoIso')}
-                </label>
-              </div>
-              <Switch
-                id="denoise-auto-iso-toggle"
-                label=""
-                checked={!!adjustments.denoiseAutoIso}
-                onChange={(checked: boolean) => handleCheckedChange(LowLightAdjustment.DenoiseAutoIso, checked)}
-              />
-            </div>
-
-            {adjustments.denoiseAutoIso && (
+            <button
+              className={`w-full py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
+                isEstimating
+                  ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
+                  : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
+              }`}
+              onClick={handleEstimateNoise}
+              disabled={isEstimating}
+            >
+              {isEstimating
+                ? t('editor.adjustments.lowlight.estimating')
+                : t('editor.adjustments.lowlight.estimate')}
+            </button>
+            {noiseEstimate && (
               <div className="p-2 bg-bg-secondary rounded text-xs text-text-secondary">
-                {iso > 0 ? (
-                  <span>
-                    {t('editor.adjustments.lowlight.isoMultiplier', {
-                      iso,
-                      multiplier: targetMultiplier.toFixed(2),
-                    })}
-                  </span>
-                ) : (
-                  <span>{t('editor.adjustments.lowlight.noIso')}</span>
-                )}
+                {t('editor.adjustments.lowlight.measured', {
+                  strength: Math.round(noiseEstimate.strength),
+                  chroma: Math.round(noiseEstimate.chroma),
+                })}
               </div>
             )}
-
             <Slider
               label={t('editor.adjustments.lowlight.strength')}
               max={100}
@@ -214,14 +188,18 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
 
       <div className="p-2 bg-bg-tertiary rounded-md">
         <div className="flex items-center gap-2 mb-2">
-          <Zap size={14} className={iso > 0 ? 'text-primary' : 'text-text-secondary'} />
+          <Zap size={14} className={noiseEstimate ? 'text-primary' : 'text-text-secondary'} />
           <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.lowlight.deepClean')}</p>
         </div>
         <div className="p-2 mb-2 bg-bg-secondary rounded text-xs text-text-secondary">
-          {iso > 0 ? (
-            <span>{t('editor.adjustments.lowlight.isoDetected', { iso, strength: suggestedStrength })}</span>
+          {noiseEstimate ? (
+            <span>
+              {t('editor.adjustments.lowlight.suggestedStrength', {
+                strength: Math.round(noiseEstimate.strength),
+              })}
+            </span>
           ) : (
-            <span>{t('editor.adjustments.lowlight.noIso')}</span>
+            <span>{t('editor.adjustments.lowlight.noMeasurement')}</span>
           )}
         </div>
         <Slider
