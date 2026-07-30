@@ -3787,9 +3787,10 @@ mod tests {
         }
     }
 
-    /// Blurs past the old 200 px UI rail must estimate correctly: the
-    /// estimator searches up to 250 working px and reports unclamped
-    /// lengths, and the raised 500 px cap applies them.
+    /// Blurs past the 200 px UI rail must still estimate correctly: the
+    /// estimator searches up to 250 working px and the backend reports the
+    /// unclamped length (the log line shows it) even though the UI caps
+    /// applied values at 200 — recoveries above that only amplify ringing.
     #[test]
     fn test_estimate_blur_beyond_old_rail() {
         let scene = synthetic_scene(1024, 1024);
