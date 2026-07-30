@@ -1790,8 +1790,6 @@ function SettingsPanel({
           title={t('editor.ai.settings.generativeReplaceTitle')}
           isOpen={collapsibleState.generative}
           onToggle={() => handleToggleSection('generative')}
-          canToggleVisibility={false}
-          isContentVisible={true}
         >
           <div className="space-y-4 pt-2">
             <Text variant={TextVariants.small}>
@@ -1830,8 +1828,6 @@ function SettingsPanel({
         }
         isOpen={collapsibleState.properties}
         onToggle={() => handleToggleSection('properties')}
-        canToggleVisibility={false}
-        isContentVisible={true}
       >
         <div className="space-y-4 pt-2">
           {!isCloneOrHealPatch && (

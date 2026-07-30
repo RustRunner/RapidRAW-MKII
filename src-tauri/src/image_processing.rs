@@ -2043,13 +2043,11 @@ fn get_global_adjustments_from_json(
     is_raw: bool,
     tonemapper_override: Option<u32>,
 ) -> GlobalAdjustments {
-    let visibility = js_adjustments.get("sectionVisibility");
-    let is_visible = |section: &str| -> bool {
-        visibility
-            .and_then(|v| v.get(section))
-            .and_then(|s| s.as_bool())
-            .unwrap_or(true)
-    };
+    // The section-visibility mechanism was removed along with its UI toggle;
+    // keys still present in old sidecars are deliberately ignored so no
+    // section can sit invisibly disabled with no control left to re-enable
+    // it. The is_visible plumbing stays until the call sites are folded in.
+    let is_visible = |_section: &str| -> bool { true };
 
     let get_val = |section: &str, key: &str, scale: f32, default: Option<f64>| -> f32 {
         if is_visible(section) {
@@ -2350,13 +2348,9 @@ fn get_mask_adjustments_from_json(adj: &serde_json::Value) -> MaskAdjustments {
         return MaskAdjustments::default();
     }
 
-    let visibility = adj.get("sectionVisibility");
-    let is_visible = |section: &str| -> bool {
-        visibility
-            .and_then(|v| v.get(section))
-            .and_then(|s| s.as_bool())
-            .unwrap_or(true)
-    };
+    // Same as get_global_adjustments_from_json: visibility keys in old
+    // sidecars are deliberately ignored now that the toggle is gone.
+    let is_visible = |_section: &str| -> bool { true };
 
     let get_val = |section: &str, key: &str, scale: f32| -> f32 {
         if is_visible(section) {
@@ -3423,11 +3417,6 @@ pub fn auto_results_to_json(results: &AutoAdjustmentResults) -> serde_json::Valu
         "centré": results.centre,
 
         "dehaze": results.dehaze,
-        "sectionVisibility": {
-            "basic": true,
-            "color": true,
-            "effects": true
-        },
         "whites": results.whites,
         "blacks": results.blacks
     })

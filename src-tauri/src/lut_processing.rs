@@ -642,8 +642,7 @@ pub fn generate_lut_previews(
     let tm_override = resolve_tonemapper_override_from_handle(&app_handle, is_raw);
     let lut_json = serde_json::json!({
         "lutPath": "preview",
-        "lutIntensity": 100,
-        "sectionVisibility": { "effects": true }
+        "lutIntensity": 100
     });
     let adjustments = get_all_adjustments_from_json(&lut_json, is_raw, tm_override);
     let transform_hash = calculate_transform_hash(&base_json);

@@ -1815,10 +1815,6 @@
       "zoomLabel": "확대/축소",
       "zoomLabelReset": "확대/축소 초기화"
     },
-    "collapsibleSection": {
-      "disableSection": "섹션 비활성화",
-      "enableSection": "섹션 활성화"
-    },
     "colorWheel": {
       "hue": "색조",
       "hueAbbreviation": "H:",

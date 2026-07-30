@@ -14,7 +14,7 @@ import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import Waveform from '../editor/Waveform';
 import Resizer from '../../ui/Resizer';
-import { Adjustments, SectionVisibility, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
+import { Adjustments, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR, Orientation } from '../../ui/AppProperties';
 import Text from '../../ui/Text';
@@ -96,19 +96,6 @@ export default function Controls() {
     [setUI],
   );
 
-  const handleToggleVisibility = (sectionName: string) => {
-    setAdjustments((prev: Adjustments) => {
-      const currentVisibility: SectionVisibility = prev.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility;
-      return {
-        ...prev,
-        sectionVisibility: {
-          ...currentVisibility,
-          [sectionName]: !currentVisibility[sectionName],
-        },
-      };
-    });
-  };
-
   const handleResetAdjustments = () => {
     setAdjustments((prev: Adjustments) => ({
       ...prev,
@@ -118,7 +105,6 @@ export default function Controls() {
           acc[key] = INITIAL_ADJUSTMENTS[key as keyof Adjustments];
           return acc;
         }, {}),
-      sectionVisibility: { ...INITIAL_ADJUSTMENTS.sectionVisibility },
     }));
   };
 
@@ -161,10 +147,6 @@ export default function Controls() {
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...copiedSectionAdjustments.values,
-        sectionVisibility: {
-          ...(prev.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility),
-          [sectionName]: true,
-        },
       }));
     };
 
@@ -176,10 +158,6 @@ export default function Controls() {
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...resetValues,
-        sectionVisibility: {
-          ...(prev.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility),
-          [sectionName]: true,
-        },
       }));
     };
 
@@ -286,16 +264,13 @@ export default function Controls() {
           }[sectionName];
 
           const title = t(`editor.adjustments.sections.${sectionName}`);
-          const sectionVisibility = adjustments.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility;
 
           return (
             <div className="shrink-0 group" key={sectionName}>
               <CollapsibleSection
-                isContentVisible={sectionVisibility[sectionName as keyof SectionVisibility]}
                 isOpen={collapsibleSectionsState[sectionName as keyof typeof collapsibleSectionsState]}
                 onContextMenu={(e: any) => handleSectionContextMenu(e, sectionName)}
                 onToggle={() => handleToggleSection(sectionName)}
-                onToggleVisibility={() => handleToggleVisibility(sectionName)}
                 title={title}
               >
                 <SectionComponent

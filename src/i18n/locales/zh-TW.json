@@ -1815,10 +1815,6 @@
       "zoomLabel": "縮放",
       "zoomLabelReset": "重置縮放"
     },
-    "collapsibleSection": {
-      "disableSection": "停用部分",
-      "enableSection": "啟用部分"
-    },
     "colorWheel": {
       "hue": "色相",
       "hueAbbreviation": "H:",

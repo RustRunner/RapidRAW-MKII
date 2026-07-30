@@ -267,7 +267,6 @@ export interface Adjustments {
   orientationSteps: number;
   rotation: number;
   saturation: number;
-  sectionVisibility: SectionVisibility;
   shadows: number;
   sharpness: number;
   sharpnessThreshold: number;
@@ -372,7 +371,6 @@ export interface MaskAdjustments {
   id?: string;
   lumaNoiseReduction: number;
   saturation: number;
-  sectionVisibility: SectionVisibility;
   shadows: number;
   sharpness: number;
   sharpnessThreshold: number;
@@ -403,18 +401,6 @@ export interface Sections {
   lowlight: Array<string>;
   blurRecovery: Array<string>;
   upscale: Array<string>;
-}
-
-export interface SectionVisibility {
-  [index: string]: boolean;
-  basic: boolean;
-  curves: boolean;
-  color: boolean;
-  details: boolean;
-  effects: boolean;
-  lowlight: boolean;
-  blurRecovery: boolean;
-  upscale: boolean;
 }
 
 export const COLOR_LABELS: Array<Color> = [
@@ -514,16 +500,6 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
   hue: 0,
   lumaNoiseReduction: 0,
   saturation: 0,
-  sectionVisibility: {
-    basic: true,
-    curves: true,
-    color: true,
-    details: true,
-    effects: true,
-    lowlight: true,
-    blurRecovery: true,
-    upscale: true,
-  },
   shadows: 0,
   sharpness: 0,
   sharpnessThreshold: 15,
@@ -629,16 +605,6 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   orientationSteps: 0,
   rotation: 0,
   saturation: 0,
-  sectionVisibility: {
-    basic: true,
-    curves: true,
-    color: true,
-    details: true,
-    effects: true,
-    lowlight: true,
-    blurRecovery: true,
-    upscale: true,
-  },
   shadows: 0,
   sharpness: 0,
   sharpnessThreshold: 15,
@@ -729,10 +695,6 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
           ? deepCloneParametric(containerAdjustments.parametricCurve)
           : getDefaultParametricCurve(),
         curveMode: containerAdjustments.curveMode || INITIAL_MASK_ADJUSTMENTS.curveMode,
-        sectionVisibility: {
-          ...INITIAL_MASK_ADJUSTMENTS.sectionVisibility,
-          ...(containerAdjustments.sectionVisibility || {}),
-        },
         sharpnessThreshold: containerAdjustments.sharpnessThreshold ?? INITIAL_MASK_ADJUSTMENTS.sharpnessThreshold,
       },
       subMasks: normalizedSubMasks,
@@ -807,10 +769,6 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     curveMode: loadedAdjustments.curveMode || INITIAL_ADJUSTMENTS.curveMode,
     masks: normalizedMasks,
     aiPatches: normalizedAiPatches,
-    sectionVisibility: {
-      ...INITIAL_ADJUSTMENTS.sectionVisibility,
-      ...(loadedAdjustments.sectionVisibility || {}),
-    },
     sharpnessThreshold: loadedAdjustments.sharpnessThreshold ?? INITIAL_ADJUSTMENTS.sharpnessThreshold,
   };
 };

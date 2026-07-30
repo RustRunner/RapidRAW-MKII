@@ -1885,10 +1885,6 @@
       "zoomLabel": "Przybliżenie",
       "zoomLabelReset": "Zresetuj powiększenie"
     },
-    "collapsibleSection": {
-      "disableSection": "Wyłącz sekcję",
-      "enableSection": "Włącz sekcję"
-    },
     "colorWheel": {
       "hue": "Odcień",
       "hueAbbreviation": "H:",

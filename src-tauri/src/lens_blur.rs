@@ -16,13 +16,7 @@ pub fn apply_lens_blur<'a>(
     image: Cow<'a, DynamicImage>,
     adjustments: &serde_json::Value,
 ) -> Cow<'a, DynamicImage> {
-    let effects_visible = adjustments
-        .get("sectionVisibility")
-        .and_then(|v| v.get("effects"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(true);
-
-    if !adjustments["lensBlurEnabled"].as_bool().unwrap_or(false) || !effects_visible {
+    if !adjustments["lensBlurEnabled"].as_bool().unwrap_or(false) {
         return image;
     }
 

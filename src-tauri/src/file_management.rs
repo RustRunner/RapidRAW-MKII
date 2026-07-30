@@ -2777,21 +2777,7 @@ pub async fn apply_auto_adjustments_to_paths(
                     auto_adjustments_json.as_object(),
                 ) {
                     for (k, v) in auto_map {
-                        if k == "sectionVisibility" {
-                            if let Some(existing_vis_val) = existing_map.get_mut(k) {
-                                if let (Some(existing_vis), Some(auto_vis)) =
-                                    (existing_vis_val.as_object_mut(), v.as_object())
-                                {
-                                    for (vis_k, vis_v) in auto_vis {
-                                        existing_vis.insert(vis_k.clone(), vis_v.clone());
-                                    }
-                                }
-                            } else {
-                                existing_map.insert(k.clone(), v.clone());
-                            }
-                        } else {
-                            existing_map.insert(k.clone(), v.clone());
-                        }
+                        existing_map.insert(k.clone(), v.clone());
                     }
                 }
 

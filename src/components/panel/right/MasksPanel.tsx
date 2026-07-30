@@ -1349,7 +1349,6 @@ function ContainerRow({
               label: item.name || item.preset.name,
               onClick: () => {
                 const newAdj = { ...container.adjustments, ...(item.adjustments || item.preset.adjustments) };
-                newAdj.sectionVisibility = { ...container.adjustments.sectionVisibility, ...newAdj.sectionVisibility };
                 updateContainer(container.id, { adjustments: newAdj });
               },
             };
@@ -1866,10 +1865,6 @@ function SettingsPanel({
     const newMaskAdjustments = {
       ...currentAdjustments,
       ...presetAdjustments,
-      sectionVisibility: {
-        ...(currentAdjustments.sectionVisibility || INITIAL_MASK_ADJUSTMENTS.sectionVisibility),
-        ...(presetAdjustments.sectionVisibility || {}),
-      },
     };
     updateContainer(container.id, { adjustments: newMaskAdjustments });
   };
@@ -1960,15 +1955,6 @@ function SettingsPanel({
     });
   };
 
-  const handleToggleVisibility = (sectionName: string) => {
-    if (!isActive) return;
-    const cur = container.adjustments;
-    const vis = cur.sectionVisibility || INITIAL_MASK_ADJUSTMENTS.sectionVisibility;
-    updateContainer(container.id, {
-      adjustments: { ...cur, sectionVisibility: { ...vis, [sectionName]: !vis[sectionName] } },
-    });
-  };
-
   const handleSectionContextMenu = (event: any, sectionName: string) => {
     if (!isActive) return;
     event.preventDefault();
@@ -1993,10 +1979,6 @@ function SettingsPanel({
       setMaskContainerAdjustments((prev: any) => ({
         ...prev,
         ...copiedSectionAdjustments.values,
-        sectionVisibility: {
-          ...(prev.sectionVisibility || INITIAL_MASK_ADJUSTMENTS.sectionVisibility),
-          [sectionName]: true,
-        },
       }));
     };
 
@@ -2010,10 +1992,6 @@ function SettingsPanel({
       setMaskContainerAdjustments((prev: any) => ({
         ...prev,
         ...resetValues,
-        sectionVisibility: {
-          ...(prev.sectionVisibility || INITIAL_MASK_ADJUSTMENTS.sectionVisibility),
-          [sectionName]: true,
-        },
       }));
     };
 
@@ -2039,9 +2017,6 @@ function SettingsPanel({
       },
     ]);
   };
-
-  const sectionVisibility =
-    displayContainer.adjustments.sectionVisibility || INITIAL_MASK_ADJUSTMENTS.sectionVisibility;
 
   return (
     <div
@@ -2069,8 +2044,6 @@ function SettingsPanel({
             });
           }
         }}
-        canToggleVisibility={false}
-        isContentVisible={true}
       >
         <div className="space-y-4 pt-2">
           <Switch
@@ -2193,9 +2166,7 @@ function SettingsPanel({
               key={sectionName}
               title={title}
               isOpen={collapsibleState[sectionName]}
-              isContentVisible={sectionVisibility[sectionName]}
               onToggle={() => handleToggleSection(sectionName)}
-              onToggleVisibility={() => handleToggleVisibility(sectionName)}
               onContextMenu={(e: any) => handleSectionContextMenu(e, sectionName)}
             >
               <SectionComponent

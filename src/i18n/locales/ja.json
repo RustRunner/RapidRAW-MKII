@@ -1815,10 +1815,6 @@
       "zoomLabel": "ズーム",
       "zoomLabelReset": "ズームをリセット"
     },
-    "collapsibleSection": {
-      "disableSection": "セクションを無効化",
-      "enableSection": "セクションを有効化"
-    },
     "colorWheel": {
       "hue": "色相",
       "hueAbbreviation": "H:",

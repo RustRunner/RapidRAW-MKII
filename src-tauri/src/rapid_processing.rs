@@ -2347,12 +2347,7 @@ fn get_rapid_gpu() -> Option<&'static std::sync::Mutex<RapidGpu>> {
 /// Parses blur-recovery params from the frontend adjustment JSON.
 /// Returns None when the feature is off or its section is hidden.
 pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams> {
-    let visible = adjustments
-        .get("sectionVisibility")
-        .and_then(|v| v.get("blurRecovery"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(true);
-    if !visible || !adjustments["rapidEnabled"].as_bool().unwrap_or(false) {
+    if !adjustments["rapidEnabled"].as_bool().unwrap_or(false) {
         return None;
     }
     let blur_type = match adjustments["rapidBlurType"].as_str().unwrap_or("motion") {
@@ -2381,8 +2376,7 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
     })
 }
 
-/// True when blur recovery would actually run for these adjustments
-/// (enabled and its section not hidden).
+/// True when blur recovery would actually run for these adjustments.
 pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
     parse_rapid_params(adjustments).is_some()
 }

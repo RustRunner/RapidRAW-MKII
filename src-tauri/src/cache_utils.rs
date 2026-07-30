@@ -30,13 +30,7 @@ pub fn calculate_thumbnail_base_hash(adjustments: &serde_json::Value) -> u64 {
 
     calculate_geometry_hash(adjustments).hash(&mut hasher);
 
-    let effects_visible = adjustments
-        .get("sectionVisibility")
-        .and_then(|v| v.get("effects"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(true);
-
-    let blur_enabled = effects_visible && adjustments["lensBlurEnabled"].as_bool().unwrap_or(false);
+    let blur_enabled = adjustments["lensBlurEnabled"].as_bool().unwrap_or(false);
     blur_enabled.hash(&mut hasher);
 
     if blur_enabled {
@@ -119,13 +113,7 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
     let flip_v = adjustments["flipVertical"].as_bool().unwrap_or(false);
     flip_v.hash(&mut hasher);
 
-    let effects_visible = adjustments
-        .get("sectionVisibility")
-        .and_then(|v| v.get("effects"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(true);
-
-    let blur_enabled = effects_visible && adjustments["lensBlurEnabled"].as_bool().unwrap_or(false);
+    let blur_enabled = adjustments["lensBlurEnabled"].as_bool().unwrap_or(false);
     blur_enabled.hash(&mut hasher);
     if blur_enabled {
         if let Some(val) = adjustments.get("lensBlurAmount") {
@@ -154,12 +142,7 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
         }
     }
 
-    let blur_recovery_visible = adjustments
-        .get("sectionVisibility")
-        .and_then(|v| v.get("blurRecovery"))
-        .and_then(|s| s.as_bool())
-        .unwrap_or(true);
-    let rapid_enabled = blur_recovery_visible && adjustments["rapidEnabled"].as_bool().unwrap_or(false);
+    let rapid_enabled = adjustments["rapidEnabled"].as_bool().unwrap_or(false);
     rapid_enabled.hash(&mut hasher);
     if rapid_enabled {
         for key in [

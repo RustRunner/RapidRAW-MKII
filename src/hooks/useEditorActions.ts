@@ -75,7 +75,6 @@ export function useEditorActions() {
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...autoAdjustments,
-        sectionVisibility: { ...prev.sectionVisibility, ...autoAdjustments.sectionVisibility },
       }));
     } catch (err) {
       toast.error(`Failed to apply auto adjustments: ${err}`);
@@ -96,7 +95,6 @@ export function useEditorActions() {
           lutName: name,
           lutSize: result.size,
           lutIntensity: 100,
-          sectionVisibility: { ...(prev.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility), effects: true },
         }));
       } catch (err) {
         toast.error(`Failed to load LUT: ${err}`);

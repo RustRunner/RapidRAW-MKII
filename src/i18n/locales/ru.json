@@ -1885,10 +1885,6 @@
       "zoomLabel": "Масштаб",
       "zoomLabelReset": "Сбросить масштаб"
     },
-    "collapsibleSection": {
-      "disableSection": "Отключить блок",
-      "enableSection": "Включить блок"
-    },
     "colorWheel": {
       "hue": "Цветовой тон",
       "hueAbbreviation": "Тон:",

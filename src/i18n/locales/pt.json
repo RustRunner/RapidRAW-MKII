@@ -1851,10 +1851,6 @@
       "zoomLabel": "Zoom",
       "zoomLabelReset": "Redefinir Zoom"
     },
-    "collapsibleSection": {
-      "disableSection": "Desativar Seção",
-      "enableSection": "Ativar Seção"
-    },
     "colorWheel": {
       "hue": "Matiz",
       "hueAbbreviation": "M:",
