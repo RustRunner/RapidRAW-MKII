@@ -1641,19 +1641,21 @@ fn apply_denoise(
     let edge_factor = mix(1.0, 1.0 - edge_preserve, detail / 100.0);
 
     var new_luma = center_luma;
-    let scaled_luma_strength = effective_strength * edge_factor;
+    // Strength scales the filter once (radius and base_spatial_sigma above)
+    // and the blend once; edge protection attenuates the blend only. The
+    // old curve multiplied sigma by strength/100 again on top of both,
+    // which collapsed the lower half of the slider to a no-op.
+    let luma_blend = (effective_strength / 100.0) * edge_factor;
 
-    if (scaled_luma_strength > 0.1) {
-        let luma_spatial_sigma = base_spatial_sigma * (scaled_luma_strength / 100.0);
+    if (luma_blend > 0.001) {
         let filtered_luma = bilateral_filter_luma(
             coord,
             center_luma,
-            luma_spatial_sigma,
+            base_spatial_sigma,
             range_sigma,
             radius,
             is_raw
         );
-        let luma_blend = scaled_luma_strength / 100.0;
         new_luma = mix(center_luma, filtered_luma, luma_blend);
     }
 

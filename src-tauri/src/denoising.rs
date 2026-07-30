@@ -1239,6 +1239,107 @@ mod tests {
         }
     }
 
+    /// CPU mirror of the shader's apply_denoise luma path — same radius,
+    /// sigma, range, Sobel edge factor, and blend formulas; keep in sync
+    /// with shader.wgsl (whose WGSL side is covered by the shader-compile
+    /// test). Exists to pin the strength response curve.
+    fn mirror_live_denoise_luma(
+        plane: &[f32],
+        w: usize,
+        h: usize,
+        strength: f32,
+        detail: f32,
+    ) -> Vec<f32> {
+        let s = strength.min(100.0);
+        let radius = (1.0 + 3.0 * s / 100.0) as i32;
+        let spatial_sigma = 0.5 + 2.5 * s / 100.0;
+        let range_sigma = 0.02 + 0.13 * (1.0 - detail / 100.0);
+        let at = |x: i32, y: i32| -> f32 {
+            plane[(y.clamp(0, h as i32 - 1) as usize) * w + x.clamp(0, w as i32 - 1) as usize]
+        };
+        let mut out = vec![0.0f32; plane.len()];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let center = at(x, y);
+                let sobel_x = [-1.0f32, 0.0, 1.0, -2.0, 0.0, 2.0, -1.0, 0.0, 1.0];
+                let sobel_y = [1.0f32, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0];
+                let (mut gx, mut gy) = (0.0f32, 0.0f32);
+                let mut idx = 0;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let l = at(x + dx, y + dy);
+                        gx += l * sobel_x[idx];
+                        gy += l * sobel_y[idx];
+                        idx += 1;
+                    }
+                }
+                let edge = (gx * gx + gy * gy).sqrt();
+                let t = ((edge - 0.05) / 0.25).clamp(0.0, 1.0);
+                let edge_preserve = t * t * (3.0 - 2.0 * t);
+                let blend = (s / 100.0) * (1.0 - edge_preserve * (detail / 100.0));
+
+                let mut num = 0.0f32;
+                let mut den = 0.0f32;
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let sample = at(x + dx, y + dy);
+                        let w_s = (-((dx * dx + dy * dy) as f32)
+                            / (2.0 * spatial_sigma * spatial_sigma))
+                            .exp();
+                        let diff = sample - center;
+                        let w_r = (-(diff * diff) / (2.0 * range_sigma * range_sigma)).exp();
+                        num += sample * w_s * w_r;
+                        den += w_s * w_r;
+                    }
+                }
+                let filtered = num / den.max(0.0001);
+                out[(y as usize) * w + x as usize] = center + (filtered - center) * blend;
+            }
+        }
+        out
+    }
+
+    /// The strength slider must do visible work in its middle range: the
+    /// old curve scaled the spatial sigma by strength twice over and mid
+    /// slider was a near no-op. Measured as RMS error against the clean
+    /// ground truth.
+    #[test]
+    fn test_live_denoise_curve_mid_strength() {
+        let (w, h) = (256usize, 256usize);
+        let scene = smooth_scene(w as u32, h as u32);
+        let noisy = with_noise(&scene, 0.02, false);
+        let plane =
+            |img: &image::RgbImage| -> Vec<f32> { img.pixels().map(|p| p[0] as f32 / 255.0).collect() };
+        let clean = plane(&scene);
+        let noisy_p = plane(&noisy);
+
+        let rms = |a: &[f32]| -> f32 {
+            let mut acc = 0.0f64;
+            let mut n = 0u64;
+            for y in 8..h - 8 {
+                for x in 8..w - 8 {
+                    let d = (a[y * w + x] - clean[y * w + x]) as f64;
+                    acc += d * d;
+                    n += 1;
+                }
+            }
+            ((acc / n as f64) as f32).sqrt()
+        };
+
+        let base = rms(&noisy_p);
+        let zero = rms(&mirror_live_denoise_luma(&noisy_p, w, h, 0.0, 50.0));
+        let mid = rms(&mirror_live_denoise_luma(&noisy_p, w, h, 50.0, 50.0));
+        let full = rms(&mirror_live_denoise_luma(&noisy_p, w, h, 100.0, 50.0));
+        eprintln!(
+            "live denoise curve: rms base {base:.4}, S50 {mid:.4} ({:.0}% cut), S100 {full:.4} ({:.0}% cut)",
+            100.0 * (1.0 - mid / base),
+            100.0 * (1.0 - full / base)
+        );
+        assert!((zero - base).abs() < 1e-4, "strength 0 must be identity");
+        assert!(mid < 0.75 * base, "mid strength barely denoises: {mid:.4} vs base {base:.4}");
+        assert!(full < mid, "strength response not monotone");
+    }
+
     #[test]
     fn test_estimate_noise_chroma_separation() {
         let scene = smooth_scene(512, 512);
