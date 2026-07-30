@@ -2149,6 +2149,7 @@ pub fn run() {
             inpainting::invoke_generative_replace_with_mask_def,
             inpainting::generate_manual_cleanup_patch,
             denoising::apply_denoising,
+            denoising::estimate_noise_level,
             denoising::batch_denoise_images,
             denoising::save_denoised_image,
             upscaling::upscale_and_save_image,

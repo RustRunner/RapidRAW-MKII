@@ -244,6 +244,144 @@ pub async fn save_denoised_image(
     Ok(output_path.to_string_lossy().to_string())
 }
 
+// ============================================================================
+// Single-image noise estimation
+// ============================================================================
+
+/// Result of single-image noise estimation. Sigmas are in [0, 1] pixel units
+/// measured at full resolution; `strength`/`chroma` are those sigmas mapped
+/// onto the denoise sliders' 0-100 range.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct NoiseEstimate {
+    pub sigma_luma: f32,
+    pub sigma_chroma: f32,
+    pub strength: f32,
+    pub chroma: f32,
+}
+
+/// Slider units per unit of measured sigma: a clean base-ISO frame
+/// (sigma ~0.004) suggests a light touch (~20) and a heavily noisy frame
+/// (sigma ~0.022) reaches the top of the scale. Anchored by the
+/// injected-noise calibration test.
+const NOISE_SIGMA_TO_SLIDER: f32 = 4500.0;
+
+/// Estimate sensor noise from the image itself (Immerkaer's method made
+/// robust): the 3x3 second-difference operator `[1 -2 1; -2 4 -2; 1 -2 1]`
+/// annihilates constant and linear image structure, leaving noise plus
+/// sparse edge and texture responses. The median of |response| ignores that
+/// sparse tail, and dividing by 0.6745 x 6 (the Gaussian median-to-sigma
+/// factor times the operator's white-noise gain) recovers sigma. Luma uses
+/// the shader's Rec. 709 weights and Cb/Cr its chroma weights, so the
+/// mapped slider values act in the same units the live denoiser filters.
+/// Full resolution only - downscaling averages away the noise being
+/// measured. Demosaiced raws carry spatially correlated noise that this
+/// under-reads slightly, and heavy fine texture over-reads; the suggestion
+/// is a starting point, the sliders stay authoritative.
+pub fn estimate_noise(image: &DynamicImage) -> NoiseEstimate {
+    let rgb = image.to_rgb32f();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    if w < 3 || h < 3 {
+        return NoiseEstimate { sigma_luma: 0.0, sigma_chroma: 0.0, strength: 0.0, chroma: 0.0 };
+    }
+    let raw = rgb.as_raw();
+
+    let ycbcr = |x: usize, y: usize| -> (f32, f32, f32) {
+        let i = (y * w + x) * 3;
+        let (r, g, b) = (raw[i], raw[i + 1], raw[i + 2]);
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        (luma, (b - luma) * 0.565, (r - luma) * 0.713)
+    };
+
+    // |response| per channel, sampled on a stride-2 grid of interior pixels.
+    const KERNEL: [[f32; 3]; 3] = [[1.0, -2.0, 1.0], [-2.0, 4.0, -2.0], [1.0, -2.0, 1.0]];
+    let rows: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = (1..h - 1)
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|y| {
+            let mut ry = Vec::with_capacity(w / 2);
+            let mut rcb = Vec::with_capacity(w / 2);
+            let mut rcr = Vec::with_capacity(w / 2);
+            let mut x = 1;
+            while x < w - 1 {
+                let mut acc = (0.0f32, 0.0f32, 0.0f32);
+                for (ky, kernel_row) in KERNEL.iter().enumerate() {
+                    for (kx, wgt) in kernel_row.iter().enumerate() {
+                        let (l, cb, cr) = ycbcr(x + kx - 1, y + ky - 1);
+                        acc.0 += wgt * l;
+                        acc.1 += wgt * cb;
+                        acc.2 += wgt * cr;
+                    }
+                }
+                ry.push(acc.0.abs());
+                rcb.push(acc.1.abs());
+                rcr.push(acc.2.abs());
+                x += 2;
+            }
+            (ry, rcb, rcr)
+        })
+        .collect();
+
+    let mut vy = Vec::new();
+    let mut vcb = Vec::new();
+    let mut vcr = Vec::new();
+    for (a, b, c) in rows {
+        vy.extend(a);
+        vcb.extend(b);
+        vcr.extend(c);
+    }
+    let median_of = |mut v: Vec<f32>| -> f32 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        let mid = v.len() / 2;
+        let (_, m, _) = v.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        *m
+    };
+
+    // 0.6745 = median of |N(0,1)|; 6 = the operator's white-noise gain
+    // (L2 norm of its coefficients).
+    const MEDIAN_TO_SIGMA: f32 = 0.6745 * 6.0;
+    let sigma_luma = median_of(vy) / MEDIAN_TO_SIGMA;
+    let sigma_chroma = median_of(vcb).max(median_of(vcr)) / MEDIAN_TO_SIGMA;
+
+    NoiseEstimate {
+        sigma_luma,
+        sigma_chroma,
+        strength: (sigma_luma * NOISE_SIGMA_TO_SLIDER).clamp(0.0, 100.0),
+        chroma: (sigma_chroma * NOISE_SIGMA_TO_SLIDER).clamp(0.0, 100.0),
+    }
+}
+
+/// Tauri command: measure the loaded image's noise floor and map it onto
+/// the denoise sliders; the frontend applies the suggestion to both the
+/// live denoiser and Deep Clean's default.
+#[tauri::command]
+pub async fn estimate_noise_level(
+    state: tauri::State<'_, AppState>,
+) -> Result<NoiseEstimate, String> {
+    let image = {
+        let guard = state.original_image.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|loaded| loaded.image.clone())
+            .ok_or("No image loaded")?
+    };
+    let start = std::time::Instant::now();
+    let estimate = tokio::task::spawn_blocking(move || estimate_noise(&image))
+        .await
+        .map_err(|e| format!("Noise estimation task failed: {e}"))?;
+    log::info!(
+        "DENOISE: noise estimate σy={:.4} σc={:.4} → strength {:.0}, chroma {:.0} in {:?}",
+        estimate.sigma_luma,
+        estimate.sigma_chroma,
+        estimate.strength,
+        estimate.chroma,
+        start.elapsed()
+    );
+    Ok(estimate)
+}
+
 fn run_bm3d(
     rgb_img: &Rgb32FImage,
     intensity: f32,
@@ -1014,4 +1152,116 @@ fn gaussian_blur_1ch(data: &[f32], width: usize, height: usize, sigma: f32) -> V
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Smooth synthetic scene - gradients and broad blobs only, so the
+    /// second-difference operator sees (almost) nothing but injected noise.
+    /// Fine texture reads as noise to any single-image estimator, so
+    /// calibration needs a clean floor.
+    fn smooth_scene(w: u32, h: u32) -> image::RgbImage {
+        image::RgbImage::from_fn(w, h, |x, y| {
+            let v = 0.4
+                + 0.12 * (x as f32 / 173.0).sin()
+                + 0.12 * (y as f32 / 131.0).cos()
+                + 0.1 * (x as f32 / w as f32);
+            let b = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            image::Rgb([b, b, b])
+        })
+    }
+
+    fn hash2(x: u32, y: u32) -> u32 {
+        let mut h = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x7FEB_352D);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x846C_A68B);
+        h ^= h >> 16;
+        h
+    }
+
+    /// Deterministic approximately-Gaussian noise (sum of four uniforms),
+    /// gray (per_channel = false) or independent per channel.
+    fn with_noise(img: &image::RgbImage, sigma: f32, per_channel: bool) -> image::RgbImage {
+        let sample = |x: u32, y: u32, c: u32| -> f32 {
+            let mut n = 0.0f32;
+            for k in 0..4u32 {
+                let hx = x.wrapping_add(k.wrapping_mul(7919)).wrapping_add(c.wrapping_mul(104_729));
+                n += ((hash2(hx, y.wrapping_mul(31).wrapping_add(k)) & 0xffff) as f32 / 65535.0) - 0.5;
+            }
+            // Four uniform(-0.5, 0.5) samples: variance 4/12 -> normalize to
+            // unit sigma, then scale to the target in 8-bit units.
+            n / (4.0f32 / 12.0).sqrt() * sigma * 255.0
+        };
+        image::RgbImage::from_fn(img.width(), img.height(), |x, y| {
+            let p = img.get_pixel(x, y);
+            let px: Vec<u8> = (0..3)
+                .map(|c| {
+                    let noise = sample(x, y, if per_channel { c } else { 0 });
+                    (p[c as usize] as f32 + noise).clamp(0.0, 255.0).round() as u8
+                })
+                .collect();
+            image::Rgb([px[0], px[1], px[2]])
+        })
+    }
+
+    #[test]
+    fn test_estimate_noise_calibration() {
+        let scene = smooth_scene(512, 512);
+
+        let clean = estimate_noise(&DynamicImage::ImageRgb8(scene.clone()));
+        let mild = estimate_noise(&DynamicImage::ImageRgb8(with_noise(&scene, 0.005, false)));
+        let heavy = estimate_noise(&DynamicImage::ImageRgb8(with_noise(&scene, 0.02, false)));
+        eprintln!(
+            "noise calibration: clean σy={:.4}, mild σy={:.4} (true 0.005), heavy σy={:.4} (true 0.02); strengths {:.0}/{:.0}/{:.0}",
+            clean.sigma_luma, mild.sigma_luma, heavy.sigma_luma,
+            clean.strength, mild.strength, heavy.strength
+        );
+
+        // Clean floor: only quantization (~0.0011) plus scene residual.
+        assert!(clean.sigma_luma < 0.004, "clean floor too high: {}", clean.sigma_luma);
+        assert!(
+            (mild.sigma_luma - 0.005).abs() <= 0.0025,
+            "mild sigma off: {} vs 0.005",
+            mild.sigma_luma
+        );
+        assert!(
+            (heavy.sigma_luma - 0.02).abs() <= 0.005,
+            "heavy sigma off: {} vs 0.02",
+            heavy.sigma_luma
+        );
+        assert!(clean.strength < mild.strength && mild.strength < heavy.strength);
+        for e in [clean, mild, heavy] {
+            assert!((0.0..=100.0).contains(&e.strength) && (0.0..=100.0).contains(&e.chroma));
+        }
+    }
+
+    #[test]
+    fn test_estimate_noise_chroma_separation() {
+        let scene = smooth_scene(512, 512);
+
+        // Gray noise (same value in all channels) has no chroma component.
+        let gray = estimate_noise(&DynamicImage::ImageRgb8(with_noise(&scene, 0.02, false)));
+        // Independent per-channel noise does.
+        let color = estimate_noise(&DynamicImage::ImageRgb8(with_noise(&scene, 0.02, true)));
+        eprintln!(
+            "chroma separation: gray σc={:.4} (σy={:.4}), color σc={:.4}",
+            gray.sigma_chroma, gray.sigma_luma, color.sigma_chroma
+        );
+        assert!(
+            gray.sigma_chroma < 0.2 * gray.sigma_luma,
+            "gray noise leaked into chroma: {} vs {}",
+            gray.sigma_chroma,
+            gray.sigma_luma
+        );
+        assert!(
+            color.sigma_chroma > 3.0 * gray.sigma_chroma,
+            "per-channel noise not seen in chroma: {} vs {}",
+            color.sigma_chroma,
+            gray.sigma_chroma
+        );
+    }
 }
