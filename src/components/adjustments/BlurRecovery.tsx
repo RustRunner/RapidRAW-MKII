@@ -16,6 +16,7 @@ interface BlurEstimate {
   confidence: number;
   confident: boolean;
   hardness: number;
+  lambda: number;
 }
 
 interface BlurRecoveryPanelProps {
@@ -64,11 +65,13 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       const length = Math.min(200, Math.max(1, Math.round(estimate.length)));
       const angle = Math.min(180, Math.max(0, Math.round(estimate.angle)));
       const hardness = Math.min(100, Math.max(0, Math.round(100 * estimate.hardness)));
+      const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidLength]: length,
         [BlurRecoveryAdjustment.RapidAngle]: angle,
         [BlurRecoveryAdjustment.RapidHardness]: hardness,
+        [BlurRecoveryAdjustment.RapidLambda]: lambda,
       }));
       // Flash the angle overlay so the detected direction is visible.
       setEditor({ isBlurAngleAdjusting: true, blurOverlayAngle: angle });

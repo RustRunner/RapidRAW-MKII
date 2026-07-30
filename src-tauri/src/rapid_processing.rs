@@ -2491,7 +2491,9 @@ pub fn apply_blur_recovery_scaled<'a>(
 /// threshold lives in one place; `confidence` is the raw score (how many
 /// standard deviations the cepstral peak sits below the search-region mean).
 /// `hardness` is the fitted motion-OTF shape (0 = Gaussian envelope, 1 =
-/// hard line), meaningful only when `confident`; 0 otherwise.
+/// hard line) and `lambda` a suggested Wiener regularization from the
+/// measured noise-to-signal ratio; both are meaningful only when
+/// `confident` (0 and the 0.01 default otherwise).
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct BlurEstimate {
     pub length: f32,
@@ -2499,6 +2501,7 @@ pub struct BlurEstimate {
     pub confidence: f32,
     pub confident: bool,
     pub hardness: f32,
+    pub lambda: f32,
 }
 
 /// Estimates below this score are reported as not confident: the deepest
@@ -2809,6 +2812,7 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
             confidence: 0.0,
             confident: false,
             hardness: 0.0,
+            lambda: 0.01,
         };
     }
     let n = count as f64;
@@ -2816,8 +2820,31 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
     let std_c = ((sum_sq / n - mean_c * mean_c).max(1e-20)).sqrt();
     let confidence = ((mean_c - peak_val as f64) / std_c) as f32;
 
-    let length = ((peak_dx * peak_dx + peak_dy * peak_dy) as f32).sqrt() / scale;
-    let mut angle = (peak_dy as f32).atan2(peak_dx as f32).to_degrees();
+    // Sub-bin refinement: the cepstral minimum is quantized to integer
+    // working pixels, and length rescales by full/working resolution — on
+    // a large frame that is several full-res pixels of length error,
+    // enough to misalign the far notches the hard inverse depends on. A
+    // 3-point parabolic fit through the minimum recovers the fractional
+    // peak position per axis.
+    let refine = |c_m: f32, c_0: f32, c_p: f32| -> f32 {
+        let curvature = c_m - 2.0 * c_0 + c_p;
+        if curvature <= 1e-12 {
+            0.0
+        } else {
+            (0.5 * (c_m - c_p) / curvature).clamp(-0.5, 0.5)
+        }
+    };
+    let dxf = peak_dx as f32
+        + refine(sample(peak_dx - 1, peak_dy), peak_val, sample(peak_dx + 1, peak_dy));
+    let dyf = peak_dy as f32
+        + refine(sample(peak_dx, peak_dy - 1), peak_val, sample(peak_dx, peak_dy + 1));
+
+    let r_refined = (dxf * dxf + dyf * dyf).sqrt();
+    let length = r_refined / scale;
+    let mut angle = dyf.atan2(dxf).to_degrees();
+    if angle < 0.0 {
+        angle += 180.0;
+    }
     if angle >= 180.0 {
         angle -= 180.0;
     }
@@ -2825,15 +2852,62 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
     let confident = confidence >= BLUR_CONFIDENCE_GATE;
     let hardness = if !confident {
         0.0
-    } else if r_peak < 6.0 {
+    } else if r_refined < 6.0 {
         // Under ~6 working px fewer than 3 notch periods fit below Nyquist —
         // too few to fit a shape; assume the physical prior (hard line).
         1.0
     } else {
-        fit_motion_hardness(&spectrum_ln, pw, ph, r_peak, angle)
+        fit_motion_hardness(&spectrum_ln, pw, ph, r_refined, angle)
     };
+    let lambda = if confident { suggest_lambda(&spectrum_ln, pw, ph, angle) } else { 0.01 };
 
-    BlurEstimate { length, angle, confidence, confident, hardness }
+    BlurEstimate { length, angle, confidence, confident, hardness, lambda }
+}
+
+/// Suggest a Wiener regularization (the UI's "Artifact suppression") from
+/// the captured spectrum. Lambda in the shipped filter competes with
+/// |H|² ≈ 1, so it is dimensionless and the textbook choice is the image's
+/// noise-to-signal power ratio — and both sides are measurable here. The
+/// wedge along the motion axis past the sinc rolloff carries noise only
+/// (the blur zeroed the signal there), while the axis perpendicular to the
+/// motion is unblurred, so its mid band is the scene's surviving signal
+/// power. Log-domain medians keep both robust to the notch comb and to
+/// outliers. The 4x factor biases toward over-suppression: the working
+/// copy's downscale averages away part of the full-res noise floor, and
+/// suppressing too little rings while too much merely softens. This is a
+/// starting point for the slider, not a verdict.
+fn suggest_lambda(spectrum_ln: &[f32], pw: usize, ph: usize, angle_deg: f32) -> f32 {
+    let (cos_a, sin_a) = (angle_deg.to_radians().cos(), angle_deg.to_radians().sin());
+    let mut noise_ln = Vec::new();
+    let mut signal_ln = Vec::new();
+    for y in 0..ph {
+        let mut v = y as f32 / ph as f32;
+        if v > 0.5 {
+            v -= 1.0;
+        }
+        for x in 0..pw {
+            let mut u = x as f32 / pw as f32;
+            if u > 0.5 {
+                u -= 1.0;
+            }
+            let f_along = (u * cos_a + v * sin_a).abs();
+            let f_perp = (-u * sin_a + v * cos_a).abs();
+            if f_along > 0.30 && f_perp < 0.05 {
+                noise_ln.push(spectrum_ln[y * pw + x]);
+            } else if f_along < 0.05 && (0.05..0.25).contains(&f_perp) {
+                signal_ln.push(spectrum_ln[y * pw + x]);
+            }
+        }
+    }
+    if noise_ln.len() < 64 || signal_ln.len() < 64 {
+        return 0.01;
+    }
+    let median = |v: &mut Vec<f32>| -> f32 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[v.len() / 2]
+    };
+    let nsr = (2.0 * (median(&mut noise_ln) - median(&mut signal_ln))).exp();
+    (4.0 * nsr).clamp(0.001, 0.1)
 }
 
 /// Tauri command: estimate the motion-blur kernel of the currently loaded
@@ -2856,10 +2930,11 @@ pub async fn estimate_blur_kernel(
         .await
         .map_err(|e| format!("Blur estimation task failed: {e}"))?;
     log::info!(
-        "RAPID: blur estimate L={:.1}px A={:.1}° H={:.2} confidence={:.1} ({}confident) in {:?}",
+        "RAPID: blur estimate L={:.1}px A={:.1}° H={:.2} λ={:.4} confidence={:.1} ({}confident) in {:?}",
         estimate.length,
         estimate.angle,
         estimate.hardness,
+        estimate.lambda,
         estimate.confidence,
         if estimate.confident { "" } else { "not " },
         start.elapsed()
@@ -3785,6 +3860,45 @@ mod tests {
                 est.hardness
             );
         }
+    }
+
+    /// The suggested suppression must track the actual noise floor: the
+    /// same blurred scene with added sensor-style noise must suggest a
+    /// higher lambda, and both must stay inside the slider's range.
+    #[test]
+    fn test_estimate_blur_lambda_tracks_noise() {
+        let scene = synthetic_scene(512, 512);
+        let blurred = motion_blur_line(&scene, 25.0, 0.0);
+        let hash2 = |x: u32, y: u32| -> u32 {
+            let mut h = x.wrapping_mul(0x27D4_EB2F) ^ y.wrapping_mul(0x1656_67B1);
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7FEB_352D);
+            h ^= h >> 15;
+            h
+        };
+        let noisy = image::RgbaImage::from_fn(512, 512, |x, y| {
+            let p = blurred.get_pixel(x, y);
+            let n = ((hash2(x, y) & 0xff) as f32 / 255.0 - 0.5) * 12.0;
+            let b = (p[0] as f32 + n).clamp(0.0, 255.0).round() as u8;
+            image::Rgba([b, b, b, 255])
+        });
+
+        let est_clean = estimate_blur(&image::DynamicImage::ImageRgba8(blurred));
+        let est_noisy = estimate_blur(&image::DynamicImage::ImageRgba8(noisy));
+        eprintln!(
+            "lambda suggestion: clean {:.4} (confidence {:.1}), noisy {:.4} (confidence {:.1})",
+            est_clean.lambda, est_clean.confidence, est_noisy.lambda, est_noisy.confidence
+        );
+        assert!(est_clean.confident && est_noisy.confident);
+        for l in [est_clean.lambda, est_noisy.lambda] {
+            assert!((0.001..=0.1).contains(&l), "suggested lambda {l} outside slider range");
+        }
+        assert!(
+            est_noisy.lambda > est_clean.lambda,
+            "noise did not raise the suggested lambda ({:.4} vs {:.4})",
+            est_noisy.lambda,
+            est_clean.lambda
+        );
     }
 
     /// Blurs past the 200 px UI rail must still estimate correctly: the
