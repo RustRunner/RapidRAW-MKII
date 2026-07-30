@@ -15,6 +15,7 @@ interface BlurEstimate {
   angle: number;
   confidence: number;
   confident: boolean;
+  hardness: number;
 }
 
 interface BlurRecoveryPanelProps {
@@ -60,12 +61,14 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         toast.error(t('editor.adjustments.blurRecovery.estimateFailed'));
         return;
       }
-      const length = Math.min(200, Math.max(1, Math.round(estimate.length)));
+      const length = Math.min(500, Math.max(1, Math.round(estimate.length)));
       const angle = Math.min(180, Math.max(0, Math.round(estimate.angle)));
+      const hardness = Math.min(100, Math.max(0, Math.round(100 * estimate.hardness)));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidLength]: length,
         [BlurRecoveryAdjustment.RapidAngle]: angle,
+        [BlurRecoveryAdjustment.RapidHardness]: hardness,
       }));
       // Flash the angle overlay so the detected direction is visible.
       setEditor({ isBlurAngleAdjusting: true, blurOverlayAngle: angle });
@@ -165,7 +168,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                 </div>
                 <Slider
                   label={t('editor.adjustments.blurRecovery.length')}
-                  max={200}
+                  max={500}
                   min={1}
                   onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidLength, e)}
                   step={1}

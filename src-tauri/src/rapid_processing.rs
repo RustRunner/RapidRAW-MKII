@@ -2490,18 +2490,188 @@ pub fn apply_blur_recovery_scaled<'a>(
 /// (degrees, 0-180, image-space Y-down). `confident` applies the gate so the
 /// threshold lives in one place; `confidence` is the raw score (how many
 /// standard deviations the cepstral peak sits below the search-region mean).
+/// `hardness` is the fitted motion-OTF shape (0 = Gaussian envelope, 1 =
+/// hard line), meaningful only when `confident`; 0 otherwise.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct BlurEstimate {
     pub length: f32,
     pub angle: f32,
     pub confidence: f32,
     pub confident: bool,
+    pub hardness: f32,
 }
 
 /// Estimates below this score are reported as not confident: the deepest
 /// negative excursion of pure noise over a ~100k-sample search region already
 /// reaches ~4-5 sigma, so a real cepstral peak must clear that comfortably.
 const BLUR_CONFIDENCE_GATE: f32 = 6.0;
+
+/// Fit the motion-OTF hardness from spectral notch depth. The captured
+/// ln(eps+|F|) plane is profiled along the blur direction (a wedge of
+/// near-axis bins bucketed by f_along), detrended with a boxcar one notch
+/// period wide, and the mean depression at the notch frequencies k/L is
+/// matched against the identical measurement of the analytic OTF blend over
+/// a 17-point hardness grid. Depression is measured at the notches only —
+/// an anti-notch reference would let the signed sinc cancel the Gaussian
+/// arm near h ≈ 0.6 and destroy monotonicity — capped, because a true zero
+/// has unbounded log depth while observed notches saturate at the noise
+/// floor, and combined as the *median* over k so one accidental plunge
+/// (e.g. the spectrum's noise-floor knee) cannot impersonate a comb. The
+/// model's power is pre-smeared with the Hann window's spectral kernel:
+/// the observed notches are filled by window leakage (decisive once the
+/// notch period nears the ~2-bin main lobe, i.e. long blurs), and an
+/// unsmeared model would overpromise depth and fit soft. Ties resolve
+/// toward the harder (physical) model. The model gets an epsilon on its
+/// own unit scale; the observed epsilon guards only against log(0) and
+/// cancels in the detrended depression.
+fn fit_motion_hardness(
+    spectrum_ln: &[f32],
+    pw: usize,
+    ph: usize,
+    l_work: f32,
+    angle_deg: f32,
+) -> f32 {
+    const PERP_MAX: f32 = 0.05;
+    const DEPTH_CAP: f32 = 6.0;
+    let nb = pw / 2;
+    let (cos_a, sin_a) = (angle_deg.to_radians().cos(), angle_deg.to_radians().sin());
+
+    // Wedge profile: mean ln|F| bucketed by |f_along| over [0, 0.5), using
+    // per-axis normalized frequencies (the psf_generate.wgsl convention).
+    let mut sums = vec![0.0f64; nb];
+    let mut counts = vec![0u32; nb];
+    for y in 0..ph {
+        let mut v = y as f32 / ph as f32;
+        if v > 0.5 {
+            v -= 1.0;
+        }
+        for x in 0..pw {
+            let mut u = x as f32 / pw as f32;
+            if u > 0.5 {
+                u -= 1.0;
+            }
+            let f_along = (u * cos_a + v * sin_a).abs();
+            let f_perp = (-u * sin_a + v * cos_a).abs();
+            if f_perp > PERP_MAX || f_along >= 0.5 {
+                continue;
+            }
+            let b = ((f_along * 2.0 * nb as f32) as usize).min(nb - 1);
+            sums[b] += spectrum_ln[y * pw + x] as f64;
+            counts[b] += 1;
+        }
+    }
+    let profile: Vec<Option<f32>> = sums
+        .iter()
+        .zip(&counts)
+        .map(|(&s, &c)| (c > 0).then(|| (s / c as f64) as f32))
+        .collect();
+
+    // Boxcar detrend one notch period wide, then median capped depression
+    // over the frequencies (k + offset)/L that fit in the usable band.
+    // offset 0 samples the notches; offset 1/2 samples the anti-notch
+    // controls. `spread` widens the sample to the deepest residual of the
+    // immediate neighborhood — wanted at notches, which may straddle a
+    // bucket boundary, but not at controls, which would otherwise pick up
+    // notch flanks once the period shrinks toward a few buckets.
+    let half_period = (((pw as f32 / l_work).round() as usize).max(3)) / 2;
+    let depth_of = |profile: &[Option<f32>], offset: f32, spread: usize| -> Option<f32> {
+        let n = profile.len();
+        let residual_at = |i: usize| -> Option<f32> {
+            let p = profile[i]?;
+            let lo = i.saturating_sub(half_period);
+            let hi = (i + half_period).min(n - 1);
+            let vals: Vec<f32> = (lo..=hi).filter_map(|j| profile[j]).collect();
+            if vals.len() < (hi - lo) / 2 + 1 {
+                return None;
+            }
+            Some(p - vals.iter().sum::<f32>() / vals.len() as f32)
+        };
+        let mut depths = Vec::new();
+        for k in 1..=4 {
+            let f = (k as f32 + offset) / l_work;
+            if f > 0.45 {
+                break;
+            }
+            let b = (f * 2.0 * nb as f32) as usize;
+            if b < spread.max(1) || b + spread.max(1) >= n {
+                break;
+            }
+            let d = (b - spread..=b + spread)
+                .filter_map(residual_at)
+                .fold(f32::INFINITY, f32::min);
+            if d.is_finite() {
+                depths.push((-d).min(DEPTH_CAP));
+            }
+        }
+        if depths.len() < 2 {
+            return None;
+        }
+        depths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = depths.len() / 2;
+        Some(if depths.len() % 2 == 1 {
+            depths[mid]
+        } else {
+            (depths[mid - 1] + depths[mid]) / 2.0
+        })
+    };
+
+    // Sparse wedge or too few usable notches: fall back to the physical
+    // prior rather than inventing a soft fit from nothing — a confident
+    // cepstral peak is itself comb evidence.
+    let Some(d_obs) = depth_of(&profile, 0.0, 1) else {
+        return 1.0;
+    };
+    // A real comb is deep at k/L and flat at (k+1/2)/L; scene ripple and
+    // spurious cepstral hits score both alike. Depth must clear an absolute
+    // floor and double the control to count as shape evidence — otherwise
+    // report soft and leave the zero-free legacy inverse in charge.
+    let d_ctrl = depth_of(&profile, 0.5, 0).unwrap_or(0.0);
+    if d_obs < 0.3 || d_obs < 2.0 * d_ctrl.max(0.0) {
+        return 0.0;
+    }
+
+    // Invert the model depth curve. Raw model depth is non-monotone in h
+    // (near h ≈ 0.6 the signed sinc cancels the Gaussian arm at the
+    // anti-notches and drags the detrend baseline down), so fit against
+    // the running max: the smallest hardness whose model comb is at least
+    // as deep as the observed one. Observed deeper than even the full
+    // line model means h = 1.
+    let mut d_iso = f32::NEG_INFINITY;
+    for i in 0..=16 {
+        let h = i as f32 / 16.0;
+        let magnitude: Vec<f32> = (0..nb)
+            .map(|b| {
+                let f = (b as f32 + 0.5) * 0.5 / nb as f32;
+                // Mirror motion_blur_spectrum: floored Gaussian envelope
+                // (MAGNITUDE_FLOOR) blended with the raw signed sinc.
+                let gauss = (-0.5 * (f * l_work) * (f * l_work)).exp().max(0.15);
+                let x = std::f32::consts::PI * l_work * f;
+                let line = if x.abs() < 1e-6 { 1.0 } else { x.sin() / x };
+                (1.0 - h) * gauss + h * line
+            })
+            .collect();
+        // Hann leakage fill: the window's 3-tap spectral kernel smears
+        // incoherent content in power, [1, 4, 1]/6 at 1-bin (= 1-bucket)
+        // spacing. Without this the model's notches stay deeper than any
+        // observed notch can be and every real blur fits soft.
+        let model: Vec<Option<f32>> = (0..nb)
+            .map(|b| {
+                let sq = |v: f32| v * v;
+                let lo = sq(magnitude[b.saturating_sub(1)]);
+                let hi = sq(magnitude[(b + 1).min(nb - 1)]);
+                let power = (lo + 4.0 * sq(magnitude[b]) + hi) / 6.0;
+                Some((1e-6 + power.sqrt()).ln())
+            })
+            .collect();
+        if let Some(d_mod) = depth_of(&model, 0.0, 1) {
+            d_iso = d_iso.max(d_mod);
+            if d_iso >= d_obs {
+                return h;
+            }
+        }
+    }
+    1.0
+}
 
 /// Estimate linear motion blur via cepstral analysis.
 ///
@@ -2555,6 +2725,14 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
 
     // Real cepstrum: FFT -> log magnitude -> inverse FFT.
     cpu_fft::fft_2d(&mut data, pw, ph, true);
+    // Snapshot ln(eps+|F|) for the hardness fit before the in-place cepstrum
+    // map destroys the spectrum. The eps-log keeps the decomposition
+    // ln|G| = ln|F_img| + ln|H| additive, so notch ripple depth is the
+    // model's own, uncorrupted by image brightness — the cepstrum's 1+|F|
+    // compresses depth scale-dependently and cannot be reused for this.
+    let max_mag = data.iter().map(|v| v.magnitude()).fold(0.0f32, f32::max);
+    let eps = (1e-6 * max_mag).max(f32::MIN_POSITIVE);
+    let spectrum_ln: Vec<f32> = data.iter().map(|v| (eps + v.magnitude()).ln()).collect();
     for v in data.iter_mut() {
         *v = cpu_fft::Complex::new((1.0 + v.magnitude()).ln(), 0.0);
     }
@@ -2625,7 +2803,13 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
 
     if count < 16 {
         // Image too small to search meaningfully.
-        return BlurEstimate { length: 0.0, angle: 0.0, confidence: 0.0, confident: false };
+        return BlurEstimate {
+            length: 0.0,
+            angle: 0.0,
+            confidence: 0.0,
+            confident: false,
+            hardness: 0.0,
+        };
     }
     let n = count as f64;
     let mean_c = sum / n;
@@ -2638,12 +2822,18 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
         angle -= 180.0;
     }
 
-    BlurEstimate {
-        length,
-        angle,
-        confidence,
-        confident: confidence >= BLUR_CONFIDENCE_GATE,
-    }
+    let confident = confidence >= BLUR_CONFIDENCE_GATE;
+    let hardness = if !confident {
+        0.0
+    } else if r_peak < 6.0 {
+        // Under ~6 working px fewer than 3 notch periods fit below Nyquist —
+        // too few to fit a shape; assume the physical prior (hard line).
+        1.0
+    } else {
+        fit_motion_hardness(&spectrum_ln, pw, ph, r_peak, angle)
+    };
+
+    BlurEstimate { length, angle, confidence, confident, hardness }
 }
 
 /// Tauri command: estimate the motion-blur kernel of the currently loaded
@@ -2666,9 +2856,10 @@ pub async fn estimate_blur_kernel(
         .await
         .map_err(|e| format!("Blur estimation task failed: {e}"))?;
     log::info!(
-        "RAPID: blur estimate L={:.1}px A={:.1}° confidence={:.1} ({}confident) in {:?}",
+        "RAPID: blur estimate L={:.1}px A={:.1}° H={:.2} confidence={:.1} ({}confident) in {:?}",
         estimate.length,
         estimate.angle,
+        estimate.hardness,
         estimate.confidence,
         if estimate.confident { "" } else { "not " },
         start.elapsed()
@@ -3516,8 +3707,8 @@ mod tests {
                 image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, angle));
             let est = estimate_blur(&blurred);
             eprintln!(
-                "blur estimate at {angle}°: L={:.1} A={:.1} confidence={:.1}",
-                est.length, est.angle, est.confidence
+                "blur estimate at {angle}°: L={:.1} A={:.1} H={:.2} confidence={:.1}",
+                est.length, est.angle, est.hardness, est.confidence
             );
             assert!(
                 est.confident,
@@ -3536,6 +3727,11 @@ mod tests {
                 "angle off at {angle}°: got {:.1}",
                 est.angle
             );
+            assert!(
+                est.hardness >= 0.7,
+                "hard-line blur fitted too soft at {angle}°: hardness {:.2}",
+                est.hardness
+            );
         }
 
         // Negative control: no blur -> no confident estimate.
@@ -3548,6 +3744,76 @@ mod tests {
             !sharp.confident,
             "estimator hallucinated a blur on a sharp image (confidence {:.1})",
             sharp.confidence
+        );
+    }
+
+    /// Soft negative control for the hardness fit: a directional Gaussian
+    /// (the engine's h = 0 model, sigma = L/2π along the axis) produces no
+    /// spectral notch comb. Usually that means no confident cepstral peak
+    /// at all; if one does clear the gate, the fitted hardness must land at
+    /// the soft end rather than prescribing the hard-line inverse.
+    #[test]
+    fn test_estimate_blur_directional_gaussian_soft() {
+        let scene = synthetic_scene(512, 512);
+        let sigma = 25.0f32 / (2.0 * PI);
+        let radius = (3.0 * sigma).ceil() as i32;
+        let weights: Vec<f32> =
+            (-radius..=radius).map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp()).collect();
+        let wsum: f32 = weights.iter().sum();
+        let blurred = image::RgbaImage::from_fn(512, 512, |x, y| {
+            let mut acc = 0.0f32;
+            for (j, w) in weights.iter().enumerate() {
+                let sx = (x as i32 + j as i32 - radius).clamp(0, 511);
+                acc += w * scene.get_pixel(sx as u32, y)[0] as f32;
+            }
+            let b = (acc / wsum).round() as u8;
+            image::Rgba([b, b, b, 255])
+        });
+        let est = estimate_blur(&image::DynamicImage::ImageRgba8(blurred));
+        eprintln!(
+            "directional gaussian: L={:.1} A={:.1} H={:.2} confidence={:.1} ({}confident)",
+            est.length,
+            est.angle,
+            est.hardness,
+            est.confidence,
+            if est.confident { "" } else { "not " }
+        );
+        if est.confident {
+            assert!(
+                est.hardness <= 0.3,
+                "gaussian blur fitted too hard: hardness {:.2}",
+                est.hardness
+            );
+        }
+    }
+
+    /// Blurs past the old 200 px UI rail must estimate correctly: the
+    /// estimator searches up to 250 working px and reports unclamped
+    /// lengths, and the raised 500 px cap applies them.
+    #[test]
+    fn test_estimate_blur_beyond_old_rail() {
+        let scene = synthetic_scene(1024, 1024);
+        let blur_len = 221.0f32;
+        let blurred = image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, 0.0));
+        let est = estimate_blur(&blurred);
+        eprintln!(
+            "long blur: L={:.1} A={:.1} H={:.2} confidence={:.1}",
+            est.length, est.angle, est.hardness, est.confidence
+        );
+        assert!(
+            est.confident,
+            "estimator not confident on a {blur_len} px blur (confidence {:.1})",
+            est.confidence
+        );
+        assert!(
+            (est.length - blur_len).abs() <= 8.0,
+            "length off: got {:.1}, expected {blur_len}",
+            est.length
+        );
+        assert!(
+            est.hardness >= 0.7,
+            "hard-line blur fitted too soft: hardness {:.2}",
+            est.hardness
         );
     }
 
