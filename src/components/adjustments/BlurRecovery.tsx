@@ -27,7 +27,7 @@ interface BlurRecoveryPanelProps {
 
 const BLUR_TYPES = ['motion', 'defocus', 'gaussian'] as const;
 const MOTION_LENGTH_PRESETS = [50, 100, 150, 200];
-const DEFOCUS_RADIUS_PRESETS = [25, 50, 75, 100];
+const DEFOCUS_RADIUS_PRESETS = [5, 10, 15, 20];
 
 // The "Artifact suppression" slider is a log-scale view over the stored raw
 // lambda: s in [0, 100] maps to lambda = 0.001 x 100^(s/100), so the useful
@@ -223,7 +223,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                 </div>
                 <Slider
                   label={t('editor.adjustments.blurRecovery.radius')}
-                  max={100}
+                  max={20}
                   min={1}
                   onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
                   step={0.5}
