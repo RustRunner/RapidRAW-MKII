@@ -2874,7 +2874,11 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
 /// power. Log-domain medians keep both robust to the notch comb and to
 /// outliers. The 4x factor biases toward over-suppression: the working
 /// copy's downscale averages away part of the full-res noise floor, and
-/// suppressing too little rings while too much merely softens. This is a
+/// suppressing too little rings while too much merely softens. For the
+/// same reason the result is floored at the suppression slider's midpoint
+/// (0.01, i.e. 50): real-frame QA showed the working-scale measurement
+/// still landing far below where recovery looks right, so the estimate
+/// only ever raises the starting point above 50, never below. This is a
 /// starting point for the slider, not a verdict.
 fn suggest_lambda(spectrum_ln: &[f32], pw: usize, ph: usize, angle_deg: f32) -> f32 {
     let (cos_a, sin_a) = (angle_deg.to_radians().cos(), angle_deg.to_radians().sin());
@@ -2907,7 +2911,7 @@ fn suggest_lambda(spectrum_ln: &[f32], pw: usize, ph: usize, angle_deg: f32) -> 
         v[v.len() / 2]
     };
     let nsr = (2.0 * (median(&mut noise_ln) - median(&mut signal_ln))).exp();
-    (4.0 * nsr).clamp(0.001, 0.1)
+    (4.0 * nsr).clamp(0.01, 0.1)
 }
 
 /// Tauri command: estimate the motion-blur kernel of the currently loaded
@@ -3891,7 +3895,10 @@ mod tests {
         );
         assert!(est_clean.confident && est_noisy.confident);
         for l in [est_clean.lambda, est_noisy.lambda] {
-            assert!((0.001..=0.1).contains(&l), "suggested lambda {l} outside slider range");
+            assert!(
+                (0.01..=0.1).contains(&l),
+                "suggested lambda {l} outside the floored slider range"
+            );
         }
         assert!(
             est_noisy.lambda > est_clean.lambda,
