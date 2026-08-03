@@ -9,6 +9,7 @@ import ColorPanel from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
 import BlurRecoveryPanel from '../../adjustments/BlurRecovery';
+import GlareRecoveryPanel from '../../adjustments/GlareRecovery';
 import LowLightPanel from '../../adjustments/LowLight';
 import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
@@ -260,6 +261,7 @@ export default function Controls() {
             effects: EffectsPanel,
             lowlight: LowLightPanel,
             blurRecovery: BlurRecoveryPanel,
+            glareRecovery: GlareRecoveryPanel,
             upscale: UpscalePanel,
           }[sectionName];
 

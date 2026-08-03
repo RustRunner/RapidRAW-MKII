@@ -93,6 +93,13 @@ export enum BlurRecoveryAdjustment {
   RapidStrength = 'rapidStrength',
 }
 
+export enum GlareRecoveryAdjustment {
+  GlareAmount = 'glareAmount',
+  GlareVeilSize = 'glareVeilSize',
+  GlareMaxBoost = 'glareMaxBoost',
+  GlareShowVeil = 'glareShowVeil',
+}
+
 export enum Effect {
   GrainAmount = 'grainAmount',
   GrainRoughness = 'grainRoughness',
@@ -193,6 +200,10 @@ export interface Adjustments {
   rapidLambda: number;
   rapidHardness: number;
   rapidStrength: number;
+  glareAmount: number;
+  glareVeilSize: number;
+  glareMaxBoost: number;
+  glareShowVeil: boolean;
   [index: string]: any;
   aiPatches: Array<AiPatch>;
   aspectRatio: number | null;
@@ -396,6 +407,7 @@ export interface Sections {
   effects: Array<string>;
   lowlight: Array<string>;
   blurRecovery: Array<string>;
+  glareRecovery: Array<string>;
   upscale: Array<string>;
 }
 
@@ -531,6 +543,10 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   rapidLambda: 0.01,
   rapidHardness: 100,
   rapidStrength: 100,
+  glareAmount: 0,
+  glareVeilSize: 50,
+  glareMaxBoost: 50,
+  glareShowVeil: false,
   aiPatches: [],
   aspectRatio: null,
   blacks: 0,
@@ -722,6 +738,10 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     rapidLambda: loadedAdjustments.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
     rapidHardness: loadedAdjustments.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
     rapidStrength: loadedAdjustments.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
+    glareAmount: loadedAdjustments.glareAmount ?? INITIAL_ADJUSTMENTS.glareAmount,
+    glareVeilSize: loadedAdjustments.glareVeilSize ?? INITIAL_ADJUSTMENTS.glareVeilSize,
+    glareMaxBoost: loadedAdjustments.glareMaxBoost ?? INITIAL_ADJUSTMENTS.glareMaxBoost,
+    glareShowVeil: loadedAdjustments.glareShowVeil ?? INITIAL_ADJUSTMENTS.glareShowVeil,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,
     lensBlurShape: loadedAdjustments.lensBlurShape ?? INITIAL_ADJUSTMENTS.lensBlurShape,
@@ -831,6 +851,10 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     {
       label: 'modals.copyPaste.groups.blurRecovery',
       keys: Object.values(BlurRecoveryAdjustment),
+    },
+    {
+      label: 'modals.copyPaste.groups.glareRecovery',
+      keys: Object.values(GlareRecoveryAdjustment),
     },
   ],
   effects: [
@@ -950,5 +974,6 @@ export const ADJUSTMENT_SECTIONS: Sections = {
   ],
   lowlight: Object.values(LowLightAdjustment),
   blurRecovery: Object.values(BlurRecoveryAdjustment),
+  glareRecovery: Object.values(GlareRecoveryAdjustment),
   upscale: [],
 };
