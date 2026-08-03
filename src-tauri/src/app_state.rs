@@ -47,12 +47,24 @@ pub struct CachedPreview {
     pub interactive_divisor: f32,
 }
 
+pub struct VeilCache {
+    pub texture: Texture,
+    pub texture_view: TextureView,
+    /// Linear RGB thumbnail and its envelope, kept for the per-render
+    /// re-exposure scalar (interleaved, w*h*3).
+    pub thumb_lin: Vec<f32>,
+    pub veil_thumb: Vec<f32>,
+    /// Bits of the mapped veil-size fraction the envelope was computed with.
+    pub veil_size_key: u32,
+}
+
 pub struct GpuImageCache {
     pub texture: Texture,
     pub texture_view: TextureView,
     pub width: u32,
     pub height: u32,
     pub transform_hash: u64,
+    pub veil: Option<VeilCache>,
 }
 
 pub struct GpuProcessorState {

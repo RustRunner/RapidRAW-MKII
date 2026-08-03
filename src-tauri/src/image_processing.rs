@@ -1509,7 +1509,22 @@ pub struct GlobalAdjustments {
     pub halation_amount: f32,
     pub flare_amount: f32,
     pub sharpness_threshold: f32,
+
+    pub glare_amount: f32,
+    pub glare_max_boost: f32,
+    pub glare_reexposure: f32,
+    pub glare_veil_size: f32,
+    pub glare_show_veil: u32,
+    pub glare_enabled: u32,
+    _pad_glare1: f32,
+    _pad_glare2: f32,
 }
+
+// GlobalAdjustments is the first member of AllAdjustments, ahead of the mask
+// array. WGSL rounds the array's offset up to align(16) while repr(C) does
+// not, so the struct size must stay a multiple of 16 bytes or every mask
+// uniform silently desyncs.
+const _: () = assert!(std::mem::size_of::<GlobalAdjustments>() % 16 == 0);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
 #[repr(C)]
@@ -2064,6 +2079,9 @@ fn get_global_adjustments_from_json(
         }
     };
 
+    let glare_amount_slider = js_adjustments["glareAmount"].as_f64().unwrap_or(0.0) as f32;
+    let glare_show_veil = js_adjustments["glareShowVeil"].as_bool().unwrap_or(false);
+
     let default_curve = serde_json::json!([{"x": 0.0, "y": 0.0}, {"x": 255.0, "y": 255.0}]);
     let curves_obj = js_adjustments.get("curves").cloned().unwrap_or_default();
 
@@ -2343,6 +2361,28 @@ fn get_global_adjustments_from_json(
             SCALES.sharpness_threshold,
             Some(15.0),
         ),
+
+        // Raw 0-100 slider values; the physical mappings live in
+        // glare_recovery so the estimator can use their inverses.
+        glare_amount: crate::glare_recovery::map_amount(glare_amount_slider),
+        glare_max_boost: crate::glare_recovery::map_max_boost(
+            js_adjustments["glareMaxBoost"].as_f64().unwrap_or(50.0) as f32,
+        ),
+        // Overwritten with the thumbnail-derived scalar in the GPU path.
+        glare_reexposure: 1.0,
+        glare_veil_size: crate::glare_recovery::map_veil_size(
+            js_adjustments["glareVeilSize"].as_f64().unwrap_or(50.0) as f32,
+        ),
+        glare_show_veil: if glare_show_veil { 1 } else { 0 },
+        // No section enable switch: Amount 0 disables, Show veil previews the
+        // estimate even at Amount 0.
+        glare_enabled: if glare_amount_slider > 0.0 || glare_show_veil {
+            1
+        } else {
+            0
+        },
+        _pad_glare1: 0.0,
+        _pad_glare2: 0.0,
     }
 }
 

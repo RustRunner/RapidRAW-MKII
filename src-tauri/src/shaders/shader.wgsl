@@ -119,6 +119,15 @@ struct GlobalAdjustments {
     halation_amount: f32,
     flare_amount: f32,
     sharpness_threshold: f32,
+
+    glare_amount: f32,
+    glare_max_boost: f32,
+    glare_reexposure: f32,
+    glare_veil_size: f32,
+    glare_show_veil: u32,
+    glare_enabled: u32,
+    _pad_glare1: f32,
+    _pad_glare2: f32,
 }
 
 struct MaskAdjustments {
@@ -214,6 +223,9 @@ const HSL_RANGES: array<HslRange, 8> = array<HslRange, 8>(
 
 @group(0) @binding(10) var flare_texture: texture_2d<f32>;
 @group(0) @binding(11) var flare_sampler: sampler;
+
+@group(0) @binding(12) var veil_texture: texture_2d<f32>;
+@group(0) @binding(13) var veil_sampler: sampler;
 
 const LUMA_COEFF = vec3<f32>(0.2126, 0.7152, 0.0722);
 
@@ -1677,6 +1689,20 @@ fn apply_denoise(
     return max(result, vec3<f32>(0.0));
 }
 
+// Veiling-glare recovery: subtract the estimated reflection veil and
+// re-stretch, in the shader's input space. The veil texture is a small
+// per-image field sampled at full-image UV, so this must run before any
+// slider-driven stage or the cached veil would go stale.
+fn apply_glare_recovery(color: vec3<f32>, veil: vec3<f32>) -> vec3<f32> {
+    let v = adjustments.global.glare_amount * veil;
+    // glare_max_boost is 1-8 from the CPU mapping; the max() guards the
+    // zeroed GlobalAdjustments::default() path.
+    let boost = max(adjustments.global.glare_max_boost, 1.0);
+    let den = clamp(vec3<f32>(1.0) - v, vec3<f32>(1.0 / boost), vec3<f32>(1.0));
+    let recovered = max((color - v) / den, vec3<f32>(0.0));
+    return recovered * adjustments.global.glare_reexposure;
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let out_dims = vec2<u32>(textureDimensions(output_texture));
@@ -1704,6 +1730,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         initial_linear_rgb = srgb_to_linear(color_from_texture);
     } else {
         initial_linear_rgb = color_from_texture;
+    }
+
+    if (adjustments.global.glare_enabled == 1u) {
+        let veil_uv = vec2<f32>(absolute_coord) / full_dims;
+        let veil = textureSampleLevel(veil_texture, veil_sampler, veil_uv, 0.0).rgb;
+        if (adjustments.global.glare_show_veil == 1u) {
+            initial_linear_rgb = veil;
+        } else {
+            initial_linear_rgb = apply_glare_recovery(initial_linear_rgb, veil);
+        }
     }
 
     if (adjustments.global.hot_pixel_enabled == 1u) {

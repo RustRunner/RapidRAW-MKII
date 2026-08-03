@@ -19,6 +19,7 @@ mod exif_processing;
 mod export_processing;
 mod file_management;
 mod formats;
+mod glare_recovery;
 mod gpu_processing;
 mod hdr_deghosting;
 mod image_loader;

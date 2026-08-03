@@ -11,7 +11,7 @@ use wgpu::util::{DeviceExt, TextureDataOrder};
 
 use crate::image_processing::{AllAdjustments, GpuContext, MAX_MASKS};
 use crate::lut_processing::Lut;
-use crate::{AppState, GpuImageCache};
+use crate::{AppState, GpuImageCache, VeilCache};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Roi {
@@ -900,6 +900,23 @@ impl GpuProcessor {
             count: None,
         });
 
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 11 + MAX_MASK_BINDINGS,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 12 + MAX_MASK_BINDINGS,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+
         let main_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Main BGL"),
             entries: &bind_group_layout_entries,
@@ -1085,6 +1102,7 @@ impl GpuProcessor {
         request: RenderRequest,
         skip_cpu_readback: bool,
         output_to_display: bool,
+        veil_view: Option<&wgpu::TextureView>,
     ) -> Result<(Vec<u8>, u32, u32, u32, u32), String> {
         let device = &self.context.device;
         let queue = &self.context.queue;
@@ -1495,6 +1513,17 @@ impl GpuProcessor {
                     resource: wgpu::BindingResource::Sampler(&self.flare_sampler),
                 });
 
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding: 11 + MAX_MASK_BINDINGS,
+                    resource: wgpu::BindingResource::TextureView(
+                        veil_view.unwrap_or(&self.dummy_blur_view),
+                    ),
+                });
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding: 12 + MAX_MASK_BINDINGS,
+                    resource: wgpu::BindingResource::Sampler(&self.flare_sampler),
+                });
+
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Tile Bind Group"),
                     layout: &self.main_bgl,
@@ -1628,7 +1657,7 @@ fn process_and_get_dynamic_image_inner(
     state: &tauri::State<AppState>,
     base_image: &DynamicImage,
     transform_hash: u64,
-    request: RenderRequest,
+    mut request: RenderRequest,
     caller_id: &str,
     output_to_display: bool,
     analytics_config: Option<crate::AnalyticsConfig>,
@@ -1702,8 +1731,12 @@ fn process_and_get_dynamic_image_inner(
     }
 
     if needs_new_cache {
-        let old_cache = cache_lock.take();
-        drop(old_cache);
+        // The veil is thumbnail-space and resolution-independent, so it
+        // survives preview-resolution churn as long as the transform matches.
+        let carried_veil = cache_lock
+            .take()
+            .and_then(|old| (old.transform_hash == transform_hash).then_some(old.veil))
+            .flatten();
 
         let _ = context.device.poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -1739,10 +1772,73 @@ fn process_and_get_dynamic_image_inner(
             width,
             height,
             transform_hash,
+            veil: carried_veil,
         });
     }
 
+    if request.adjustments.global.glare_enabled == 1 {
+        let cache = cache_lock.as_mut().unwrap();
+        let veil_key = request.adjustments.global.glare_veil_size.to_bits();
+        if cache.veil.as_ref().is_none_or(|v| v.veil_size_key != veil_key) {
+            let thumb = crate::glare_recovery::compute_veil_thumbnail(
+                base_image,
+                request.adjustments.global.is_raw_image == 1,
+                request.adjustments.global.glare_veil_size,
+            );
+            let mut veil_f16 = Vec::with_capacity(thumb.veil.len() / 3 * 4);
+            for px in thumb.veil.chunks_exact(3) {
+                veil_f16.push(f16::from_f32(px[0]));
+                veil_f16.push(f16::from_f32(px[1]));
+                veil_f16.push(f16::from_f32(px[2]));
+                veil_f16.push(f16::ONE);
+            }
+            let texture = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("Glare Veil Texture"),
+                    size: wgpu::Extent3d {
+                        width: thumb.w,
+                        height: thumb.h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                TextureDataOrder::MipMajor,
+                bytemuck::cast_slice(&veil_f16),
+            );
+            let texture_view = texture.create_view(&Default::default());
+            cache.veil = Some(VeilCache {
+                texture,
+                texture_view,
+                thumb_lin: thumb.lin,
+                veil_thumb: thumb.veil,
+                veil_size_key: veil_key,
+            });
+        }
+        if request.adjustments.global.glare_show_veil == 0 {
+            let veil = cache.veil.as_ref().unwrap();
+            request.adjustments.global.glare_reexposure =
+                crate::glare_recovery::compute_reexposure(
+                    &veil.thumb_lin,
+                    &veil.veil_thumb,
+                    request.adjustments.global.glare_amount,
+                    request.adjustments.global.glare_max_boost,
+                );
+        }
+    }
+
     let cache = cache_lock.as_ref().unwrap();
+
+    let veil_view = if request.adjustments.global.glare_enabled == 1 {
+        cache.veil.as_ref().map(|v| &v.texture_view)
+    } else {
+        None
+    };
 
     let skip_readback = output_to_display;
 
@@ -1753,6 +1849,7 @@ fn process_and_get_dynamic_image_inner(
         request,
         skip_readback,
         output_to_display,
+        veil_view,
     )?;
 
     let mut final_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2021,5 +2118,196 @@ mod tests {
         });
         let err = pollster::block_on(error_scope.pop());
         assert!(err.is_none(), "shader.wgsl failed validation: {:#?}", err);
+    }
+
+    /// Renders a real image through the full pipeline with the veil texture
+    /// bound, in disabled / recovery / show-veil modes, and checks the glare
+    /// stage's observable effects. Needs a GPU and an image, so ignored by
+    /// default:
+    ///   GLARE_TEST_IMAGE=/path/to/glare.png cargo test --lib glare_stage -- --ignored
+    /// Set GLARE_TEST_OUT=/some/dir to also save the three renders.
+    #[test]
+    #[ignore]
+    fn glare_stage_end_to_end() {
+        use half::f16;
+        use image::GenericImageView;
+        use std::sync::Arc;
+        use wgpu::util::{DeviceExt, TextureDataOrder};
+
+        let Some(path) = std::env::var_os("GLARE_TEST_IMAGE") else {
+            eprintln!("skipping: GLARE_TEST_IMAGE not set");
+            return;
+        };
+        let img = image::open(&path).expect("open GLARE_TEST_IMAGE");
+        let (w, h) = img.dimensions();
+
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .expect("no wgpu adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("glare stage test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let context = crate::image_processing::GpuContext {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            limits: adapter.limits(),
+            display: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        let processor = super::GpuProcessor::new(
+            context.clone(),
+            (w + 255) & !255,
+            (h + 255) & !255,
+        )
+        .expect("GpuProcessor::new");
+
+        let input_f16 = super::to_rgba_f16(&img);
+        let input_texture = context.device.create_texture_with_data(
+            &context.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("glare test input"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            TextureDataOrder::MipMajor,
+            bytemuck::cast_slice(&input_f16),
+        );
+        let input_view = input_texture.create_view(&Default::default());
+
+        let frac = crate::glare_recovery::map_veil_size(50.0);
+        let thumb = crate::glare_recovery::compute_veil_thumbnail(&img, false, frac);
+        let mut veil_f16 = Vec::with_capacity(thumb.veil.len() / 3 * 4);
+        for px in thumb.veil.chunks_exact(3) {
+            veil_f16.push(f16::from_f32(px[0]));
+            veil_f16.push(f16::from_f32(px[1]));
+            veil_f16.push(f16::from_f32(px[2]));
+            veil_f16.push(f16::ONE);
+        }
+        let veil_texture = context.device.create_texture_with_data(
+            &context.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("glare test veil"),
+                size: wgpu::Extent3d {
+                    width: thumb.w,
+                    height: thumb.h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            TextureDataOrder::MipMajor,
+            bytemuck::cast_slice(&veil_f16),
+        );
+        let veil_view = veil_texture.create_view(&Default::default());
+
+        let mut render = |js: serde_json::Value| -> image::RgbaImage {
+            let mut adj = crate::image_processing::get_all_adjustments_from_json(&js, false, None);
+            if adj.global.glare_enabled == 1 && adj.global.glare_show_veil == 0 {
+                adj.global.glare_reexposure = crate::glare_recovery::compute_reexposure(
+                    &thumb.lin,
+                    &thumb.veil,
+                    adj.global.glare_amount,
+                    adj.global.glare_max_boost,
+                );
+            }
+            let request = super::RenderRequest {
+                adjustments: adj,
+                mask_bitmaps: &[],
+                lut: None,
+                roi: None,
+            };
+            let (pixels, ow, oh, _, _) = processor
+                .run(&input_view, w, h, request, false, false, Some(&veil_view))
+                .expect("processor.run");
+            image::RgbaImage::from_raw(ow, oh, pixels).expect("output buffer")
+        };
+
+        let disabled = render(serde_json::json!({}));
+        let recovered = render(serde_json::json!({ "glareAmount": 85.0 }));
+        let veil_render = render(serde_json::json!({ "glareShowVeil": true }));
+
+        if let Some(out_dir) = std::env::var_os("GLARE_TEST_OUT") {
+            let dir = std::path::Path::new(&out_dir);
+            std::fs::create_dir_all(dir).unwrap();
+            disabled.save(dir.join("glare_test_disabled.png")).unwrap();
+            recovered.save(dir.join("glare_test_recovered.png")).unwrap();
+            veil_render.save(dir.join("glare_test_veil.png")).unwrap();
+        }
+
+        let mean_luma = |im: &image::RgbaImage| -> f64 {
+            im.pixels()
+                .map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64)
+                .sum::<f64>()
+                / (im.width() * im.height()) as f64
+        };
+        let mean_abs_diff = |a: &image::RgbaImage, b: &image::RgbaImage| -> f64 {
+            a.pixels()
+                .zip(b.pixels())
+                .map(|(pa, pb)| {
+                    (0..3)
+                        .map(|c| (pa[c] as f64 - pb[c] as f64).abs())
+                        .sum::<f64>()
+                        / 3.0
+                })
+                .sum::<f64>()
+                / (a.width() * a.height()) as f64
+        };
+        // Mean horizontal neighbor step, a crude smoothness measure.
+        let mean_h_gradient = |im: &image::RgbaImage| -> f64 {
+            let (iw, ih) = im.dimensions();
+            let mut sum = 0.0;
+            for y in 0..ih {
+                for x in 1..iw {
+                    sum += (im.get_pixel(x, y)[1] as f64 - im.get_pixel(x - 1, y)[1] as f64).abs();
+                }
+            }
+            sum / ((iw - 1) as f64 * ih as f64)
+        };
+
+        let diff = mean_abs_diff(&recovered, &disabled);
+        assert!(diff > 5.0, "glare stage changed almost nothing: diff {diff}");
+
+        let ratio = mean_luma(&recovered) / mean_luma(&disabled);
+        assert!(
+            (0.45..=1.6).contains(&ratio),
+            "re-exposure did not hold brightness: ratio {ratio}"
+        );
+
+        let veil_mean = mean_luma(&veil_render);
+        assert!(
+            (5.0..250.0).contains(&veil_mean),
+            "veil render implausible: mean {veil_mean}"
+        );
+        let veil_grad = mean_h_gradient(&veil_render);
+        let scene_grad = mean_h_gradient(&disabled);
+        assert!(
+            veil_grad < scene_grad * 0.5,
+            "veil not smooth: gradient {veil_grad} vs scene {scene_grad}"
+        );
+
+        eprintln!(
+            "glare stage: diff={diff:.2} luma_ratio={ratio:.3} veil_mean={veil_mean:.1} veil_grad={veil_grad:.3} scene_grad={scene_grad:.3}"
+        );
     }
 }
