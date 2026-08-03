@@ -1732,16 +1732,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         initial_linear_rgb = color_from_texture;
     }
 
-    if (adjustments.global.glare_enabled == 1u) {
-        let veil_uv = vec2<f32>(absolute_coord) / full_dims;
-        let veil = textureSampleLevel(veil_texture, veil_sampler, veil_uv, 0.0).rgb;
-        if (adjustments.global.glare_show_veil == 1u) {
-            initial_linear_rgb = veil;
-        } else {
-            initial_linear_rgb = apply_glare_recovery(initial_linear_rgb, veil);
-        }
-    }
-
     if (adjustments.global.hot_pixel_enabled == 1u) {
         initial_linear_rgb = apply_hot_pixel_correction(
             initial_linear_rgb,
@@ -1760,6 +1750,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             adjustments.global.denoise_chroma,
             is_raw
         );
+    }
+
+    // After hot-pixel and denoise: those filters re-sample the input texture
+    // for their neighborhoods, so they must run while the working value is
+    // still in the texture's (veiled) space - and denoising before the
+    // stretch operates at the measured noise level, so the estimated
+    // strength stays calibrated. Still before every slider-driven stage,
+    // which keeps the cached veil texture valid.
+    if (adjustments.global.glare_enabled == 1u) {
+        let veil_uv = vec2<f32>(absolute_coord) / full_dims;
+        let veil = textureSampleLevel(veil_texture, veil_sampler, veil_uv, 0.0).rgb;
+        if (adjustments.global.glare_show_veil == 1u) {
+            initial_linear_rgb = veil;
+        } else {
+            initial_linear_rgb = apply_glare_recovery(initial_linear_rgb, veil);
+        }
     }
 
     var t_exposure = adjustments.global.exposure;

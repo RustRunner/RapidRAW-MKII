@@ -2246,6 +2246,12 @@ mod tests {
         let disabled = render(serde_json::json!({}));
         let recovered = render(serde_json::json!({ "glareAmount": 85.0 }));
         let veil_render = render(serde_json::json!({ "glareShowVeil": true }));
+        let denoised = render(serde_json::json!({
+            "glareAmount": 85.0,
+            "denoiseEnabled": true,
+            "denoiseStrength": 60.0,
+            "denoiseChroma": 40.0
+        }));
 
         if let Some(out_dir) = std::env::var_os("GLARE_TEST_OUT") {
             let dir = std::path::Path::new(&out_dir);
@@ -2253,6 +2259,7 @@ mod tests {
             disabled.save(dir.join("glare_test_disabled.png")).unwrap();
             recovered.save(dir.join("glare_test_recovered.png")).unwrap();
             veil_render.save(dir.join("glare_test_veil.png")).unwrap();
+            denoised.save(dir.join("glare_test_denoised.png")).unwrap();
         }
 
         let mean_luma = |im: &image::RgbaImage| -> f64 {
@@ -2306,8 +2313,19 @@ mod tests {
             "veil not smooth: gradient {veil_grad} vs scene {scene_grad}"
         );
 
+        // Regression guard: the denoiser samples its neighborhood from the
+        // input texture, so it must run before the glare stretch - when the
+        // ordering is wrong its range weights misfire against the de-glared
+        // center and it stops reducing noise at all.
+        let recovered_grad = mean_h_gradient(&recovered);
+        let denoised_grad = mean_h_gradient(&denoised);
+        assert!(
+            denoised_grad < recovered_grad * 0.8,
+            "denoise ineffective on de-glared image: gradient {denoised_grad} vs {recovered_grad}"
+        );
+
         eprintln!(
-            "glare stage: diff={diff:.2} luma_ratio={ratio:.3} veil_mean={veil_mean:.1} veil_grad={veil_grad:.3} scene_grad={scene_grad:.3}"
+            "glare stage: diff={diff:.2} luma_ratio={ratio:.3} veil_mean={veil_mean:.1} veil_grad={veil_grad:.3} scene_grad={scene_grad:.3} recovered_grad={recovered_grad:.3} denoised_grad={denoised_grad:.3}"
         );
     }
 }
