@@ -2252,6 +2252,12 @@ mod tests {
             "denoiseStrength": 60.0,
             "denoiseChroma": 40.0
         }));
+        let chroma_only = render(serde_json::json!({
+            "glareAmount": 85.0,
+            "denoiseEnabled": true,
+            "denoiseStrength": 1.0,
+            "denoiseChroma": 80.0
+        }));
 
         if let Some(out_dir) = std::env::var_os("GLARE_TEST_OUT") {
             let dir = std::path::Path::new(&out_dir);
@@ -2322,6 +2328,27 @@ mod tests {
         assert!(
             denoised_grad < recovered_grad * 0.8,
             "denoise ineffective on de-glared image: gradient {denoised_grad} vs {recovered_grad}"
+        );
+
+        // Chroma smoothing must measurably reduce color noise on its own
+        // (R-G isolates chroma variation from shared luma).
+        let mean_h_gradient_chroma = |im: &image::RgbaImage| -> f64 {
+            let (iw, ih) = im.dimensions();
+            let mut sum = 0.0;
+            for y in 0..ih {
+                for x in 1..iw {
+                    let a = im.get_pixel(x, y);
+                    let b = im.get_pixel(x - 1, y);
+                    sum += ((a[0] as f64 - a[1] as f64) - (b[0] as f64 - b[1] as f64)).abs();
+                }
+            }
+            sum / ((iw - 1) as f64 * ih as f64)
+        };
+        let recovered_cgrad = mean_h_gradient_chroma(&recovered);
+        let chroma_cgrad = mean_h_gradient_chroma(&chroma_only);
+        assert!(
+            chroma_cgrad < recovered_cgrad * 0.8,
+            "chroma smoothing ineffective: chroma gradient {chroma_cgrad} vs {recovered_cgrad}"
         );
 
         eprintln!(

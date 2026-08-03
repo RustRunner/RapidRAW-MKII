@@ -1602,15 +1602,21 @@ fn smooth_chroma(
     coord: vec2<i32>,
     spatial_sigma: f32,
     radius: i32,
+    step: i32,
     is_raw: u32
 ) -> vec2<f32> {
     var cb_sum: f32 = 0.0;
     var cr_sum: f32 = 0.0;
     var weight_sum: f32 = 0.0;
 
+    // Taps are spaced `step` pixels apart: chroma noise is low-frequency, so
+    // a sparse kernel covers a blob-sized footprint at constant cost. The
+    // Gaussian falloff stays in tap units, keeping the kernel shape
+    // identical at every resolution.
     for (var dy = -radius; dy <= radius; dy++) {
         for (var dx = -radius; dx <= radius; dx++) {
-            let sample_ycbcr = rgb_to_ycbcr(load_linear_sample(coord + vec2<i32>(dx, dy), is_raw));
+            let sample_ycbcr =
+                rgb_to_ycbcr(load_linear_sample(coord + vec2<i32>(dx * step, dy * step), is_raw));
 
             let dist_sq = f32(dx * dx + dy * dy);
             let w = denoise_spatial_weight(dist_sq, spatial_sigma);
@@ -1630,6 +1636,7 @@ fn apply_denoise(
     strength: f32,          // 0-100: base denoise strength
     detail: f32,            // 0-100: detail preservation (higher = more detail kept)
     chroma: f32,            // 0-100: chroma smoothing strength
+    scale: f32,             // resolution factor (min dimension / 1080)
     is_raw: u32
 ) -> vec3<f32> {
     let effective_strength = min(strength, 100.0);
@@ -1677,8 +1684,11 @@ fn apply_denoise(
     if (effective_chroma > 0.1) {
         let chroma_sigma = mix(1.0, 4.0, effective_chroma / 100.0);
         let chroma_radius = max(radius, 2);
+        // Dilate with resolution so the footprint tracks chroma blob size;
+        // a fixed 2-4px kernel does nothing on full-resolution images.
+        let chroma_step = max(1, i32(round(scale)));
 
-        let smoothed_chroma = smooth_chroma(coord, chroma_sigma, chroma_radius, is_raw);
+        let smoothed_chroma = smooth_chroma(coord, chroma_sigma, chroma_radius, chroma_step, is_raw);
 
         let chroma_blend = effective_chroma / 100.0;
         new_cb = mix(ycbcr.y, smoothed_chroma.x, chroma_blend);
@@ -1748,6 +1758,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             adjustments.global.denoise_strength,
             adjustments.global.denoise_detail,
             adjustments.global.denoise_chroma,
+            scale,
             is_raw
         );
     }
