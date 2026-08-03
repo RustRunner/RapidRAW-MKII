@@ -310,6 +310,16 @@
         "sigma": "Blur Sigma",
         "strength": "Strength"
       },
+      "glareRecovery": {
+        "amount": "强度",
+        "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "estimate": "估算眩光",
+        "estimateFailed": "未检测到明显眩光，如有需要请手动调整。",
+        "estimating": "估算中...",
+        "maxBoost": "最大增强",
+        "showVeil": "显示光雾",
+        "veilSize": "光雾范围"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -335,6 +345,7 @@
         "curves": "曲线",
         "details": "细节",
         "effects": "效果",
+        "glareRecovery": "Glare Recovery",
         "lowlight": "Low-Light Recovery",
         "upscale": "放大"
       },
@@ -1177,6 +1188,7 @@
         "cropAspectRatio": "裁剪与宽高比",
         "curves": "曲线",
         "exposureToneMapper": "曝光与色调映射",
+        "glareRecovery": "Glare Recovery",
         "grain": "颗粒",
         "halationGlow": "光晕与发光",
         "hueShift": "全局色相偏移",

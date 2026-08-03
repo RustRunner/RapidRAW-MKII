@@ -2113,10 +2113,12 @@ pub fn run() {
             metadata_manager: MetadataManager::new(),
             disks_cache: Mutex::new(None),
             disks_cache_refreshing: AtomicBool::new(false),
+            noise_estimate_cache: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             apply_adjustments,
             rapid_processing::estimate_blur_kernel,
+            glare_recovery::estimate_glare_veil,
             generate_preview_for_path,
             generate_original_transformed_preview,
             generate_preset_preview,

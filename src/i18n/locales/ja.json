@@ -310,6 +310,16 @@
         "sigma": "Blur Sigma",
         "strength": "Strength"
       },
+      "glareRecovery": {
+        "amount": "適用量",
+        "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "estimate": "グレアを推定",
+        "estimateFailed": "顕著なグレアは検出されませんでした。必要に応じて手動で調整してください。",
+        "estimating": "推定中...",
+        "maxBoost": "最大ブースト",
+        "showVeil": "ベールを表示",
+        "veilSize": "ベールサイズ"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -335,6 +345,7 @@
         "curves": "トーンカーブ",
         "details": "ディテール",
         "effects": "効果",
+        "glareRecovery": "Glare Recovery",
         "lowlight": "Low-Light Recovery",
         "upscale": "アップスケール"
       },
@@ -1177,6 +1188,7 @@
         "cropAspectRatio": "切り抜きとアスペクト比",
         "curves": "トーンカーブ",
         "exposureToneMapper": "露光量とトーンマッパー",
+        "glareRecovery": "Glare Recovery",
         "grain": "粒子",
         "halationGlow": "ハレーションとグロー",
         "hueShift": "グローバル色相シフト",

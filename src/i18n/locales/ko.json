@@ -310,6 +310,16 @@
         "sigma": "Blur Sigma",
         "strength": "Strength"
       },
+      "glareRecovery": {
+        "amount": "적용량",
+        "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "estimate": "글레어 추정",
+        "estimateFailed": "뚜렷한 글레어가 감지되지 않았습니다. 필요하면 직접 조정하세요.",
+        "estimating": "추정 중...",
+        "maxBoost": "최대 부스트",
+        "showVeil": "베일 표시",
+        "veilSize": "베일 크기"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -335,6 +345,7 @@
         "curves": "커브",
         "details": "디테일",
         "effects": "효과",
+        "glareRecovery": "Glare Recovery",
         "lowlight": "Low-Light Recovery",
         "upscale": "업스케일"
       },
@@ -1177,6 +1188,7 @@
         "cropAspectRatio": "자르기 및 종횡비",
         "curves": "커브",
         "exposureToneMapper": "노출 및 톤 매퍼",
+        "glareRecovery": "Glare Recovery",
         "grain": "그레인",
         "halationGlow": "헐레이션 및 글로우",
         "hueShift": "글로벌 색조 시프트",

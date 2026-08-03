@@ -310,6 +310,16 @@
         "sigma": "Blur Sigma",
         "strength": "Strength"
       },
+      "glareRecovery": {
+        "amount": "Stärke",
+        "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "estimate": "Blendung schätzen",
+        "estimateFailed": "Keine deutliche Blendung erkannt - bei Bedarf manuell anpassen.",
+        "estimating": "Schätzung läuft...",
+        "maxBoost": "Max. Verstärkung",
+        "showVeil": "Schleier anzeigen",
+        "veilSize": "Schleiergröße"
+      },
       "lowlight": {
         "apply": "Denoise (BM3D)",
         "applying": "Denoising...",
@@ -335,6 +345,7 @@
         "curves": "Kurven",
         "details": "Details",
         "effects": "Effekte",
+        "glareRecovery": "Glare Recovery",
         "lowlight": "Low-Light Recovery",
         "upscale": "Hochskalieren"
       },
@@ -1179,6 +1190,7 @@
         "cropAspectRatio": "Zuschnitt & Seitenverhältnis",
         "curves": "Kurven",
         "exposureToneMapper": "Belichtung & Tonemapper",
+        "glareRecovery": "Glare Recovery",
         "grain": "Körnung",
         "halationGlow": "Lichthof & Glühen",
         "hueShift": "Globaler Farbton-Shift",

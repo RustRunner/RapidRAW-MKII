@@ -1,15 +1,29 @@
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { Info } from 'lucide-react';
+import { toast } from 'react-toastify';
 
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, GlareRecoveryAdjustment } from '../../utils/adjustments';
+import { Invokes } from '../ui/AppProperties';
+
+interface GlareEstimate {
+  amount: number;
+  veilSize: number;
+  maxBoost: number;
+  glareRatio: number;
+  confident: boolean;
+}
 
 interface GlareRecoveryPanelProps {
   adjustments: Adjustments;
   setAdjustments(adjustments: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)): any;
   onDragStateChange?(dragging: boolean): void;
 }
+
+const VEIL_FLASH_MS = 1200;
 
 // No enable switch by design: Amount 0 disables the stage entirely, and Show
 // veil previews the estimated veil even at Amount 0.
@@ -19,10 +33,59 @@ export default function GlareRecoveryPanel({
   onDragStateChange,
 }: GlareRecoveryPanelProps) {
   const { t } = useTranslation();
+  const [isEstimating, setIsEstimating] = useState(false);
+  const flashTimeoutRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (flashTimeoutRef.current !== null) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   const handleValueChange = (key: GlareRecoveryAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
     setAdjustments((prev: Adjustments) => ({ ...prev, [key]: numericValue }));
+  };
+
+  const handleEstimateGlare = async () => {
+    if (isEstimating) {
+      return;
+    }
+    setIsEstimating(true);
+    try {
+      const estimate = await invoke<GlareEstimate>(Invokes.EstimateGlareVeil);
+      if (!estimate?.confident) {
+        toast.error(t('editor.adjustments.glareRecovery.estimateFailed'));
+        return;
+      }
+      const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
+      // Apply the suggestion and flash the veil so the user sees the gray
+      // field about to be subtracted.
+      setAdjustments((prev: Adjustments) => ({
+        ...prev,
+        [GlareRecoveryAdjustment.GlareAmount]: clamp(estimate.amount),
+        [GlareRecoveryAdjustment.GlareVeilSize]: clamp(estimate.veilSize),
+        [GlareRecoveryAdjustment.GlareMaxBoost]: clamp(estimate.maxBoost),
+        [GlareRecoveryAdjustment.GlareShowVeil]: true,
+      }));
+      if (flashTimeoutRef.current !== null) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+      flashTimeoutRef.current = window.setTimeout(() => {
+        flashTimeoutRef.current = null;
+        setAdjustments((prev: Adjustments) => ({
+          ...prev,
+          [GlareRecoveryAdjustment.GlareShowVeil]: false,
+        }));
+      }, VEIL_FLASH_MS);
+    } catch (err) {
+      toast.error(`${t('editor.adjustments.glareRecovery.estimateFailed')} (${err})`);
+    } finally {
+      setIsEstimating(false);
+    }
   };
 
   return (
@@ -34,6 +97,19 @@ export default function GlareRecoveryPanel({
 
       <div className="mb-4 p-2 bg-bg-tertiary rounded-md">
         <div className="space-y-2">
+          <button
+            className={`w-full py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
+              isEstimating
+                ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
+                : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
+            }`}
+            onClick={handleEstimateGlare}
+            disabled={isEstimating}
+          >
+            {isEstimating
+              ? t('editor.adjustments.glareRecovery.estimating')
+              : t('editor.adjustments.glareRecovery.estimate')}
+          </button>
           <Slider
             label={t('editor.adjustments.glareRecovery.amount')}
             max={100}

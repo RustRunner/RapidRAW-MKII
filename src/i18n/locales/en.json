@@ -313,6 +313,9 @@
       "glareRecovery": {
         "amount": "Amount",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "estimate": "Estimate glare",
+        "estimateFailed": "No significant glare detected - adjust manually if needed.",
+        "estimating": "Estimating...",
         "maxBoost": "Max boost",
         "showVeil": "Show veil",
         "veilSize": "Veil size"

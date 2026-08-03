@@ -353,20 +353,22 @@ pub fn estimate_noise(image: &DynamicImage) -> NoiseEstimate {
     }
 }
 
-/// Tauri command: measure the loaded image's noise floor and map it onto
-/// the denoise sliders; the frontend applies the suggestion to both the
-/// live denoiser and Deep Clean's default.
-#[tauri::command]
-pub async fn estimate_noise_level(
-    state: tauri::State<'_, AppState>,
+/// Measure the loaded image's noise floor, reusing the per-image cache so
+/// repeat estimates (and the glare estimator's max-boost derivation) skip
+/// the full-resolution scan.
+pub async fn measured_noise_for_loaded(
+    state: &tauri::State<'_, AppState>,
 ) -> Result<NoiseEstimate, String> {
-    let image = {
+    let (path, image) = {
         let guard = state.original_image.lock().unwrap();
-        guard
-            .as_ref()
-            .map(|loaded| loaded.image.clone())
-            .ok_or("No image loaded")?
+        let loaded = guard.as_ref().ok_or("No image loaded")?;
+        (loaded.path.clone(), loaded.image.clone())
     };
+    if let Some((cached_path, estimate)) = &*state.noise_estimate_cache.lock().unwrap() {
+        if *cached_path == path {
+            return Ok(*estimate);
+        }
+    }
     let start = std::time::Instant::now();
     let estimate = tokio::task::spawn_blocking(move || estimate_noise(&image))
         .await
@@ -379,7 +381,18 @@ pub async fn estimate_noise_level(
         estimate.chroma,
         start.elapsed()
     );
+    *state.noise_estimate_cache.lock().unwrap() = Some((path, estimate));
     Ok(estimate)
+}
+
+/// Tauri command: measure the loaded image's noise floor and map it onto
+/// the denoise sliders; the frontend applies the suggestion to both the
+/// live denoiser and Deep Clean's default.
+#[tauri::command]
+pub async fn estimate_noise_level(
+    state: tauri::State<'_, AppState>,
+) -> Result<NoiseEstimate, String> {
+    measured_noise_for_loaded(&state).await
 }
 
 fn run_bm3d(
