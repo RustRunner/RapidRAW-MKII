@@ -337,10 +337,7 @@
         "veilSize": "Tamanho do véu"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Suavização de croma",
-        "deepClean": "Limpeza profunda (BM3D)",
         "denoise": "Redução de ruído",
         "description": "Ferramentas de recuperação para fotos com ISO alto e longa exposição. A remoção de hot pixels e a redução de ruído têm pré-visualização ao vivo; a limpeza profunda (BM3D) salva o resultado como um novo arquivo e o abre.",
         "detail": "Preservação de detalhes",
@@ -349,9 +346,7 @@
         "estimating": "Medindo...",
         "hotPixels": "Hot Pixels",
         "measured": "Ruído medido → intensidade {{strength}}, croma {{chroma}}",
-        "noMeasurement": "Execute Estimar ruído (em Redução de ruído) para uma sugestão",
         "strength": "Denoise Strength",
-        "suggestedStrength": "O ruído medido sugere intensidade {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {

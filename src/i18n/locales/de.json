@@ -321,10 +321,7 @@
         "veilSize": "Schleiergröße"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Farbrausch-Glättung",
-        "deepClean": "Tiefenreinigung (BM3D)",
         "denoise": "Entrauschen",
         "description": "Werkzeuge für High-ISO- und Langzeitaufnahmen. Hot-Pixel-Entfernung und Entrauschen als Live-Vorschau; Tiefenreinigung (BM3D) speichert das Ergebnis als neue Datei und öffnet sie.",
         "detail": "Detailerhalt",
@@ -333,9 +330,7 @@
         "estimating": "Messen...",
         "hotPixels": "Hot Pixels",
         "measured": "Gemessenes Rauschen → Stärke {{strength}}, Chroma {{chroma}}",
-        "noMeasurement": "Für einen Vorschlag „Rauschen messen“ (unter Entrauschen) ausführen",
         "strength": "Denoise Strength",
-        "suggestedStrength": "Gemessenes Rauschen empfiehlt Stärke {{strength}} %",
         "threshold": "Detection Threshold"
       },
       "sections": {

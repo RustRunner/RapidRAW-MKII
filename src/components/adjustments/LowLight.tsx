@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
-import { Info, Zap } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 import Slider from '../ui/Slider';
@@ -10,7 +9,6 @@ import Switch from '../ui/Switch';
 import { Adjustments, LowLightAdjustment } from '../../utils/adjustments';
 import { Invokes } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
-import { useProcessStore } from '../../store/useProcessStore';
 
 interface NoiseEstimate {
   sigma_luma: number;
@@ -28,16 +26,12 @@ interface LowLightPanelProps {
 export default function LowLightPanel({ adjustments, setAdjustments, onDragStateChange }: LowLightPanelProps) {
   const { t } = useTranslation();
   const selectedImage = useEditorStore((state: any) => state.selectedImage);
-  const [isDenoising, setIsDenoising] = useState(false);
   const [isEstimating, setIsEstimating] = useState(false);
   const [noiseEstimate, setNoiseEstimate] = useState<NoiseEstimate | null>(null);
 
   const path: string | null = selectedImage?.path ?? null;
 
-  // Deep Clean strength: per-image scratch value, seeded by Estimate noise.
-  const [denoiseStrength, setDenoiseStrength] = useState(50);
   useEffect(() => {
-    setDenoiseStrength(50);
     setNoiseEstimate(null);
   }, [path]);
 
@@ -60,7 +54,6 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
       const strength = Math.round(estimate.strength);
       const chroma = Math.round(estimate.chroma);
       setNoiseEstimate(estimate);
-      setDenoiseStrength(Math.max(1, strength));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [LowLightAdjustment.DenoiseStrength]: strength,
@@ -70,23 +63,6 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
       toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${err})`);
     } finally {
       setIsEstimating(false);
-    }
-  };
-
-  const handleDeepClean = async () => {
-    if (!path || isDenoising) {
-      return;
-    }
-    setIsDenoising(true);
-    try {
-      await invoke(Invokes.ApplyDenoising, { path, intensity: denoiseStrength / 100, method: 'bm3d' });
-      const savedPath = await invoke<string>(Invokes.SaveDenoisedImage, { originalPathStr: path });
-      await emit('indexing-finished');
-      useProcessStore.getState().setProcess({ initialFileToOpen: savedPath });
-    } catch (err) {
-      toast.error(`Failed to denoise image: ${err}`);
-    } finally {
-      setIsDenoising(false);
     }
   };
 
@@ -184,44 +160,6 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
             />
           </div>
         )}
-      </div>
-
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <div className="flex items-center gap-2 mb-2">
-          <Zap size={14} className={noiseEstimate ? 'text-primary' : 'text-text-secondary'} />
-          <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.lowlight.deepClean')}</p>
-        </div>
-        <div className="p-2 mb-2 bg-bg-secondary rounded text-xs text-text-secondary">
-          {noiseEstimate ? (
-            <span>
-              {t('editor.adjustments.lowlight.suggestedStrength', {
-                strength: Math.round(noiseEstimate.strength),
-              })}
-            </span>
-          ) : (
-            <span>{t('editor.adjustments.lowlight.noMeasurement')}</span>
-          )}
-        </div>
-        <Slider
-          label={t('editor.adjustments.lowlight.strength')}
-          max={100}
-          min={0}
-          onChange={(e: any) => setDenoiseStrength(parseFloat(e.target.value))}
-          step={1}
-          value={denoiseStrength}
-          onDragStateChange={onDragStateChange}
-        />
-        <button
-          className={`w-full mt-2 py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
-            isDenoising
-              ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
-              : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
-          }`}
-          onClick={handleDeepClean}
-          disabled={isDenoising || !path}
-        >
-          {isDenoising ? t('editor.adjustments.lowlight.applying') : t('editor.adjustments.lowlight.apply')}
-        </button>
       </div>
     </div>
   );

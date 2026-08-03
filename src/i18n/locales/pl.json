@@ -353,10 +353,7 @@
         "veilSize": "Rozmiar zamglenia"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Wygładzanie chrominancji",
-        "deepClean": "Głębokie czyszczenie (BM3D)",
         "denoise": "Odszumianie",
         "description": "Narzędzia ratunkowe dla zdjęć z wysokim ISO i długim czasem naświetlania. Usuwanie gorących pikseli i odszumianie działają na żywo; głębokie czyszczenie (BM3D) zapisuje wynik jako nowy plik i go otwiera.",
         "detail": "Zachowanie detali",
@@ -365,9 +362,7 @@
         "estimating": "Pomiar...",
         "hotPixels": "Hot Pixels",
         "measured": "Zmierzony szum → siła {{strength}}, chroma {{chroma}}",
-        "noMeasurement": "Uruchom Oszacuj szum (w sekcji Odszumianie), aby otrzymać sugestię",
         "strength": "Denoise Strength",
-        "suggestedStrength": "Zmierzony szum sugeruje siłę {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {

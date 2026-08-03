@@ -321,10 +321,7 @@
         "veilSize": "光雾范围"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "色度平滑",
-        "deepClean": "深度清理 (BM3D)",
         "denoise": "降噪",
         "description": "针对高 ISO 和长曝光照片的修复工具。热像素移除和降噪支持实时预览；深度清理 (BM3D) 会将结果保存为新文件并打开。",
         "detail": "细节保留",
@@ -333,9 +330,7 @@
         "estimating": "测量中...",
         "hotPixels": "Hot Pixels",
         "measured": "测得噪点 → 强度 {{strength}}，色度 {{chroma}}",
-        "noMeasurement": "在降噪中运行估计噪点以获取建议",
         "strength": "Denoise Strength",
-        "suggestedStrength": "根据测得噪点建议强度 {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {

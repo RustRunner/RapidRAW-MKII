@@ -321,10 +321,7 @@
         "veilSize": "ベールサイズ"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "色ノイズ平滑化",
-        "deepClean": "ディープクリーン (BM3D)",
         "denoise": "ノイズ除去",
         "description": "高ISO・長時間露光向けの回復ツール。ホットピクセル除去とノイズ除去はライブプレビュー。ディープクリーン (BM3D) は結果を新しいファイルとして保存して開きます。",
         "detail": "ディテール保持",
@@ -333,9 +330,7 @@
         "estimating": "測定中...",
         "hotPixels": "Hot Pixels",
         "measured": "測定ノイズ → 強度 {{strength}}、クロマ {{chroma}}",
-        "noMeasurement": "ノイズ除去内の「ノイズを推定」を実行すると推奨値が得られます",
         "strength": "Denoise Strength",
-        "suggestedStrength": "測定ノイズによる推奨強度 {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {

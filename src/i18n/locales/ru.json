@@ -353,10 +353,7 @@
         "veilSize": "Размер вуали"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Сглаживание цветового шума",
-        "deepClean": "Глубокая очистка (BM3D)",
         "denoise": "Шумоподавление",
         "description": "Инструменты восстановления для снимков с высоким ISO и длинной выдержкой. Удаление горячих пикселей и шумоподавление работают в реальном времени; глубокая очистка (BM3D) сохраняет результат в новый файл и открывает его.",
         "detail": "Сохранение деталей",
@@ -365,9 +362,7 @@
         "estimating": "Измерение...",
         "hotPixels": "Hot Pixels",
         "measured": "Измеренный шум → сила {{strength}}, цветность {{chroma}}",
-        "noMeasurement": "Запустите «Оценить шум» (в разделе Шумоподавление), чтобы получить подсказку",
         "strength": "Denoise Strength",
-        "suggestedStrength": "Измеренный шум предполагает силу {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {

@@ -337,10 +337,7 @@
         "veilSize": "Taille du voile"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Lissage de la chrominance",
-        "deepClean": "Nettoyage profond (BM3D)",
         "denoise": "Débruitage",
         "description": "Outils de récupération pour les prises à haut ISO et longue exposition. La correction des pixels chauds et le débruitage s'affichent en direct ; le nettoyage profond (BM3D) enregistre le résultat dans un nouveau fichier et l'ouvre.",
         "detail": "Préservation des détails",
@@ -349,9 +346,7 @@
         "estimating": "Mesure...",
         "hotPixels": "Hot Pixels",
         "measured": "Bruit mesuré → force {{strength}}, chroma {{chroma}}",
-        "noMeasurement": "Lancez Estimer le bruit (sous Débruitage) pour une suggestion",
         "strength": "Denoise Strength",
-        "suggestedStrength": "Le bruit mesuré suggère une force de {{strength}} %",
         "threshold": "Detection Threshold"
       },
       "sections": {

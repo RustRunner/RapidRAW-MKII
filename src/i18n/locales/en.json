@@ -321,10 +321,7 @@
         "veilSize": "Veil size"
       },
       "lowlight": {
-        "apply": "Denoise (BM3D)",
-        "applying": "Denoising...",
         "chroma": "Chroma Smoothing",
-        "deepClean": "Deep Clean (BM3D)",
         "denoise": "Denoise",
         "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal and denoising preview live; Deep Clean (BM3D) saves the result as a new file and opens it.",
         "detail": "Detail Preservation",
@@ -333,9 +330,7 @@
         "estimating": "Measuring...",
         "hotPixels": "Hot Pixels",
         "measured": "Measured noise → strength {{strength}}, chroma {{chroma}}",
-        "noMeasurement": "Run Estimate noise (under Denoise) for a suggestion",
         "strength": "Denoise Strength",
-        "suggestedStrength": "Measured noise suggests strength {{strength}}%",
         "threshold": "Detection Threshold"
       },
       "sections": {
