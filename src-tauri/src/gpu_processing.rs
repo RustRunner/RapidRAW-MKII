@@ -535,6 +535,39 @@ const TILE_OVERLAP: u32 = 128;
 /// textures never need to grow beyond this.
 const TILE_EXTENT: u32 = TILE_SIZE + 2 * TILE_OVERLAP;
 
+#[cfg(test)]
+static FORCE_ALL_BLURS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Which of the four Gaussian pre-blurs have at least one non-neutral
+/// consumer in the shader, in pass order: sharpness, tonal, clarity,
+/// structure. Neutral is exact 0.0 for every consumer field, and each
+/// shader stage early-outs before touching its blurred input at that value,
+/// so a skipped pass (the dummy view is bound instead) cannot change the
+/// output. The tonal blur is read only by the shadows/blacks lift —
+/// contrast, whites, and highlights never touch it.
+fn wanted_blur_passes(adjustments: &AllAdjustments) -> [bool; 4] {
+    let global = &adjustments.global;
+    let mask_count = (adjustments.mask_count as usize).min(adjustments.mask_adjustments.len());
+    let masks = &adjustments.mask_adjustments[..mask_count];
+
+    let sharpness = global.sharpness != 0.0 || masks.iter().any(|m| m.sharpness != 0.0);
+    let tonal = global.shadows != 0.0
+        || global.blacks != 0.0
+        || masks.iter().any(|m| m.shadows != 0.0 || m.blacks != 0.0);
+    let clarity = global.clarity != 0.0
+        || global.centré != 0.0
+        || global.halation_amount != 0.0
+        || masks.iter().any(|m| m.clarity != 0.0 || m.halation_amount != 0.0);
+    let structure = global.structure != 0.0
+        || global.glow_amount != 0.0
+        || global.dehaze != 0.0
+        || masks
+            .iter()
+            .any(|m| m.structure != 0.0 || m.glow_amount != 0.0 || m.dehaze != 0.0);
+
+    [sharpness, tonal, clarity, structure]
+}
+
 pub struct GpuProcessor {
     context: GpuContext,
     blur_bgl: wgpu::BindGroupLayout,
@@ -1226,6 +1259,25 @@ impl GpuProcessor {
         };
 
         let adjustments = request.adjustments;
+
+        #[allow(unused_mut)]
+        let mut wanted_blurs = wanted_blur_passes(&adjustments);
+        #[cfg(test)]
+        if FORCE_ALL_BLURS.load(std::sync::atomic::Ordering::Relaxed) {
+            wanted_blurs = [true; 4];
+        }
+        let [wants_sharpness_blur, wants_tonal_blur, wants_clarity_blur, wants_structure_blur] =
+            wanted_blurs;
+        if wanted_blurs != [true; 4] {
+            log::debug!(
+                "Skipping neutral blur passes (sharpness={}, tonal={}, clarity={}, structure={})",
+                wants_sharpness_blur,
+                wants_tonal_blur,
+                wants_clarity_blur,
+                wants_structure_blur
+            );
+        }
+
         if adjustments.global.flare_amount > 0.0 {
             let mut encoder = device.create_command_encoder(&Default::default());
 
@@ -1371,9 +1423,6 @@ impl GpuProcessor {
 
                 let run_blur = |base_radius: f32, output_view: &wgpu::TextureView| -> bool {
                     let radius = (base_radius * scale).ceil().max(1.0) as u32;
-                    if radius == 0 {
-                        return false;
-                    }
 
                     let params = BlurParams {
                         radius,
@@ -1445,10 +1494,14 @@ impl GpuProcessor {
                     true
                 };
 
-                let did_create_sharpness_blur = run_blur(1.0, &self.sharpness_blur_view);
-                let did_create_tonal_blur = run_blur(3.5, &self.tonal_blur_view);
-                let did_create_clarity_blur = run_blur(8.0, &self.clarity_blur_view);
-                let did_create_structure_blur = run_blur(40.0, &self.structure_blur_view);
+                let did_create_sharpness_blur =
+                    wants_sharpness_blur && run_blur(1.0, &self.sharpness_blur_view);
+                let did_create_tonal_blur =
+                    wants_tonal_blur && run_blur(3.5, &self.tonal_blur_view);
+                let did_create_clarity_blur =
+                    wants_clarity_blur && run_blur(8.0, &self.clarity_blur_view);
+                let did_create_structure_blur =
+                    wants_structure_blur && run_blur(40.0, &self.structure_blur_view);
 
                 let mut main_encoder = device.create_command_encoder(&Default::default());
 
@@ -2146,15 +2199,11 @@ mod tests {
         assert!(err.is_none(), "shader.wgsl failed validation: {:#?}", err);
     }
 
-    /// Renders a 2560×2560 gradient (2×2 tiles) with neutral adjustments and
-    /// checks the output against the input per pixel. Any tile-local vs
-    /// absolute addressing mistake in the tile-sized textures shows up as
-    /// seams at the 2048 tile boundaries, which this catches.
-    #[test]
-    fn test_gpu_multi_tile_identity_render() {
-        use image::Rgba;
+    /// Requests an adapter and builds a compute-only GpuContext, or returns
+    /// None (after logging) so GPU tests skip gracefully on machines with no
+    /// adapter.
+    fn test_gpu_context(label: &str) -> Option<crate::image_processing::GpuContext> {
         use std::sync::Arc;
-        use wgpu::util::{DeviceExt, TextureDataOrder};
 
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -2164,49 +2213,54 @@ mod tests {
         })) {
             Ok(a) => a,
             Err(e) => {
-                eprintln!("skipping multi-tile identity test: no adapter ({e})");
-                return;
+                eprintln!("skipping {label}: no adapter ({e})");
+                return None;
             }
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("multi-tile identity test device"),
+            label: Some(label),
             required_features: wgpu::Features::empty(),
             required_limits: adapter.limits(),
             ..Default::default()
         }))
         .expect("failed to create device");
-        let context = crate::image_processing::GpuContext {
+        Some(crate::image_processing::GpuContext {
             device: Arc::new(device),
             queue: Arc::new(queue),
             limits: adapter.limits(),
             display: Arc::new(std::sync::Mutex::new(None)),
             is_integrated: false,
-        };
+        })
+    }
 
-        const SIZE: u32 = 2560;
-        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(
-            SIZE,
-            SIZE,
-            |x, y| {
-                let r = (x * 255 / (SIZE - 1)) as u8;
-                let g = (y * 255 / (SIZE - 1)) as u8;
-                let b = ((x + y) * 255 / (2 * (SIZE - 1))) as u8;
-                Rgba([r, g, b, 255])
-            },
-        ));
+    /// Smooth gradients in red/green expose tile seams; the checkered blue
+    /// channel supplies the high-frequency edges that spatial stages like
+    /// sharpen need to have any visible effect.
+    fn gradient_rgba(size: u32) -> image::DynamicImage {
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(size, size, |x, y| {
+            let r = (x * 255 / (size - 1)) as u8;
+            let g = (y * 255 / (size - 1)) as u8;
+            let b = if (x / 4 + y / 4) % 2 == 0 { 64 } else { 192 };
+            image::Rgba([r, g, b, 255])
+        }))
+    }
 
-        let processor =
-            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
-                .expect("GpuProcessor::new");
+    fn upload_rgba16f(
+        context: &crate::image_processing::GpuContext,
+        img: &image::DynamicImage,
+    ) -> wgpu::TextureView {
+        use image::GenericImageView;
+        use wgpu::util::{DeviceExt, TextureDataOrder};
 
-        let input_f16 = super::to_rgba_f16(&img);
-        let input_texture = context.device.create_texture_with_data(
+        let (w, h) = img.dimensions();
+        let input_f16 = super::to_rgba_f16(img);
+        let texture = context.device.create_texture_with_data(
             &context.queue,
             &wgpu::TextureDescriptor {
-                label: Some("multi-tile identity input"),
+                label: Some("test input"),
                 size: wgpu::Extent3d {
-                    width: SIZE,
-                    height: SIZE,
+                    width: w,
+                    height: h,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -2219,7 +2273,25 @@ mod tests {
             TextureDataOrder::MipMajor,
             bytemuck::cast_slice(&input_f16),
         );
-        let input_view = input_texture.create_view(&Default::default());
+        texture.create_view(&Default::default())
+    }
+
+    /// Renders a 2560×2560 gradient (2×2 tiles) with neutral adjustments and
+    /// checks the output against the input per pixel. Any tile-local vs
+    /// absolute addressing mistake in the tile-sized textures shows up as
+    /// seams at the 2048 tile boundaries, which this catches.
+    #[test]
+    fn test_gpu_multi_tile_identity_render() {
+        let Some(context) = test_gpu_context("multi-tile identity test device") else {
+            return;
+        };
+
+        const SIZE: u32 = 2560;
+        let img = gradient_rgba(SIZE);
+        let processor =
+            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
+                .expect("GpuProcessor::new");
+        let input_view = upload_rgba16f(&context, &img);
 
         let adjustments = crate::image_processing::get_all_adjustments_from_json(
             &serde_json::json!({}),
@@ -2253,6 +2325,98 @@ mod tests {
             "neutral multi-tile render deviates from input by {}/255 at {:?}",
             max_diff,
             max_at
+        );
+    }
+
+    /// The blur-pass gate is a pure function of the adjustments; verify the
+    /// consumer map without a GPU. Order: sharpness, tonal, clarity,
+    /// structure.
+    #[test]
+    fn test_blur_pass_predicates() {
+        use crate::image_processing::{get_all_adjustments_from_json, AllAdjustments};
+
+        let neutral = get_all_adjustments_from_json(&serde_json::json!({}), false, None);
+        assert_eq!(super::wanted_blur_passes(&neutral), [false; 4]);
+
+        let sharp =
+            get_all_adjustments_from_json(&serde_json::json!({ "sharpness": 50.0 }), false, None);
+        assert_eq!(super::wanted_blur_passes(&sharp), [true, false, false, false]);
+
+        let shadows =
+            get_all_adjustments_from_json(&serde_json::json!({ "shadows": -30.0 }), false, None);
+        assert_eq!(super::wanted_blur_passes(&shadows), [false, true, false, false]);
+
+        // Contrast alone must not wake the tonal blur: the shader reads that
+        // texture only for the shadows/blacks lift.
+        let contrast =
+            get_all_adjustments_from_json(&serde_json::json!({ "contrast": 40.0 }), false, None);
+        assert_eq!(super::wanted_blur_passes(&contrast), [false; 4]);
+
+        let mut per_mask = AllAdjustments::default();
+        per_mask.mask_count = 1;
+        per_mask.mask_adjustments[0].clarity = 0.5;
+        assert_eq!(
+            super::wanted_blur_passes(&per_mask),
+            [false, false, true, false]
+        );
+
+        // A slot beyond mask_count must not gate anything.
+        let mut beyond = AllAdjustments::default();
+        beyond.mask_adjustments[0].structure = 1.0;
+        assert_eq!(super::wanted_blur_passes(&beyond), [false; 4]);
+    }
+
+    /// Renders the same multi-tile image with the neutral-pass gate active
+    /// and with every blur forced on; the outputs must be byte-identical,
+    /// proving each neutral stage is a true no-op over a blurred-vs-dummy
+    /// input. Repeated with sharpness engaged so the gated path re-runs its
+    /// blur next to skipped ones.
+    #[test]
+    fn test_gpu_gated_blurs_bit_exact() {
+        use std::sync::atomic::Ordering;
+
+        let Some(context) = test_gpu_context("gated blurs test device") else {
+            return;
+        };
+
+        const SIZE: u32 = 2560;
+        let img = gradient_rgba(SIZE);
+        let processor =
+            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
+                .expect("GpuProcessor::new");
+        let input_view = upload_rgba16f(&context, &img);
+
+        let render = |js: serde_json::Value, force_all: bool| -> Vec<u8> {
+            super::FORCE_ALL_BLURS.store(force_all, Ordering::Relaxed);
+            let adjustments =
+                crate::image_processing::get_all_adjustments_from_json(&js, false, None);
+            let request = super::RenderRequest {
+                adjustments,
+                mask_bitmaps: &[],
+                lut: None,
+                roi: None,
+            };
+            let result = processor.run(&input_view, SIZE, SIZE, request, false, false, None);
+            super::FORCE_ALL_BLURS.store(false, Ordering::Relaxed);
+            result.expect("processor.run").0
+        };
+
+        let neutral_gated = render(serde_json::json!({}), false);
+        let neutral_forced = render(serde_json::json!({}), true);
+        assert!(
+            neutral_gated == neutral_forced,
+            "neutral render changed when the blur passes were skipped"
+        );
+
+        let sharp_gated = render(serde_json::json!({ "sharpness": 50.0 }), false);
+        let sharp_forced = render(serde_json::json!({ "sharpness": 50.0 }), true);
+        assert!(
+            sharp_gated == sharp_forced,
+            "sharpness render changed when the unrelated blur passes were skipped"
+        );
+        assert!(
+            sharp_gated != neutral_gated,
+            "sharpness=50 had no visible effect; the gating comparison is vacuous"
         );
     }
 
