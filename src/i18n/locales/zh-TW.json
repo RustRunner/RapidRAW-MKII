@@ -777,8 +777,8 @@
         "redo": "重做（Ctrl+Y）或歷史記錄（右鍵單擊）",
         "showEdited": "顯示編輯後（B）",
         "showOriginal": "顯示原始（B）",
-        "splitView": "分割檢視 - 比較原圖與編輯後 (Shift+B)",
         "shutterSpeed": "快門速度",
+        "splitView": "分割檢視 - 比較原圖與編輯後 (Shift+B)",
         "undo": "復原（Ctrl+Z）或歷史記錄（右鍵單擊）"
       },
       "vc": "VC"
@@ -797,6 +797,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "新增標註框",
+      "insertTemplate": "插入範本",
+      "mgrsCoords": "MGRS 座標",
+      "notesPlaceholder": "將算繪到匯出影像上的備註…",
+      "opacity": "不透明度",
+      "opacityHint": "不透明度為 0% 時僅繪製文字，不顯示底框。",
+      "prefillMetadata": "從中繼資料填入",
+      "previewText": "預覽",
+      "saveTemplate": "儲存為預設",
+      "spacing": "間距",
+      "templateSaved": "已儲存",
+      "textSize": "文字大小"
     },
     "dialog": {
       "saveEditedImageTitle": "儲存編輯後的影像",
@@ -831,6 +845,7 @@
     },
     "sections": {
       "advanced": "高階",
+      "callout": "標註框",
       "fileNaming": "檔案命名",
       "fileSettings": "檔案設定",
       "imageSizing": "影像大小",
@@ -1567,7 +1582,6 @@
         "rotate_right": "順時針旋轉 90°",
         "select_all": "選擇所有影像",
         "show_original": "顯示原始影像（前後對比）",
-        "toggle_split_view": "切換分割檢視",
         "toggle_adjustments": "切換調整面板",
         "toggle_ai": "切換 AI 面板",
         "toggle_analytics": "切換分析顯示",
@@ -1579,6 +1593,7 @@
         "toggle_masks": "切換遮色片面板",
         "toggle_metadata": "切換後設資料面板",
         "toggle_presets": "切換預設面板",
+        "toggle_split_view": "切換分割檢視",
         "undo": "復原調整",
         "zoom_100": "縮放到 100%",
         "zoom_fit": "縮放以適應",

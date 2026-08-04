@@ -800,8 +800,8 @@
         "redo": "Refazer (Ctrl+Y) ou Histórico (Botão Direito)",
         "showEdited": "Mostrar Editado (B)",
         "showOriginal": "Mostrar Original (B)",
-        "splitView": "Vista dividida - Comparar original e editado (Shift+B)",
         "shutterSpeed": "Velocidade do Obturador",
+        "splitView": "Vista dividida - Comparar original e editado (Shift+B)",
         "undo": "Desfazer (Ctrl+Z) ou Histórico (Botão Direito)"
       },
       "vc": "CV"
@@ -820,6 +820,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "Adicionar caixa de texto",
+      "insertTemplate": "Inserir modelo",
+      "mgrsCoords": "Coordenadas MGRS",
+      "notesPlaceholder": "Notas renderizadas na exportação…",
+      "opacity": "Opacidade",
+      "opacityHint": "Com opacidade em 0 %, apenas o texto é desenhado, sem caixa.",
+      "prefillMetadata": "Preencher com metadados",
+      "previewText": "Visualização",
+      "saveTemplate": "Salvar como padrão",
+      "spacing": "Espaçamento",
+      "templateSaved": "Salvo",
+      "textSize": "Tamanho do texto"
     },
     "dialog": {
       "saveEditedImageTitle": "Salvar Imagem Editada",
@@ -855,6 +869,7 @@
     },
     "sections": {
       "advanced": "Avançado",
+      "callout": "Caixa de texto",
       "fileNaming": "Nomeação de Arquivos",
       "fileSettings": "Configurações de Arquivo",
       "imageSizing": "Dimensionamento de Imagem",
@@ -1602,7 +1617,6 @@
         "rotate_right": "Girar 90° no sentido horário",
         "select_all": "Selecionar todas as imagens",
         "show_original": "Mostrar original (antes/depois)",
-        "toggle_split_view": "Alternar vista dividida",
         "toggle_adjustments": "Alternar painel de Ajustes",
         "toggle_ai": "Alternar painel de IA",
         "toggle_analytics": "Alternar exibição de Análises",
@@ -1614,6 +1628,7 @@
         "toggle_masks": "Alternar painel de Máscaras",
         "toggle_metadata": "Alternar painel de Metadados",
         "toggle_presets": "Alternar painel de Predefinições",
+        "toggle_split_view": "Alternar vista dividida",
         "undo": "Desfazer ajuste",
         "zoom_100": "Zoom para 100%",
         "zoom_fit": "Zoom para caber",

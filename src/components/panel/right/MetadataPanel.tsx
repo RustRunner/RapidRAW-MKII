@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { Invokes } from '../../ui/AppProperties';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
+import { parseDms } from '../../../utils/gpsUtils';
 import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { IconAperture, IconShutter, IconIso, IconFocalLength, IconLens } from '../editor/ExifIcons';
@@ -45,16 +46,6 @@ const USER_TAG_PREFIX = 'user:';
 function formatExifTag(str: string) {
   if (!str) return '';
   return str.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2');
-}
-
-function parseDms(dmsString: string) {
-  if (!dmsString) return null;
-  const parts = dmsString.match(/(\d+\.?\d*)\s+deg\s+(\d+\.?\d*)\s+min\s+(\d+\.?\d*)\s+sec/);
-  if (!parts) return null;
-  const degrees = parseFloat(parts[1]);
-  const minutes = parseFloat(parts[2]);
-  const seconds = parseFloat(parts[3]);
-  return degrees + minutes / 60 + seconds / 3600;
 }
 
 const CAMERA_ICONS: Record<string, React.FC> = {
@@ -203,7 +194,7 @@ const EDITABLE_FIELDS = [
   { key: 'UserComment', label: 'comments' },
 ];
 
-const KEY_CAMERA_SETTINGS_MAP: CameraSettings = {
+export const KEY_CAMERA_SETTINGS_MAP: CameraSettings = {
   FNumber: {
     format: (value: number) => {
       const fStr = String(value);

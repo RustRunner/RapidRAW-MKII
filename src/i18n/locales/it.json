@@ -800,8 +800,8 @@
         "redo": "Ripeti (Ctrl+Y) o Cronologia (Tasto destro)",
         "showEdited": "Mostra Modificata (B)",
         "showOriginal": "Mostra Originale (B)",
-        "splitView": "Vista divisa - Confronta originale e modificato (Maiusc+B)",
         "shutterSpeed": "Tempo di Esposizione",
+        "splitView": "Vista divisa - Confronta originale e modificato (Maiusc+B)",
         "undo": "Annulla (Ctrl+Z) o Cronologia (Tasto destro)"
       },
       "vc": "CV"
@@ -820,6 +820,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "Aggiungi riquadro di testo",
+      "insertTemplate": "Inserisci modello",
+      "mgrsCoords": "Coordinate MGRS",
+      "notesPlaceholder": "Note renderizzate nell'esportazione…",
+      "opacity": "Opacità",
+      "opacityHint": "Con opacità allo 0 % viene disegnato solo il testo, senza riquadro.",
+      "prefillMetadata": "Precompila dai metadati",
+      "previewText": "Anteprima",
+      "saveTemplate": "Salva come predefinito",
+      "spacing": "Spaziatura",
+      "templateSaved": "Salvato",
+      "textSize": "Dimensione testo"
     },
     "dialog": {
       "saveEditedImageTitle": "Salva Immagine Modificata",
@@ -855,6 +869,7 @@
     },
     "sections": {
       "advanced": "Avanzate",
+      "callout": "Riquadro di testo",
       "fileNaming": "Nomenclatura File",
       "fileSettings": "Impostazioni File",
       "imageSizing": "Dimensionamento Immagine",
@@ -1602,7 +1617,6 @@
         "rotate_right": "Ruota 90° in senso orario",
         "select_all": "Seleziona tutte le immagini",
         "show_original": "Mostra originale (prima/dopo)",
-        "toggle_split_view": "Attiva/disattiva vista divisa",
         "toggle_adjustments": "Attiva/Disattiva pannello Regolazioni",
         "toggle_ai": "Attiva/Disattiva pannello AI",
         "toggle_analytics": "Attiva/Disattiva visualizzazione Analitiche",
@@ -1614,6 +1628,7 @@
         "toggle_masks": "Attiva/Disattiva pannello Maschere",
         "toggle_metadata": "Attiva/Disattiva pannello Metadati",
         "toggle_presets": "Attiva/Disattiva pannello Predefiniti",
+        "toggle_split_view": "Attiva/disattiva vista divisa",
         "undo": "Annulla modifica",
         "zoom_100": "Zoom al 100%",
         "zoom_fit": "Zoom per adattare",

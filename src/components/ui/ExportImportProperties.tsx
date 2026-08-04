@@ -45,6 +45,7 @@ export interface ExportSettings {
   } | null;
   stripGps: boolean;
   watermark: WatermarkSettings | null;
+  callout: CalloutSettings | null;
   exportMasks?: boolean;
   preserveFolders?: boolean;
 }
@@ -65,6 +66,14 @@ export interface WatermarkSettings {
   path: string;
   anchor: WatermarkAnchor;
   scale: number;
+  spacing: number;
+  opacity: number;
+}
+
+export interface CalloutSettings {
+  text: string;
+  anchor: WatermarkAnchor;
+  size: number;
   spacing: number;
   opacity: number;
 }
@@ -120,4 +129,10 @@ export interface ExportPreset {
   watermarkSpacing: number;
   watermarkOpacity: number;
   lastExportPath?: string;
+  enableCallout?: boolean;
+  calloutText?: string;
+  calloutAnchor?: string;
+  calloutSize?: number;
+  calloutSpacing?: number;
+  calloutOpacity?: number;
 }

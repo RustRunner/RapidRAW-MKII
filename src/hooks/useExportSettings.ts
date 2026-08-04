@@ -20,6 +20,12 @@ export function useExportSettings() {
   const [watermarkScale, setWatermarkScale] = useState(10);
   const [watermarkSpacing, setWatermarkSpacing] = useState(5);
   const [watermarkOpacity, setWatermarkOpacity] = useState(75);
+  const [enableCallout, setEnableCallout] = useState(false);
+  const [calloutText, setCalloutText] = useState('');
+  const [calloutAnchor, setCalloutAnchor] = useState<WatermarkAnchor>(WatermarkAnchor.BottomLeft);
+  const [calloutSize, setCalloutSize] = useState(2.5);
+  const [calloutSpacing, setCalloutSpacing] = useState(5);
+  const [calloutOpacity, setCalloutOpacity] = useState(50);
 
   const handleApplyPreset = useCallback((preset: ExportPreset) => {
     setFileFormat(preset.fileFormat);
@@ -40,6 +46,12 @@ export function useExportSettings() {
     setWatermarkScale(preset.watermarkScale);
     setWatermarkSpacing(preset.watermarkSpacing);
     setWatermarkOpacity(preset.watermarkOpacity);
+    setEnableCallout(preset.enableCallout ?? false);
+    setCalloutText(preset.calloutText ?? '');
+    setCalloutAnchor((preset.calloutAnchor as WatermarkAnchor) ?? WatermarkAnchor.BottomLeft);
+    setCalloutSize(preset.calloutSize ?? 2.5);
+    setCalloutSpacing(preset.calloutSpacing ?? 5);
+    setCalloutOpacity(preset.calloutOpacity ?? 50);
   }, []);
 
   const currentSettingsObject = useMemo(
@@ -62,6 +74,12 @@ export function useExportSettings() {
       watermarkScale,
       watermarkSpacing,
       watermarkOpacity,
+      enableCallout,
+      calloutText,
+      calloutAnchor,
+      calloutSize,
+      calloutSpacing,
+      calloutOpacity,
     }),
     [
       fileFormat,
@@ -82,6 +100,12 @@ export function useExportSettings() {
       watermarkScale,
       watermarkSpacing,
       watermarkOpacity,
+      enableCallout,
+      calloutText,
+      calloutAnchor,
+      calloutSize,
+      calloutSpacing,
+      calloutOpacity,
     ]
   );
 
@@ -122,6 +146,18 @@ export function useExportSettings() {
     setWatermarkSpacing,
     watermarkOpacity,
     setWatermarkOpacity,
+    enableCallout,
+    setEnableCallout,
+    calloutText,
+    setCalloutText,
+    calloutAnchor,
+    setCalloutAnchor,
+    calloutSize,
+    setCalloutSize,
+    calloutSpacing,
+    setCalloutSpacing,
+    calloutOpacity,
+    setCalloutOpacity,
     handleApplyPreset,
     currentSettingsObject,
   };

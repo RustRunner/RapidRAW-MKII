@@ -777,8 +777,8 @@
         "redo": "重做（Ctrl+Y）或历史记录（右键单击）",
         "showEdited": "显示编辑后（B）",
         "showOriginal": "显示原始（B）",
-        "splitView": "分屏视图 - 对比原图与编辑效果 (Shift+B)",
         "shutterSpeed": "快门速度",
+        "splitView": "分屏视图 - 对比原图与编辑效果 (Shift+B)",
         "undo": "撤销（Ctrl+Z）或历史记录（右键单击）"
       },
       "vc": "VC"
@@ -797,6 +797,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "添加标注框",
+      "insertTemplate": "插入模板",
+      "mgrsCoords": "MGRS 坐标",
+      "notesPlaceholder": "将渲染到导出图像上的备注…",
+      "opacity": "不透明度",
+      "opacityHint": "不透明度为 0% 时仅绘制文字，不显示底框。",
+      "prefillMetadata": "从元数据填充",
+      "previewText": "预览",
+      "saveTemplate": "保存为默认",
+      "spacing": "间距",
+      "templateSaved": "已保存",
+      "textSize": "文字大小"
     },
     "dialog": {
       "saveEditedImageTitle": "保存编辑后的图像",
@@ -831,6 +845,7 @@
     },
     "sections": {
       "advanced": "高级",
+      "callout": "标注框",
       "fileNaming": "文件命名",
       "fileSettings": "文件设置",
       "imageSizing": "图像大小",
@@ -1567,7 +1582,6 @@
         "rotate_right": "顺时针旋转 90°",
         "select_all": "选择所有图像",
         "show_original": "显示原始图像（前后对比）",
-        "toggle_split_view": "切换分屏视图",
         "toggle_adjustments": "切换调整面板",
         "toggle_ai": "切换 AI 面板",
         "toggle_analytics": "切换分析显示",
@@ -1579,6 +1593,7 @@
         "toggle_masks": "切换蒙版面板",
         "toggle_metadata": "切换元数据面板",
         "toggle_presets": "切换预设面板",
+        "toggle_split_view": "切换分屏视图",
         "undo": "撤销调整",
         "zoom_100": "缩放到 100%",
         "zoom_fit": "缩放以适应",

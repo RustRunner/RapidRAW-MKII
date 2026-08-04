@@ -5,113 +5,233 @@ LOCALES_DIR = Path("./locales")
 
 TRANSLATIONS = {
     "de": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "RAW immer decodieren",
-                "alwaysDecodeRawDesc": "Erzwingt die vollständige RAW-Decodierung für Vorschaubilder, anstatt eingebettete JPEG-Vorschauen zu verwenden. Aktiviere diese Option, wenn sich die Vorschaubilder farblich oder im Kontrast vom geöffneten Bild unterscheiden.",
-                "alwaysDecodeRawLabel": "RAW für Vorschaubilder immer decodieren"
-            }
+        "export": {
+            "sections": {"callout": "Infobox"},
+            "callout": {
+                "addCallout": "Infobox hinzufügen",
+                "notesPlaceholder": "Notizen, die in den Export gerendert werden…",
+                "prefillMetadata": "Aus Metadaten übernehmen",
+                "insertTemplate": "Vorlage einfügen",
+                "saveTemplate": "Als Standard speichern",
+                "templateSaved": "Gespeichert",
+                "mgrsCoords": "MGRS-Koordinaten",
+                "textSize": "Textgröße",
+                "spacing": "Abstand",
+                "opacity": "Deckkraft",
+                "opacityHint": "Bei 0 % Deckkraft wird nur der Text gezeichnet — ohne Box.",
+                "previewText": "Vorschau",
+            },
         }
     },
     "en": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Always Decode RAW",
-                "alwaysDecodeRawDesc": "Force full RAW decoding for thumbnails instead of using embedded JPEG previews. Enable this if your thumbnails look different in color or contrast compared to the opened image.",
-                "alwaysDecodeRawLabel": "Always decode RAW for thumbnails"
-            }
+        "export": {
+            "sections": {"callout": "Callout Box"},
+            "callout": {
+                "addCallout": "Add Callout Box",
+                "notesPlaceholder": "Notes rendered onto the export…",
+                "prefillMetadata": "Prefill from Metadata",
+                "insertTemplate": "Insert Template",
+                "saveTemplate": "Save as Default",
+                "templateSaved": "Saved",
+                "mgrsCoords": "MGRS Coordinates",
+                "textSize": "Text Size",
+                "spacing": "Spacing",
+                "opacity": "Opacity",
+                "opacityHint": "At 0% opacity, only the text is drawn — no box.",
+                "previewText": "Preview",
+            },
         }
     },
     "es": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Decodificar RAW siempre",
-                "alwaysDecodeRawDesc": "Fuerza la decodificación RAW completa para las miniaturas en lugar de usar vistas previas JPEG incrustadas. Activa esta opción si las miniaturas tienen colores o contrastes diferentes a la imagen abierta.",
-                "alwaysDecodeRawLabel": "Decodificar RAW siempre para miniaturas"
-            }
+        "export": {
+            "sections": {"callout": "Cuadro de texto"},
+            "callout": {
+                "addCallout": "Añadir cuadro de texto",
+                "notesPlaceholder": "Notas que se renderizan en la exportación…",
+                "prefillMetadata": "Rellenar desde metadatos",
+                "insertTemplate": "Insertar plantilla",
+                "saveTemplate": "Guardar como predeterminada",
+                "templateSaved": "Guardado",
+                "mgrsCoords": "Coordenadas MGRS",
+                "textSize": "Tamaño del texto",
+                "spacing": "Espaciado",
+                "opacity": "Opacidad",
+                "opacityHint": "Con opacidad al 0 % solo se dibuja el texto, sin cuadro.",
+                "previewText": "Vista previa",
+            },
         }
     },
     "fr": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Toujours décoder le RAW",
-                "alwaysDecodeRawDesc": "Force le décodage RAW complet pour les miniatures au lieu d'utiliser les aperçus JPEG intégrés. Activez cette option si vos miniatures ont des couleurs ou des contrastes différents de l'image ouverte.",
-                "alwaysDecodeRawLabel": "Toujours décoder le RAW pour les miniatures"
-            }
+        "export": {
+            "sections": {"callout": "Encadré"},
+            "callout": {
+                "addCallout": "Ajouter un encadré",
+                "notesPlaceholder": "Notes rendues sur l'export…",
+                "prefillMetadata": "Préremplir depuis les métadonnées",
+                "insertTemplate": "Insérer le modèle",
+                "saveTemplate": "Enregistrer par défaut",
+                "templateSaved": "Enregistré",
+                "mgrsCoords": "Coordonnées MGRS",
+                "textSize": "Taille du texte",
+                "spacing": "Espacement",
+                "opacity": "Opacité",
+                "opacityHint": "À 0 % d'opacité, seul le texte est dessiné, sans encadré.",
+                "previewText": "Aperçu",
+            },
         }
     },
     "it": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Decodifica RAW sempre",
-                "alwaysDecodeRawDesc": "Forza la decodifica RAW completa per le miniature invece di usare le anteprime JPEG incorporate. Attiva questa opzione se i colori o il contrasto delle miniature sono diversi dall'immagine aperta.",
-                "alwaysDecodeRawLabel": "Decodifica RAW sempre per le miniature"
-            }
+        "export": {
+            "sections": {"callout": "Riquadro di testo"},
+            "callout": {
+                "addCallout": "Aggiungi riquadro di testo",
+                "notesPlaceholder": "Note renderizzate nell'esportazione…",
+                "prefillMetadata": "Precompila dai metadati",
+                "insertTemplate": "Inserisci modello",
+                "saveTemplate": "Salva come predefinito",
+                "templateSaved": "Salvato",
+                "mgrsCoords": "Coordinate MGRS",
+                "textSize": "Dimensione testo",
+                "spacing": "Spaziatura",
+                "opacity": "Opacità",
+                "opacityHint": "Con opacità allo 0 % viene disegnato solo il testo, senza riquadro.",
+                "previewText": "Anteprima",
+            },
         }
     },
     "ja": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "常にRAWをデコード",
-                "alwaysDecodeRawDesc": "埋め込まれたJPEGプレビューを使用する代わりに、サムネイルの完全なRAWデコードを強制します。サムネイルの色やコントラストが開いた画像と異なる場合に有効にしてください。",
-                "alwaysDecodeRawLabel": "サムネイル用に常にRAWをデコード"
-            }
+        "export": {
+            "sections": {"callout": "注釈ボックス"},
+            "callout": {
+                "addCallout": "注釈ボックスを追加",
+                "notesPlaceholder": "書き出し画像に描画されるメモ…",
+                "prefillMetadata": "メタデータから入力",
+                "insertTemplate": "テンプレートを挿入",
+                "saveTemplate": "デフォルトとして保存",
+                "templateSaved": "保存しました",
+                "mgrsCoords": "MGRS座標",
+                "textSize": "文字サイズ",
+                "spacing": "間隔",
+                "opacity": "不透明度",
+                "opacityHint": "不透明度 0% ではボックスなしで文字のみ描画されます。",
+                "previewText": "プレビュー",
+            },
         }
     },
     "ko": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "항상 RAW 디코딩",
-                "alwaysDecodeRawDesc": "포함된 JPEG 미리보기를 사용하는 대신 썸네일에 대해 전체 RAW 디코딩을 강제합니다. 썸네일의 색상이나 대비가 열린 이미지와 다르게 보이는 경우 이 옵션을 활성화하세요.",
-                "alwaysDecodeRawLabel": "썸네일에 대해 항상 RAW 디코딩"
-            }
+        "export": {
+            "sections": {"callout": "설명 상자"},
+            "callout": {
+                "addCallout": "설명 상자 추가",
+                "notesPlaceholder": "내보내기 이미지에 렌더링될 메모…",
+                "prefillMetadata": "메타데이터에서 채우기",
+                "insertTemplate": "템플릿 삽입",
+                "saveTemplate": "기본값으로 저장",
+                "templateSaved": "저장됨",
+                "mgrsCoords": "MGRS 좌표",
+                "textSize": "텍스트 크기",
+                "spacing": "간격",
+                "opacity": "불투명도",
+                "opacityHint": "불투명도 0%에서는 상자 없이 텍스트만 그려집니다.",
+                "previewText": "미리보기",
+            },
         }
     },
     "pl": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Zawsze dekoduj RAW",
-                "alwaysDecodeRawDesc": "Wymusza pełne dekodowanie RAW dla miniatur zamiast korzystania z osadzonych podglądów JPEG. Włącz tę opcję, jeśli miniatury różnią się kolorami lub kontrastem od otwartego obrazu.",
-                "alwaysDecodeRawLabel": "Zawsze dekoduj RAW dla miniatur"
-            }
+        "export": {
+            "sections": {"callout": "Ramka tekstowa"},
+            "callout": {
+                "addCallout": "Dodaj ramkę tekstową",
+                "notesPlaceholder": "Notatki renderowane na eksporcie…",
+                "prefillMetadata": "Wypełnij z metadanych",
+                "insertTemplate": "Wstaw szablon",
+                "saveTemplate": "Zapisz jako domyślny",
+                "templateSaved": "Zapisano",
+                "mgrsCoords": "Współrzędne MGRS",
+                "textSize": "Rozmiar tekstu",
+                "spacing": "Odstępy",
+                "opacity": "Krycie",
+                "opacityHint": "Przy kryciu 0 % rysowany jest tylko tekst, bez ramki.",
+                "previewText": "Podgląd",
+            },
         }
     },
     "pt": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Sempre decodificar RAW",
-                "alwaysDecodeRawDesc": "Força a decodificação RAW completa para miniaturas em vez de usar visualizações JPEG incorporadas. Ative esta opção se as suas miniaturas tiverem cores ou contrastes diferentes em comparação com a imagem aberta.",
-                "alwaysDecodeRawLabel": "Sempre decodificar RAW para miniaturas"
-            }
+        "export": {
+            "sections": {"callout": "Caixa de texto"},
+            "callout": {
+                "addCallout": "Adicionar caixa de texto",
+                "notesPlaceholder": "Notas renderizadas na exportação…",
+                "prefillMetadata": "Preencher com metadados",
+                "insertTemplate": "Inserir modelo",
+                "saveTemplate": "Salvar como padrão",
+                "templateSaved": "Salvo",
+                "mgrsCoords": "Coordenadas MGRS",
+                "textSize": "Tamanho do texto",
+                "spacing": "Espaçamento",
+                "opacity": "Opacidade",
+                "opacityHint": "Com opacidade em 0 %, apenas o texto é desenhado, sem caixa.",
+                "previewText": "Visualização",
+            },
         }
     },
     "ru": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "Всегда декодировать RAW",
-                "alwaysDecodeRawDesc": "Принудительно использовать полное декодирование RAW для миниатюр вместо встроенных превью JPEG. Включите эту опцию, если цвета или контрастность миниатюр отличаются от открытого изображения.",
-                "alwaysDecodeRawLabel": "Всегда декодировать RAW для миниатюр"
-            }
+        "export": {
+            "sections": {"callout": "Текстовый блок"},
+            "callout": {
+                "addCallout": "Добавить текстовый блок",
+                "notesPlaceholder": "Заметки, отображаемые на экспортируемом изображении…",
+                "prefillMetadata": "Заполнить из метаданных",
+                "insertTemplate": "Вставить шаблон",
+                "saveTemplate": "Сохранить как шаблон по умолчанию",
+                "templateSaved": "Сохранено",
+                "mgrsCoords": "Координаты MGRS",
+                "textSize": "Размер текста",
+                "spacing": "Отступы",
+                "opacity": "Непрозрачность",
+                "opacityHint": "При непрозрачности 0 % отображается только текст, без подложки.",
+                "previewText": "Предпросмотр",
+            },
         }
     },
     "zh-CN": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "始终解码 RAW",
-                "alwaysDecodeRawDesc": "强制对缩略图进行完整的 RAW 解码，而不是使用内置的 JPEG 预览。如果您的缩略图在颜色或对比度上与打开的图像不同，请启用此选项。",
-                "alwaysDecodeRawLabel": "始终为缩略图解码 RAW"
-            }
+        "export": {
+            "sections": {"callout": "标注框"},
+            "callout": {
+                "addCallout": "添加标注框",
+                "notesPlaceholder": "将渲染到导出图像上的备注…",
+                "prefillMetadata": "从元数据填充",
+                "insertTemplate": "插入模板",
+                "saveTemplate": "保存为默认",
+                "templateSaved": "已保存",
+                "mgrsCoords": "MGRS 坐标",
+                "textSize": "文字大小",
+                "spacing": "间距",
+                "opacity": "不透明度",
+                "opacityHint": "不透明度为 0% 时仅绘制文字，不显示底框。",
+                "previewText": "预览",
+            },
         }
     },
     "zh-TW": {
-        "settings": {
-            "processing": {
-                "alwaysDecodeRaw": "始終解碼 RAW",
-                "alwaysDecodeRawDesc": "強制對縮圖進行完整的 RAW 解碼，而不是使用內建的 JPEG 預覽。如果您的縮圖在顏色或對比度上與打開的影像不同，請啟用此選項。",
-                "alwaysDecodeRawLabel": "始終為縮圖解碼 RAW"
-            }
+        "export": {
+            "sections": {"callout": "標註框"},
+            "callout": {
+                "addCallout": "新增標註框",
+                "notesPlaceholder": "將算繪到匯出影像上的備註…",
+                "prefillMetadata": "從中繼資料填入",
+                "insertTemplate": "插入範本",
+                "saveTemplate": "儲存為預設",
+                "templateSaved": "已儲存",
+                "mgrsCoords": "MGRS 座標",
+                "textSize": "文字大小",
+                "spacing": "間距",
+                "opacity": "不透明度",
+                "opacityHint": "不透明度為 0% 時僅繪製文字，不顯示底框。",
+                "previewText": "預覽",
+            },
         }
-    }
+    },
 }
 
 def deep_merge(target: dict, source: dict):
@@ -153,15 +273,10 @@ def update_json_file(file_path: Path, trans: dict):
     print(f"Updated and Sorted: {file_path.name}")
 
 def main():
-    if not LOCALES_DIR.exists():
-        print(f"Error: Locales directory '{LOCALES_DIR}' does not exist.")
-        return
-
-    print("Starting thumbnail RAW decoding translation updates...")
-    for lang, trans in TRANSLATIONS.items():
-        file_path = LOCALES_DIR / f"{lang}.json"
-        update_json_file(file_path, trans)
-    print("Done!")
+    print("Starting translation updates...")
+    for locale, trans in TRANSLATIONS.items():
+        update_json_file(LOCALES_DIR / f"{locale}.json", trans)
+    print("Done.")
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,18 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { FileInput, CheckCircle, XCircle, Loader, Ban, ChevronDown, ChevronRight, Settings, X } from 'lucide-react';
+import {
+  FileInput,
+  Check,
+  CheckCircle,
+  XCircle,
+  Loader,
+  Ban,
+  ChevronDown,
+  ChevronRight,
+  Settings,
+  X,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import debounce from 'lodash.debounce';
@@ -25,6 +36,11 @@ import { Invokes, SelectedImage, AppSettings } from '../../ui/AppProperties';
 import ExportPresetsList from '../../ui/ExportPresetsList';
 import { useExportSettings } from '../../../hooks/useExportSettings';
 import { useOsPlatform } from '../../../hooks/useOsPlatform';
+import {
+  buildPrefillBlock,
+  insertIntoNotes,
+  DEFAULT_CALLOUT_TEMPLATE,
+} from '../../../utils/calloutPrefill';
 import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { useEditorStore } from '../../../store/useEditorStore';
@@ -157,6 +173,124 @@ function WatermarkPreview({
   );
 }
 
+function CalloutPreview({
+  anchor,
+  size,
+  spacing,
+  opacity,
+  text,
+  imageAspectRatio,
+}: {
+  anchor: WatermarkAnchor;
+  size: number;
+  spacing: number;
+  opacity: number;
+  text: string;
+  imageAspectRatio: number;
+}) {
+  const { t } = useTranslation();
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageWidth, setStageWidth] = useState(0);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setStageWidth(entry.contentRect.width);
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  const stageHeight = imageAspectRatio > 0 ? stageWidth / imageAspectRatio : 0;
+  const minDim = Math.min(stageWidth, stageHeight);
+  const fontSize = (minDim * size) / 100;
+  const inset = (minDim * spacing) / 100;
+
+  const lines = text.split('\n');
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  const previewText = lines.slice(0, 4).join('\n');
+
+  const getPositionStyles = () => {
+    const styles: React.CSSProperties = { position: 'absolute' };
+    const insetString = `${inset}px`;
+
+    switch (anchor) {
+      case WatermarkAnchor.TopLeft:
+        styles.top = insetString;
+        styles.left = insetString;
+        break;
+      case WatermarkAnchor.TopCenter:
+        styles.top = insetString;
+        styles.left = '50%';
+        styles.transform = 'translateX(-50%)';
+        break;
+      case WatermarkAnchor.TopRight:
+        styles.top = insetString;
+        styles.right = insetString;
+        break;
+      case WatermarkAnchor.CenterLeft:
+        styles.top = '50%';
+        styles.left = insetString;
+        styles.transform = 'translateY(-50%)';
+        break;
+      case WatermarkAnchor.Center:
+        styles.top = '50%';
+        styles.left = '50%';
+        styles.transform = 'translate(-50%, -50%)';
+        break;
+      case WatermarkAnchor.CenterRight:
+        styles.top = '50%';
+        styles.right = insetString;
+        styles.transform = 'translateY(-50%)';
+        break;
+      case WatermarkAnchor.BottomLeft:
+        styles.bottom = insetString;
+        styles.left = insetString;
+        break;
+      case WatermarkAnchor.BottomCenter:
+        styles.bottom = insetString;
+        styles.left = '50%';
+        styles.transform = 'translateX(-50%)';
+        break;
+      case WatermarkAnchor.BottomRight:
+        styles.bottom = insetString;
+        styles.right = insetString;
+        break;
+    }
+    return styles;
+  };
+
+  return (
+    <div
+      ref={stageRef}
+      className="w-full bg-surface rounded-md relative overflow-hidden border border-surface"
+      style={{ aspectRatio: imageAspectRatio }}
+    >
+      <div className="absolute inset-0 flex items-center justify-center">
+        <Text variant={TextVariants.label}>{t('export.callout.previewText')}</Text>
+      </div>
+      {previewText && fontSize > 0 && (
+        <div
+          className="rounded-sm font-mono max-w-full overflow-hidden"
+          style={{
+            ...getPositionStyles(),
+            display: 'inline-block',
+            whiteSpace: 'pre',
+            color: '#ffffff',
+            fontSize: `${fontSize}px`,
+            lineHeight: 1.35,
+            padding: '0.6em',
+            background: `rgba(38, 38, 38, ${opacity / 100})`,
+          }}
+        >
+          {previewText}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const formatBytes = (bytes: number, t: any, decimals = 2) => {
   if (!+bytes) return `0 ${t('export.bytes.bytes')}`;
   const k = 1024;
@@ -230,11 +364,51 @@ export default function ExportPanel({
     setWatermarkSpacing,
     watermarkOpacity,
     setWatermarkOpacity,
+    enableCallout,
+    setEnableCallout,
+    calloutText,
+    setCalloutText,
+    calloutAnchor,
+    setCalloutAnchor,
+    calloutSize,
+    setCalloutSize,
+    calloutSpacing,
+    setCalloutSpacing,
+    calloutOpacity,
+    setCalloutOpacity,
     preserveFolders,
     setPreserveFolders,
     handleApplyPreset,
     currentSettingsObject,
   } = useExportSettings();
+
+  const [calloutMgrs, setCalloutMgrs] = useState(false);
+  const [calloutTemplate, setCalloutTemplate] = useState(DEFAULT_CALLOUT_TEMPLATE);
+  const [isTemplateSaved, setIsTemplateSaved] = useState(false);
+
+  const hasExif = !!selectedImage?.exif && Object.keys(selectedImage.exif).length > 0;
+
+  const handlePrefillMetadata = () => {
+    const block = buildPrefillBlock(selectedImage?.exif ?? null, { mgrs: calloutMgrs });
+    if (block) setCalloutText(insertIntoNotes(calloutText, block));
+  };
+
+  const handleInsertTemplate = () => {
+    setCalloutText(insertIntoNotes(calloutText, calloutTemplate));
+  };
+
+  const handleSaveTemplate = () => {
+    setCalloutTemplate(calloutText);
+    setIsTemplateSaved(true);
+    setTimeout(() => setIsTemplateSaved(false), 1500);
+  };
+
+  // Named presets carry callout style but never the notes text; only the
+  // __last_used__ preset written by saveLastUsedPreset keeps the text.
+  const presetsListSettings = useMemo(
+    () => ({ ...currentSettingsObject, calloutText: '' }),
+    [currentSettingsObject],
+  );
 
   const adjustmentsRef = useRef(useEditorStore.getState().adjustments);
 
@@ -292,7 +466,7 @@ export default function ExportPanel({
 
   useEffect(() => {
     const fetchDims = async () => {
-      if (!enableWatermark || numImages === 0 || !isVisible) return;
+      if ((!enableWatermark && !enableCallout) || numImages === 0 || !isVisible) return;
       if (!isLibraryContext && selectedImage && selectedImage.width && selectedImage.height) {
         setImageAspectRatio(selectedImage.width / selectedImage.height);
         return;
@@ -305,7 +479,7 @@ export default function ExportPanel({
       }
     };
     fetchDims();
-  }, [pathsToExport, isLibraryContext, selectedImage, enableWatermark, numImages, isVisible]);
+  }, [pathsToExport, isLibraryContext, selectedImage, enableWatermark, enableCallout, numImages, isVisible]);
 
   useEffect(() => {
     const fetchWatermarkDimensions = async () => {
@@ -386,6 +560,16 @@ export default function ExportPanel({
               opacity: watermarkOpacity,
             }
           : null,
+      callout:
+        enableCallout && calloutText.trim()
+          ? {
+              text: calloutText,
+              anchor: calloutAnchor,
+              size: calloutSize,
+              spacing: calloutSpacing,
+              opacity: calloutOpacity,
+            }
+          : null,
     };
     const format = FILE_FORMATS.find((f: FileFormat) => f.id === fileFormat)?.extensions[0] || 'jpeg';
     const runEstimate = () =>
@@ -420,6 +604,12 @@ export default function ExportPanel({
     watermarkScale,
     watermarkSpacing,
     watermarkOpacity,
+    enableCallout,
+    calloutText,
+    calloutAnchor,
+    calloutSize,
+    calloutSpacing,
+    calloutOpacity,
     debouncedEstimateSize,
     exportMasks,
     preserveFolders,
@@ -470,6 +660,16 @@ export default function ExportPanel({
               scale: watermarkScale,
               spacing: watermarkSpacing,
               opacity: watermarkOpacity,
+            }
+          : null,
+      callout:
+        enableCallout && calloutText.trim()
+          ? {
+              text: calloutText,
+              anchor: calloutAnchor,
+              size: calloutSize,
+              spacing: calloutSpacing,
+              opacity: calloutOpacity,
             }
           : null,
     };
@@ -581,7 +781,7 @@ export default function ExportPanel({
               <ExportPresetsList
                 appSettings={appSettings}
                 onSettingsChange={onSettingsChange}
-                currentSettings={currentSettingsObject}
+                currentSettings={presetsListSettings}
                 onApplyPreset={handleApplyPreset}
               />
             </div>
@@ -780,6 +980,116 @@ export default function ExportPanel({
                           />
                         </>
                       )}
+                    </div>
+                  )}
+                </Section>
+
+                <Section title={t('export.sections.callout')}>
+                  <Switch
+                    label={t('export.callout.addCallout')}
+                    checked={enableCallout}
+                    onChange={setEnableCallout}
+                    disabled={isExporting}
+                    trackClassName="bg-surface"
+                  />
+                  {enableCallout && (
+                    <div className="space-y-4 pl-2 border-l-2 border-surface">
+                      <textarea
+                        className="w-full bg-surface border border-surface rounded-md p-2 text-sm font-mono text-text-primary focus:ring-accent focus:border-accent"
+                        rows={5}
+                        value={calloutText}
+                        onChange={(e) => setCalloutText(e.target.value)}
+                        placeholder={t('export.callout.notesPlaceholder')}
+                        disabled={isExporting}
+                        spellCheck={false}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          className="bg-surface flex-1"
+                          onClick={handlePrefillMetadata}
+                          disabled={isExporting || !hasExif}
+                        >
+                          <Text color={TextColors.primary}>{t('export.callout.prefillMetadata')}</Text>
+                        </Button>
+                        <Button
+                          className="bg-surface flex-1"
+                          onClick={handleInsertTemplate}
+                          disabled={isExporting}
+                        >
+                          <Text color={TextColors.primary}>{t('export.callout.insertTemplate')}</Text>
+                        </Button>
+                        <Button
+                          className="bg-surface flex-1"
+                          onClick={handleSaveTemplate}
+                          disabled={isExporting || isTemplateSaved || !calloutText.trim()}
+                        >
+                          {isTemplateSaved ? (
+                            <>
+                              <Check size={16} className="text-green-500" />
+                              <Text color={TextColors.primary}>{t('export.callout.templateSaved')}</Text>
+                            </>
+                          ) : (
+                            <Text color={TextColors.primary}>{t('export.callout.saveTemplate')}</Text>
+                          )}
+                        </Button>
+                      </div>
+                      <Switch
+                        label={t('export.callout.mgrsCoords')}
+                        checked={calloutMgrs}
+                        onChange={setCalloutMgrs}
+                        disabled={isExporting}
+                        trackClassName="bg-surface"
+                      />
+                      <Dropdown
+                        options={anchorOptions}
+                        value={calloutAnchor}
+                        onChange={(val) => setCalloutAnchor(val as WatermarkAnchor)}
+                        disabled={isExporting}
+                        className="w-full"
+                      />
+                      <div>
+                        <Slider
+                          label={t('export.callout.textSize')}
+                          min={1}
+                          max={8}
+                          step={0.5}
+                          value={calloutSize}
+                          onChange={(e) => setCalloutSize(Number(e.target.value))}
+                          disabled={isExporting}
+                          defaultValue={2.5}
+                        />
+                        <Slider
+                          label={t('export.callout.spacing')}
+                          min={0}
+                          max={25}
+                          step={1}
+                          value={calloutSpacing}
+                          onChange={(e) => setCalloutSpacing(Number(e.target.value))}
+                          disabled={isExporting}
+                          defaultValue={5}
+                        />
+                        <Slider
+                          label={t('export.callout.opacity')}
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={calloutOpacity}
+                          onChange={(e) => setCalloutOpacity(Number(e.target.value))}
+                          disabled={isExporting}
+                          defaultValue={50}
+                        />
+                        <Text variant={TextVariants.small} color={TextColors.secondary}>
+                          {t('export.callout.opacityHint')}
+                        </Text>
+                      </div>
+                      <CalloutPreview
+                        imageAspectRatio={imageAspectRatio}
+                        anchor={calloutAnchor as WatermarkAnchor}
+                        size={calloutSize}
+                        spacing={calloutSpacing}
+                        opacity={calloutOpacity}
+                        text={calloutText}
+                      />
                     </div>
                   )}
                 </Section>

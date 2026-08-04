@@ -779,8 +779,8 @@
         "redo": "Redo (Ctrl+Y) or History (Right-click)",
         "showEdited": "Show Edited (B)",
         "showOriginal": "Show Original (B)",
-        "splitView": "Split View - Compare Original & Edited (Shift+B)",
         "shutterSpeed": "Shutter Speed",
+        "splitView": "Split View - Compare Original & Edited (Shift+B)",
         "undo": "Undo (Ctrl+Z) or History (Right-click)"
       },
       "vc": "VC"
@@ -799,6 +799,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "Add Callout Box",
+      "insertTemplate": "Insert Template",
+      "mgrsCoords": "MGRS Coordinates",
+      "notesPlaceholder": "Notes rendered onto the export…",
+      "opacity": "Opacity",
+      "opacityHint": "At 0% opacity, only the text is drawn — no box.",
+      "prefillMetadata": "Prefill from Metadata",
+      "previewText": "Preview",
+      "saveTemplate": "Save as Default",
+      "spacing": "Spacing",
+      "templateSaved": "Saved",
+      "textSize": "Text Size"
     },
     "dialog": {
       "saveEditedImageTitle": "Save Edited Image",
@@ -833,6 +847,7 @@
     },
     "sections": {
       "advanced": "Advanced",
+      "callout": "Callout Box",
       "fileNaming": "File Naming",
       "fileSettings": "File Settings",
       "imageSizing": "Image Sizing",
@@ -1569,7 +1584,6 @@
         "rotate_right": "Rotate 90° clockwise",
         "select_all": "Select all images",
         "show_original": "Show original (before/after)",
-        "toggle_split_view": "Toggle split view",
         "toggle_adjustments": "Toggle Adjustments panel",
         "toggle_ai": "Toggle AI panel",
         "toggle_analytics": "Toggle Analytics display",
@@ -1581,6 +1595,7 @@
         "toggle_masks": "Toggle Masks panel",
         "toggle_metadata": "Toggle Metadata panel",
         "toggle_presets": "Toggle Presets panel",
+        "toggle_split_view": "Toggle split view",
         "undo": "Undo adjustment",
         "zoom_100": "Zoom to 100%",
         "zoom_fit": "Zoom to fit",

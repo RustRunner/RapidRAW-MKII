@@ -779,8 +779,8 @@
         "redo": "Wiederholen (Strg+Y) oder Verlauf (Rechtsklick)",
         "showEdited": "Bearbeitet anzeigen (B)",
         "showOriginal": "Original anzeigen (B)",
-        "splitView": "Geteilte Ansicht - Original & Bearbeitet vergleichen (Umschalt+B)",
         "shutterSpeed": "Verschlusszeit",
+        "splitView": "Geteilte Ansicht - Original & Bearbeitet vergleichen (Umschalt+B)",
         "undo": "Rückgängig (Strg+Z) oder Verlauf (Rechtsklick)"
       },
       "vc": "VK"
@@ -799,6 +799,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "Infobox hinzufügen",
+      "insertTemplate": "Vorlage einfügen",
+      "mgrsCoords": "MGRS-Koordinaten",
+      "notesPlaceholder": "Notizen, die in den Export gerendert werden…",
+      "opacity": "Deckkraft",
+      "opacityHint": "Bei 0 % Deckkraft wird nur der Text gezeichnet — ohne Box.",
+      "prefillMetadata": "Aus Metadaten übernehmen",
+      "previewText": "Vorschau",
+      "saveTemplate": "Als Standard speichern",
+      "spacing": "Abstand",
+      "templateSaved": "Gespeichert",
+      "textSize": "Textgröße"
     },
     "dialog": {
       "saveEditedImageTitle": "Bearbeitetes Bild speichern",
@@ -833,6 +847,7 @@
     },
     "sections": {
       "advanced": "Erweitert",
+      "callout": "Infobox",
       "fileNaming": "Dateibenennung",
       "fileSettings": "Dateieinstellungen",
       "imageSizing": "Bildgröße",
@@ -1569,7 +1584,6 @@
         "rotate_right": "90° im Uhrzeigersinn drehen",
         "select_all": "Alle Bilder auswählen",
         "show_original": "Original anzeigen (Vorher/Nachher)",
-        "toggle_split_view": "Geteilte Ansicht umschalten",
         "toggle_adjustments": "Anpassungen-Panel ein-/ausblenden",
         "toggle_ai": "KI-Panel ein-/ausblenden",
         "toggle_analytics": "Analyseanzeige ein-/ausblenden",
@@ -1581,6 +1595,7 @@
         "toggle_masks": "Maskieren-Panel ein-/ausblenden",
         "toggle_metadata": "Metadaten-Panel ein-/ausblenden",
         "toggle_presets": "Vorgaben-Panel ein-/ausblenden",
+        "toggle_split_view": "Geteilte Ansicht umschalten",
         "undo": "Bearbeitung rückgängig machen",
         "zoom_100": "Auf 100% zoomen",
         "zoom_fit": "Auf Fenstergröße einpassen",

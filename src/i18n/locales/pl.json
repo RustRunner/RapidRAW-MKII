@@ -821,8 +821,8 @@
         "redo": "Ponów (Ctrl+Y) lub Historia (Prawy przycisk)",
         "showEdited": "Pokaż po edycji (B)",
         "showOriginal": "Pokaż oryginał (B)",
-        "splitView": "Widok podzielony - porównanie oryginału i edycji (Shift+B)",
         "shutterSpeed": "Czas otwarcia migawki",
+        "splitView": "Widok podzielony - porównanie oryginału i edycji (Shift+B)",
         "undo": "Cofnij (Ctrl+Z) lub Historia (Prawy przycisk)"
       },
       "vc": "VC"
@@ -841,6 +841,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "Dodaj ramkę tekstową",
+      "insertTemplate": "Wstaw szablon",
+      "mgrsCoords": "Współrzędne MGRS",
+      "notesPlaceholder": "Notatki renderowane na eksporcie…",
+      "opacity": "Krycie",
+      "opacityHint": "Przy kryciu 0 % rysowany jest tylko tekst, bez ramki.",
+      "prefillMetadata": "Wypełnij z metadanych",
+      "previewText": "Podgląd",
+      "saveTemplate": "Zapisz jako domyślny",
+      "spacing": "Odstępy",
+      "templateSaved": "Zapisano",
+      "textSize": "Rozmiar tekstu"
     },
     "dialog": {
       "saveEditedImageTitle": "Zapisz edytowany obraz",
@@ -877,6 +891,7 @@
     },
     "sections": {
       "advanced": "Zaawansowane",
+      "callout": "Ramka tekstowa",
       "fileNaming": "Nazewnictwo plików",
       "fileSettings": "Ustawienia pliku",
       "imageSizing": "Rozmiar obrazu",
@@ -1635,7 +1650,6 @@
         "rotate_right": "Obróć o 90° w prawo",
         "select_all": "Zaznacz wszystkie obrazy",
         "show_original": "Pokaż oryginał (przed/po)",
-        "toggle_split_view": "Przełącz widok podzielony",
         "toggle_adjustments": "Przełącz panel Ustawienia",
         "toggle_ai": "Przełącz panel AI",
         "toggle_analytics": "Przełącz wyświetlanie analityki",
@@ -1647,6 +1661,7 @@
         "toggle_masks": "Przełącz panel Maski",
         "toggle_metadata": "Przełącz panel Metadane",
         "toggle_presets": "Przełącz panel Presety",
+        "toggle_split_view": "Przełącz widok podzielony",
         "undo": "Cofnij korektę",
         "zoom_100": "Powiększ do 100%",
         "zoom_fit": "Dopasuj do ekranu",

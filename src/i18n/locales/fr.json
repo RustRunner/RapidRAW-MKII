@@ -800,8 +800,8 @@
         "redo": "Rétablir (Ctrl+Y) ou Historique (Clic-droit)",
         "showEdited": "Afficher l'image modifiée (B)",
         "showOriginal": "Afficher l'original (B)",
-        "splitView": "Vue scindée - Comparer l'original et la version modifiée (Maj+B)",
         "shutterSpeed": "Vitesse d'obturation",
+        "splitView": "Vue scindée - Comparer l'original et la version modifiée (Maj+B)",
         "undo": "Annuler (Ctrl+Z) ou Historique (Clic-droit)"
       },
       "vc": "CV"
@@ -820,6 +820,20 @@
       "kb": "Ko",
       "mb": "Mo",
       "tb": "To"
+    },
+    "callout": {
+      "addCallout": "Ajouter un encadré",
+      "insertTemplate": "Insérer le modèle",
+      "mgrsCoords": "Coordonnées MGRS",
+      "notesPlaceholder": "Notes rendues sur l'export…",
+      "opacity": "Opacité",
+      "opacityHint": "À 0 % d'opacité, seul le texte est dessiné, sans encadré.",
+      "prefillMetadata": "Préremplir depuis les métadonnées",
+      "previewText": "Aperçu",
+      "saveTemplate": "Enregistrer par défaut",
+      "spacing": "Espacement",
+      "templateSaved": "Enregistré",
+      "textSize": "Taille du texte"
     },
     "dialog": {
       "saveEditedImageTitle": "Enregistrer l'image modifiée",
@@ -855,6 +869,7 @@
     },
     "sections": {
       "advanced": "Avancé",
+      "callout": "Encadré",
       "fileNaming": "Nommage des fichiers",
       "fileSettings": "Paramètres du fichier",
       "imageSizing": "Taille de l'image",
@@ -1602,7 +1617,6 @@
         "rotate_right": "Pivoter de 90° à droite",
         "select_all": "Sélectionner toutes les images",
         "show_original": "Afficher l'original (avant/après)",
-        "toggle_split_view": "Basculer la vue scindée",
         "toggle_adjustments": "Basculer le panneau des ajustements",
         "toggle_ai": "Basculer le panneau IA",
         "toggle_analytics": "Basculer l'affichage des analyses",
@@ -1614,6 +1628,7 @@
         "toggle_masks": "Basculer le panneau des masques",
         "toggle_metadata": "Basculer le panneau des métadonnées",
         "toggle_presets": "Basculer le panneau des paramètres prédéfinis",
+        "toggle_split_view": "Basculer la vue scindée",
         "undo": "Annuler l'ajustement",
         "zoom_100": "Zoomer à 100%",
         "zoom_fit": "Zoomer pour ajuster",

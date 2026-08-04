@@ -777,8 +777,8 @@
         "redo": "やり直し (Ctrl+Y) または履歴 (右クリック)",
         "showEdited": "編集後を表示 (B)",
         "showOriginal": "オリジナルを表示 (B)",
-        "splitView": "分割表示 - 元画像と編集後を比較 (Shift+B)",
         "shutterSpeed": "シャッタースピード",
+        "splitView": "分割表示 - 元画像と編集後を比較 (Shift+B)",
         "undo": "元に戻す (Ctrl+Z) または履歴 (右クリック)"
       },
       "vc": "仮想"
@@ -797,6 +797,20 @@
       "kb": "KB",
       "mb": "MB",
       "tb": "TB"
+    },
+    "callout": {
+      "addCallout": "注釈ボックスを追加",
+      "insertTemplate": "テンプレートを挿入",
+      "mgrsCoords": "MGRS座標",
+      "notesPlaceholder": "書き出し画像に描画されるメモ…",
+      "opacity": "不透明度",
+      "opacityHint": "不透明度 0% ではボックスなしで文字のみ描画されます。",
+      "prefillMetadata": "メタデータから入力",
+      "previewText": "プレビュー",
+      "saveTemplate": "デフォルトとして保存",
+      "spacing": "間隔",
+      "templateSaved": "保存しました",
+      "textSize": "文字サイズ"
     },
     "dialog": {
       "saveEditedImageTitle": "編集した画像を保存",
@@ -831,6 +845,7 @@
     },
     "sections": {
       "advanced": "詳細設定",
+      "callout": "注釈ボックス",
       "fileNaming": "ファイル名の命名",
       "fileSettings": "ファイル設定",
       "imageSizing": "画像サイズ",
@@ -1567,7 +1582,6 @@
         "rotate_right": "時計回りに90°回転",
         "select_all": "すべての画像を選択",
         "show_original": "オリジナルを表示 (比較)",
-        "toggle_split_view": "分割表示を切り替え",
         "toggle_adjustments": "補正設定パネルの表示/非表示",
         "toggle_ai": "AIパネルの表示/非表示",
         "toggle_analytics": "アナリティクス表示の表示/非表示",
@@ -1579,6 +1593,7 @@
         "toggle_masks": "マスクパネルの表示/非表示",
         "toggle_metadata": "メタデータパネルの表示/非表示",
         "toggle_presets": "プリセットパネルの表示/非表示",
+        "toggle_split_view": "分割表示を切り替え",
         "undo": "操作を元に戻す",
         "zoom_100": "100%ズーム",
         "zoom_fit": "画面に合わせる",
