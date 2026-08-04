@@ -1714,6 +1714,36 @@ fn frontend_ready(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Next processing backend to try after a GPU crash. On Windows the ladder
+/// steps auto/vulkan down to DX12 - the strongest driver target for every
+/// desktop vendor there - before surrendering to GL; elsewhere GL is the
+/// only fallback.
+fn crash_fallback_backend(prev: &str, windows: bool) -> &'static str {
+    if windows {
+        match prev {
+            "auto" | "vulkan" => "dx12",
+            _ => "gl",
+        }
+    } else {
+        "gl"
+    }
+}
+
+#[cfg(test)]
+mod backend_ladder_tests {
+    use super::crash_fallback_backend;
+
+    #[test]
+    fn test_crash_fallback_ladder() {
+        assert_eq!(crash_fallback_backend("auto", true), "dx12");
+        assert_eq!(crash_fallback_backend("vulkan", true), "dx12");
+        assert_eq!(crash_fallback_backend("dx12", true), "gl");
+        assert_eq!(crash_fallback_backend("gl", true), "gl");
+        assert_eq!(crash_fallback_backend("auto", false), "gl");
+        assert_eq!(crash_fallback_backend("vulkan", false), "gl");
+    }
+}
+
 pub fn run() {
     let _ = rayon::ThreadPoolBuilder::new()
         .stack_size(8 * 1024 * 1024)
@@ -1811,8 +1841,18 @@ pub fn run() {
             }
 
             if crash_flag_path.exists() {
-                log::warn!("GPU Driver crash detected on last run! Falling back to OpenGL backend.");
-                settings.processing_backend = Some("gl".to_string());
+                let prev = settings
+                    .processing_backend
+                    .as_deref()
+                    .unwrap_or("auto")
+                    .to_string();
+                let next = crash_fallback_backend(&prev, cfg!(target_os = "windows"));
+                log::warn!(
+                    "GPU crash detected on last run (backend '{}'); retrying with '{}'",
+                    prev,
+                    next
+                );
+                settings.processing_backend = Some(next.to_string());
                 let _ = crate::save_settings(settings.clone(), app_handle.clone());
                 let _ = std::fs::remove_file(&crash_flag_path);
             }

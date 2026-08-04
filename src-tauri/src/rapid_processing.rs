@@ -2474,6 +2474,12 @@ fn build_rapid_gpu() -> Option<RapidGpu> {
         for_resource_creation: Some(75),
         for_device_loss: Some(95),
     };
+    // Mirror the main context's Windows restriction so both devices land on
+    // the same backend family instead of RAPID defaulting to Backends::all().
+    #[cfg(target_os = "windows")]
+    if std::env::var("WGPU_BACKEND").is_err() {
+        instance_desc.backends = wgpu::Backends::PRIMARY;
+    }
     let instance = wgpu::Instance::new(instance_desc);
     let adapter = match pollster::block_on(instance.request_adapter(
         &wgpu::RequestAdapterOptions {
