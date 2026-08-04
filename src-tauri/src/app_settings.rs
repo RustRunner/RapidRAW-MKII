@@ -242,6 +242,18 @@ pub struct ExportPreset {
     pub preserve_folders: Option<bool>,
     #[serde(default)]
     pub last_export_path: Option<String>,
+    #[serde(default)]
+    pub enable_callout: Option<bool>,
+    #[serde(default)]
+    pub callout_text: Option<String>,
+    #[serde(default)]
+    pub callout_anchor: Option<String>,
+    #[serde(default)]
+    pub callout_size: Option<f32>,
+    #[serde(default)]
+    pub callout_spacing: Option<f32>,
+    #[serde(default)]
+    pub callout_opacity: Option<f32>,
 }
 
 pub fn default_export_presets() -> Vec<ExportPreset> {
@@ -267,6 +279,12 @@ pub fn default_export_presets() -> Vec<ExportPreset> {
             export_masks: Some(false),
             preserve_folders: Some(false),
             last_export_path: None,
+            enable_callout: None,
+            callout_text: None,
+            callout_anchor: None,
+            callout_size: None,
+            callout_spacing: None,
+            callout_opacity: None,
         },
         ExportPreset {
             id: "default-fast".to_string(),
@@ -289,6 +307,12 @@ pub fn default_export_presets() -> Vec<ExportPreset> {
             export_masks: Some(false),
             preserve_folders: Some(false),
             last_export_path: None,
+            enable_callout: None,
+            callout_text: None,
+            callout_anchor: None,
+            callout_size: None,
+            callout_spacing: None,
+            callout_opacity: None,
         },
     ]
 }

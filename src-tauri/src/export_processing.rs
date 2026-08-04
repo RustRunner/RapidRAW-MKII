@@ -71,6 +71,8 @@ pub struct ExportSettings {
     pub filename_template: Option<String>,
     pub watermark: Option<WatermarkSettings>,
     #[serde(default)]
+    pub callout: Option<CalloutSettings>,
+    #[serde(default)]
     pub export_masks: bool,
     #[serde(default)]
     pub preserve_folders: bool,
@@ -109,6 +111,19 @@ pub struct WatermarkSettings {
     pub opacity: f32,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CalloutSettings {
+    pub text: String,
+    pub anchor: WatermarkAnchor,
+    /// Line height as a percentage of the output image's min dimension.
+    pub size: f32,
+    /// Edge inset as a percentage of the output image's min dimension.
+    pub spacing: f32,
+    /// Box background opacity 0-100; the text is always fully opaque.
+    pub opacity: f32,
+}
+
 fn apply_watermark(
     base_image: &mut DynamicImage,
     watermark_settings: &WatermarkSettings,
@@ -141,33 +156,53 @@ fn apply_watermark(
     let spacing_pixels = (base_min_dim * (watermark_settings.spacing / 100.0)) as i64;
     let (wm_w, wm_h) = final_watermark.dimensions();
 
-    let x = match watermark_settings.anchor {
-        WatermarkAnchor::TopLeft | WatermarkAnchor::CenterLeft | WatermarkAnchor::BottomLeft => {
-            spacing_pixels
-        }
-        WatermarkAnchor::TopCenter | WatermarkAnchor::Center | WatermarkAnchor::BottomCenter => {
-            (base_w as i64 - wm_w as i64) / 2
-        }
-        WatermarkAnchor::TopRight | WatermarkAnchor::CenterRight | WatermarkAnchor::BottomRight => {
-            base_w as i64 - wm_w as i64 - spacing_pixels
-        }
-    };
-
-    let y = match watermark_settings.anchor {
-        WatermarkAnchor::TopLeft | WatermarkAnchor::TopCenter | WatermarkAnchor::TopRight => {
-            spacing_pixels
-        }
-        WatermarkAnchor::CenterLeft | WatermarkAnchor::Center | WatermarkAnchor::CenterRight => {
-            (base_h as i64 - wm_h as i64) / 2
-        }
-        WatermarkAnchor::BottomLeft
-        | WatermarkAnchor::BottomCenter
-        | WatermarkAnchor::BottomRight => base_h as i64 - wm_h as i64 - spacing_pixels,
-    };
+    let (x, y) = anchored_position(
+        &watermark_settings.anchor,
+        base_w,
+        base_h,
+        wm_w,
+        wm_h,
+        spacing_pixels,
+    );
 
     image::imageops::overlay(base_image, &final_watermark, x, y);
 
     Ok(())
+}
+
+pub(crate) fn anchored_position(
+    anchor: &WatermarkAnchor,
+    base_w: u32,
+    base_h: u32,
+    overlay_w: u32,
+    overlay_h: u32,
+    spacing_px: i64,
+) -> (i64, i64) {
+    let x = match anchor {
+        WatermarkAnchor::TopLeft | WatermarkAnchor::CenterLeft | WatermarkAnchor::BottomLeft => {
+            spacing_px
+        }
+        WatermarkAnchor::TopCenter | WatermarkAnchor::Center | WatermarkAnchor::BottomCenter => {
+            (base_w as i64 - overlay_w as i64) / 2
+        }
+        WatermarkAnchor::TopRight | WatermarkAnchor::CenterRight | WatermarkAnchor::BottomRight => {
+            base_w as i64 - overlay_w as i64 - spacing_px
+        }
+    };
+
+    let y = match anchor {
+        WatermarkAnchor::TopLeft | WatermarkAnchor::TopCenter | WatermarkAnchor::TopRight => {
+            spacing_px
+        }
+        WatermarkAnchor::CenterLeft | WatermarkAnchor::Center | WatermarkAnchor::CenterRight => {
+            (base_h as i64 - overlay_h as i64) / 2
+        }
+        WatermarkAnchor::BottomLeft
+        | WatermarkAnchor::BottomCenter
+        | WatermarkAnchor::BottomRight => base_h as i64 - overlay_h as i64 - spacing_px,
+    };
+
+    (x, y)
 }
 
 fn calculate_resize_target(
@@ -281,6 +316,10 @@ fn apply_export_resize_and_watermark(
 
     if let Some(watermark_settings) = &export_settings.watermark {
         apply_watermark(&mut image, watermark_settings)?;
+    }
+
+    if let Some(callout_settings) = &export_settings.callout {
+        crate::callout::apply_callout(&mut image, callout_settings)?;
     }
     Ok(image)
 }
@@ -1327,6 +1366,17 @@ pub async fn run_headless_export(
 
     println!("Found {} images to export. Processing...", paths.len());
 
+    let mut callout = None;
+    if let Some(callout_path) = &session.callout {
+        let content = std::fs::read_to_string(callout_path)
+            .map_err(|e| format!("Failed to read callout file: {}", e))?;
+        callout = Some(
+            serde_json::from_str::<CalloutSettings>(&content)
+                .map_err(|e| format!("Failed to parse callout JSON: {}", e))?,
+        );
+        println!("Loaded callout settings from: {}", callout_path);
+    }
+
     let export_settings = ExportSettings {
         jpeg_quality: session.quality,
         resize: None,
@@ -1335,6 +1385,7 @@ pub async fn run_headless_export(
         strip_gps: false,
         filename_template: None,
         watermark: None,
+        callout,
         export_masks: false,
         preserve_folders: true,
     };

@@ -19,6 +19,7 @@ pub struct HeadlessExportSession {
     pub quality: u8,
     pub keep_metadata: bool,
     pub adjustments_override: Option<String>,
+    pub callout: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +47,7 @@ pub fn parse_launch_args(args: &[String]) -> LaunchRequest {
         let mut quality = 90;
         let mut keep_metadata = false;
         let mut adjustments_override = None;
+        let mut callout = None;
 
         if let Some(src) = iter.next()
             && !src.starts_with('-')
@@ -76,6 +78,11 @@ pub fn parse_launch_args(args: &[String]) -> LaunchRequest {
                         adjustments_override = Some(adj.clone());
                     }
                 }
+                "--callout" => {
+                    if let Some(c) = iter.next() {
+                        callout = Some(c.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -87,6 +94,7 @@ pub fn parse_launch_args(args: &[String]) -> LaunchRequest {
             quality,
             keep_metadata,
             adjustments_override,
+            callout,
         });
     }
 
