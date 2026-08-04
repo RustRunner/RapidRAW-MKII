@@ -2422,6 +2422,8 @@ struct RapidGpu {
     /// Set by the device-lost callback; a poisoned RAPID device is dropped
     /// and recreated on the next get_rapid_gpu call.
     poisoned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Adapter-aware budget computed once at init; see rapid_vram_budget_mb.
+    vram_budget_mb: u64,
 }
 
 enum RapidGpuSlot {
@@ -2526,12 +2528,25 @@ fn build_rapid_gpu() -> Option<RapidGpu> {
         log::error!("Uncaptured wgpu error on the RAPID device: {}", error);
     }));
 
+    let info = adapter.get_info();
+    let is_integrated = matches!(
+        info.device_type,
+        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
+    );
+    let vram_budget_mb = rapid_vram_budget_mb(is_integrated);
+    log::info!(
+        "RAPID VRAM budget: {} MB ({:?})",
+        vram_budget_mb,
+        info.device_type
+    );
+
     match RapidDeconvolver::new(&adapter, &device) {
         Ok(deconvolver) => Some(RapidGpu {
             device,
             queue,
             deconvolver,
             poisoned,
+            vram_budget_mb,
         }),
         Err(e) => {
             log::warn!("RAPID: unsupported GPU ({e}); blur recovery disabled");
@@ -2597,15 +2612,39 @@ pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
 /// interactive previews; exact output requires 1.0. Output dimensions always
 /// equal input dimensions either way, so downstream geometry (crop/rotation
 /// coordinates) is unaffected.
-/// VRAM budget for the deconvolution pipeline. wgpu's AdapterInfo exposes no
-/// memory size on any backend, so this is a flat default; the RAPID_VRAM_MB
-/// environment variable overrides it (useful for exercising the scaled
-/// fallback, and the hook for a vendor-specific query later).
-fn rapid_vram_budget_mb() -> u64 {
-    std::env::var("RAPID_VRAM_MB")
+/// VRAM budget for the deconvolution pipeline, computed once at RAPID device
+/// init. wgpu's AdapterInfo exposes no memory size on any backend, so the
+/// default is flat on discrete GPUs and derived from available system RAM on
+/// integrated ones, where the GPU and CPU drain the same pool. The
+/// RAPID_VRAM_MB environment variable overrides both (useful for exercising
+/// the scaled fallback).
+fn rapid_vram_budget_mb(is_integrated: bool) -> u64 {
+    let env_override = std::env::var("RAPID_VRAM_MB")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(4096)
+        .and_then(|v| v.parse().ok());
+    let available_ram_mb = if env_override.is_none() && is_integrated {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        sys.available_memory() / (1024 * 1024)
+    } else {
+        0
+    };
+    rapid_vram_budget_from(env_override, is_integrated, available_ram_mb)
+}
+
+fn rapid_vram_budget_from(
+    env_override: Option<u64>,
+    is_integrated: bool,
+    available_ram_mb: u64,
+) -> u64 {
+    if let Some(mb) = env_override {
+        return mb;
+    }
+    if is_integrated {
+        (available_ram_mb / 4).min(4096)
+    } else {
+        4096
+    }
 }
 
 pub fn apply_blur_recovery_scaled<'a>(
@@ -2624,6 +2663,7 @@ pub fn apply_blur_recovery_scaled<'a>(
         device,
         queue,
         deconvolver,
+        vram_budget_mb,
         ..
     } = &mut *gpu;
     let start = std::time::Instant::now();
@@ -2632,7 +2672,7 @@ pub fn apply_blur_recovery_scaled<'a>(
     // Preview and export share the same cap, so a machine that can't run
     // full resolution still renders both identically.
     let (w, h) = (image.width(), image.height());
-    let budget_mb = rapid_vram_budget_mb();
+    let budget_mb = *vram_budget_mb;
     let vram_scale =
         RapidDeconvolver::max_scale_for_vram(w, h, budget_mb, deconvolver.max_texture_size);
     if vram_scale < rapid_scale {
@@ -3163,6 +3203,23 @@ mod tests {
         assert_eq!(BlurType::from(1), BlurType::Defocus);
         assert_eq!(BlurType::from(2), BlurType::Gaussian);
         assert_eq!(BlurType::from(99), BlurType::Motion); // Default fallback
+    }
+
+    #[test]
+    fn test_rapid_vram_budget() {
+        use super::rapid_vram_budget_from;
+
+        // The env override always wins.
+        assert_eq!(rapid_vram_budget_from(Some(512), true, 32768), 512);
+        assert_eq!(rapid_vram_budget_from(Some(8192), false, 0), 8192);
+        // Discrete GPUs keep the flat default regardless of RAM.
+        assert_eq!(rapid_vram_budget_from(None, false, 4096), 4096);
+        assert_eq!(rapid_vram_budget_from(None, false, 262144), 4096);
+        // Integrated: a quarter of available RAM, capped at the flat default.
+        assert_eq!(rapid_vram_budget_from(None, true, 32768), 4096);
+        assert_eq!(rapid_vram_budget_from(None, true, 16384), 4096);
+        assert_eq!(rapid_vram_budget_from(None, true, 12288), 3072);
+        assert_eq!(rapid_vram_budget_from(None, true, 8192), 2048);
     }
 
     #[test]

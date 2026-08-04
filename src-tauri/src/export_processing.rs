@@ -593,6 +593,42 @@ fn process_image_for_export(
     apply_export_resize_and_watermark(processed_image, export_settings)
 }
 
+/// Worker count for a batch export. GPU work is serialized by the processor
+/// mutex, so extra workers mostly multiply the ~1 GB of CPU-side staging per
+/// in-flight image; on an integrated GPU that staging competes with the
+/// GPU's own allocations for the same physical RAM, so budget harder and
+/// cap at two - decode still overlaps GPU work.
+fn export_worker_count(
+    image_count: usize,
+    available_cores: usize,
+    available_ram_gb: f64,
+    is_integrated: bool,
+) -> usize {
+    if image_count == 1 {
+        return 1;
+    }
+    let (ram_per_worker_gb, max_workers) = if is_integrated { (6.0, 2) } else { (4.0, 4) };
+    let ram_based_limit = (available_ram_gb / ram_per_worker_gb).floor() as usize;
+    available_cores.min(ram_based_limit).clamp(1, max_workers)
+}
+
+#[cfg(test)]
+mod worker_count_tests {
+    use super::export_worker_count;
+
+    #[test]
+    fn test_export_worker_count() {
+        assert_eq!(export_worker_count(1, 16, 64.0, false), 1);
+        assert_eq!(export_worker_count(1, 16, 64.0, true), 1);
+        assert_eq!(export_worker_count(8, 16, 32.0, false), 4);
+        assert_eq!(export_worker_count(8, 16, 32.0, true), 2);
+        assert_eq!(export_worker_count(8, 16, 8.0, false), 2);
+        assert_eq!(export_worker_count(8, 16, 8.0, true), 1);
+        assert_eq!(export_worker_count(8, 16, 2.0, false), 1);
+        assert_eq!(export_worker_count(8, 1, 64.0, true), 1);
+    }
+}
+
 fn build_single_mask_adjustments(all: &AllAdjustments, mask_index: usize) -> AllAdjustments {
     let mut single = AllAdjustments {
         global: all.global,
@@ -933,18 +969,18 @@ pub(crate) async fn export_images_impl(
     sys.refresh_memory();
 
     let available_ram_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
-    let ram_based_limit = (available_ram_gb / 4.0).floor() as usize;
-
-    let num_threads = if paths.len() == 1 {
-        1
-    } else {
-        available_cores.min(ram_based_limit).clamp(1, 4)
-    };
-
-    log::info!(
-        "Batch Export: {} cores, {:.1} GB free RAM -> {} threads",
+    let num_threads = export_worker_count(
+        paths.len(),
         available_cores,
         available_ram_gb,
+        context.is_integrated,
+    );
+
+    log::info!(
+        "Batch Export: {} cores, {:.1} GB free RAM, integrated GPU: {} -> {} threads",
+        available_cores,
+        available_ram_gb,
+        context.is_integrated,
         num_threads
     );
 
