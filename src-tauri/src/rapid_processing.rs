@@ -2339,7 +2339,8 @@ impl RapidDeconvolver {
         device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(std::time::Duration::from_secs(60)),
-        }).unwrap();
+        })
+        .map_err(|e| format!("RAPID device poll failed: {e}"))?;
 
         rx.recv()
             .map_err(|e| format!("Channel receive error: {}", e))?
@@ -2418,57 +2419,119 @@ struct RapidGpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     deconvolver: RapidDeconvolver,
+    /// Set by the device-lost callback; a poisoned RAPID device is dropped
+    /// and recreated on the next get_rapid_gpu call.
+    poisoned: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-static RAPID_GPU: std::sync::OnceLock<Option<std::sync::Mutex<RapidGpu>>> = std::sync::OnceLock::new();
+enum RapidGpuSlot {
+    Untried,
+    Unavailable,
+    Ready(std::sync::Arc<std::sync::Mutex<RapidGpu>>),
+}
+
+static RAPID_GPU: std::sync::Mutex<RapidGpuSlot> = std::sync::Mutex::new(RapidGpuSlot::Untried);
 
 /// Lazily creates a dedicated wgpu device for blur recovery. Kept separate
 /// from the main GpuContext so the pre-pass needs no plumbing through the
-/// tiled pipeline; returns None (and logs) when the GPU is unsupported.
-fn get_rapid_gpu() -> Option<&'static std::sync::Mutex<RapidGpu>> {
-    RAPID_GPU
-        .get_or_init(|| {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-            let adapter = match pollster::block_on(instance.request_adapter(
-                &wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    ..Default::default()
-                },
-            )) {
-                Ok(a) => a,
-                Err(e) => {
-                    log::warn!("RAPID: no GPU adapter available ({e}); blur recovery disabled");
-                    return None;
-                }
-            };
-            let (device, queue) = match pollster::block_on(adapter.request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("RAPID Deconvolution Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: adapter.limits(),
-                    ..Default::default()
-                },
-            )) {
-                Ok(dq) => dq,
-                Err(e) => {
-                    log::warn!("RAPID: failed to create device ({e}); blur recovery disabled");
-                    return None;
-                }
-            };
-            match RapidDeconvolver::new(&adapter, &device) {
-                Ok(deconvolver) => Some(std::sync::Mutex::new(RapidGpu {
-                    device,
-                    queue,
-                    deconvolver,
-                })),
-                Err(e) => {
-                    log::warn!("RAPID: unsupported GPU ({e}); blur recovery disabled");
-                    None
-                }
+/// tiled pipeline; returns None (and logs) when the GPU is unsupported. A
+/// device lost at runtime is torn down and recreated on the next call.
+fn get_rapid_gpu() -> Option<std::sync::Arc<std::sync::Mutex<RapidGpu>>> {
+    let mut slot = RAPID_GPU.lock().unwrap();
+
+    if let RapidGpuSlot::Ready(gpu) = &*slot {
+        let poisoned = gpu
+            .lock()
+            .unwrap()
+            .poisoned
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if poisoned {
+            log::warn!("RAPID device was lost; recreating");
+            *slot = RapidGpuSlot::Untried;
+        }
+    }
+
+    match &*slot {
+        RapidGpuSlot::Ready(gpu) => Some(gpu.clone()),
+        RapidGpuSlot::Unavailable => None,
+        RapidGpuSlot::Untried => match build_rapid_gpu() {
+            Some(gpu) => {
+                let gpu = std::sync::Arc::new(std::sync::Mutex::new(gpu));
+                *slot = RapidGpuSlot::Ready(gpu.clone());
+                Some(gpu)
             }
-        })
-        .as_ref()
+            None => {
+                *slot = RapidGpuSlot::Unavailable;
+                None
+            }
+        },
+    }
+}
+
+fn build_rapid_gpu() -> Option<RapidGpu> {
+    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    instance_desc.memory_budget_thresholds = wgpu::MemoryBudgetThresholds {
+        for_resource_creation: Some(75),
+        for_device_loss: Some(95),
+    };
+    let instance = wgpu::Instance::new(instance_desc);
+    let adapter = match pollster::block_on(instance.request_adapter(
+        &wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        },
+    )) {
+        Ok(a) => a,
+        Err(e) => {
+            log::warn!("RAPID: no GPU adapter available ({e}); blur recovery disabled");
+            return None;
+        }
+    };
+    let (device, queue) = match pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("RAPID Deconvolution Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        },
+    )) {
+        Ok(dq) => dq,
+        Err(e) => {
+            log::warn!("RAPID: failed to create device ({e}); blur recovery disabled");
+            return None;
+        }
+    };
+
+    // Deliberately no crash-flag write here: a loss confined to the RAPID
+    // device (e.g. its own budget kill) should not rewrite the app's
+    // backend; a real TDR also fires the main device's callback, which does.
+    let poisoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let poisoned = poisoned.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            if matches!(reason, wgpu::DeviceLostReason::Destroyed) {
+                return;
+            }
+            log::error!("RAPID device lost ({:?}): {}", reason, message);
+            poisoned.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    device.on_uncaptured_error(std::sync::Arc::new(|error: wgpu::Error| {
+        log::error!("Uncaptured wgpu error on the RAPID device: {}", error);
+    }));
+
+    match RapidDeconvolver::new(&adapter, &device) {
+        Ok(deconvolver) => Some(RapidGpu {
+            device,
+            queue,
+            deconvolver,
+            poisoned,
+        }),
+        Err(e) => {
+            log::warn!("RAPID: unsupported GPU ({e}); blur recovery disabled");
+            None
+        }
+    }
 }
 
 /// Parses blur-recovery params from the frontend adjustment JSON.
@@ -2555,6 +2618,7 @@ pub fn apply_blur_recovery_scaled<'a>(
         device,
         queue,
         deconvolver,
+        ..
     } = &mut *gpu;
     let start = std::time::Instant::now();
 

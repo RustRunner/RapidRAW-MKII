@@ -64,7 +64,12 @@ impl WgpuDisplay {
                     match self.surface.get_current_texture() {
                         wgpu::CurrentSurfaceTexture::Success(tex)
                         | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
-                        _ => panic!("Failed to acquire surface texture"),
+                        _ => {
+                            log::error!(
+                                "Failed to acquire surface texture after reconfigure; skipping frame"
+                            );
+                            return;
+                        }
                     }
                 }
                 _ => return,
@@ -144,11 +149,28 @@ pub fn get_or_init_gpu_context(
 
     let mut context_lock = state.gpu_context.lock().unwrap();
     if let Some(context) = &*context_lock {
-        return Ok(context.clone());
+        if context
+            .device_poisoned
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            log::warn!("GPU context poisoned by device loss; rebuilding");
+            *context_lock = None;
+            *state.gpu_processor.lock().unwrap() = None;
+            *state.gpu_image_cache.lock().unwrap() = None;
+        } else {
+            return Ok(context.clone());
+        }
     }
 
-    #[allow(unused_mut)]
     let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    // Must be assigned after the from_env constructor, which resets the
+    // field. Honored on D3D12 and (opt-in) Vulkan; a no-op elsewhere. Makes
+    // allocation failures surface through error scopes and device loss
+    // before the OS starts paging a shared-memory GPU.
+    instance_desc.memory_budget_thresholds = wgpu::MemoryBudgetThresholds {
+        for_resource_creation: Some(75),
+        for_device_loss: Some(95),
+    };
 
     #[cfg(target_os = "windows")]
     if std::env::var("WGPU_BACKEND").is_err() {
@@ -179,9 +201,9 @@ pub fn get_or_init_gpu_context(
                             "Failed to create surface, falling back to compute-only: {}",
                             e
                         );
-                        if let Some(p) = &flag_path {
-                            let _ = std::fs::remove_file(p);
-                        }
+                        // The flag stays armed: request_adapter and
+                        // request_device still run on this path and are the
+                        // likeliest calls to take a broken driver down.
                         None
                     }
                 }
@@ -248,6 +270,30 @@ pub fn get_or_init_gpu_context(
     if let Some(p) = &flag_path {
         let _ = std::fs::remove_file(p);
     }
+
+    let device_poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let poisoned = device_poisoned.clone();
+        let lost_flag_path = flag_path.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            if matches!(reason, wgpu::DeviceLostReason::Destroyed) {
+                return;
+            }
+            log::error!("Processing device lost ({:?}): {}", reason, message);
+            poisoned.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Re-arm the crash flag so the next launch steps down the
+            // backend ladder for runtime TDRs, not just init crashes.
+            if let Some(p) = &lost_flag_path {
+                if let Some(parent) = p.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(p, "runtime_device_loss");
+            }
+        });
+    }
+    device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+        log::error!("Uncaptured wgpu error on the processing device: {}", error);
+    }));
 
     #[cfg(not(any(target_os = "android", target_os = "linux")))]
     let display_opt = if let Some(surface) = surface_opt {
@@ -420,9 +466,20 @@ pub fn get_or_init_gpu_context(
         limits,
         display: Arc::new(std::sync::Mutex::new(display_opt)),
         is_integrated,
+        device_poisoned,
     };
     *context_lock = Some(new_context.clone());
     Ok(new_context)
+}
+
+/// wgpu resource creation is infallible by API; an out-of-memory scope is
+/// the only way to observe allocation failure as a value instead of an
+/// uncaptured-error panic.
+fn oom_scope_to_err(error: Option<wgpu::Error>, what: &str) -> Result<(), String> {
+    match error {
+        Some(e) => Err(format!("GPU out of memory while {what}: {e}")),
+        None => Ok(()),
+    }
 }
 
 /// Drops the processor and single-slot image cache so a full-resolution
@@ -1845,7 +1902,14 @@ fn process_and_get_dynamic_image_inner(
             timeout: Some(std::time::Duration::from_millis(500)),
         });
 
+        let oom_scope = context
+            .device
+            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let new_processor = GpuProcessor::new(context.clone(), new_width, new_height)?;
+        oom_scope_to_err(
+            pollster::block_on(oom_scope.pop()),
+            "allocating the GPU processor",
+        )?;
 
         *processor_lock = Some(crate::GpuProcessorState {
             processor: new_processor,
@@ -1888,6 +1952,7 @@ fn process_and_get_dynamic_image_inner(
             height,
             depth_or_array_layers: 1,
         };
+        let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let texture = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
@@ -1904,6 +1969,10 @@ fn process_and_get_dynamic_image_inner(
             bytemuck::cast_slice(&img_rgba_f16),
         );
         let texture_view = texture.create_view(&Default::default());
+        oom_scope_to_err(
+            pollster::block_on(oom_scope.pop()),
+            "uploading the input image",
+        )?;
 
         *cache_lock = Some(GpuImageCache {
             texture,
@@ -2290,6 +2359,7 @@ mod tests {
             limits: adapter.limits(),
             display: Arc::new(std::sync::Mutex::new(None)),
             is_integrated: false,
+            device_poisoned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -2578,6 +2648,30 @@ mod tests {
         assert_eq!(pixels.len(), (SIZE * SIZE * 4) as usize);
     }
 
+    /// Errors inside a scope must surface as values - the default handler
+    /// panics on anything uncaptured - and the helper maps a captured error
+    /// to Err. A validation error stands in for OOM, which cannot be
+    /// provoked portably.
+    #[test]
+    fn test_error_scope_surfaces_err() {
+        let Some(context) = test_gpu_context("error scope test device") else {
+            return;
+        };
+
+        let scope = context
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let _module = context
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("intentionally invalid"),
+                source: wgpu::ShaderSource::Wgsl("this is not wgsl".into()),
+            });
+        let captured = pollster::block_on(scope.pop());
+        assert!(captured.is_some(), "validation error was not captured");
+        assert!(super::oom_scope_to_err(captured, "testing the scope plumbing").is_err());
+    }
+
     /// Renders a real image through the full pipeline with the veil texture
     /// bound, in disabled / recovery / show-veil modes, and checks the glare
     /// stage's observable effects. Needs a GPU and an image, so ignored by
@@ -2619,6 +2713,7 @@ mod tests {
             limits: adapter.limits(),
             display: Arc::new(std::sync::Mutex::new(None)),
             is_integrated: false,
+            device_poisoned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         let processor = super::GpuProcessor::new(

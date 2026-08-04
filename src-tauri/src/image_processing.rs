@@ -2564,6 +2564,9 @@ pub struct GpuContext {
     /// True for shared-memory adapters (integrated GPUs, software
     /// rasterizers) whose allocations compete with the CPU for system RAM.
     pub is_integrated: bool,
+    /// Set by the device-lost callback; a poisoned context is torn down and
+    /// rebuilt on the next get_or_init_gpu_context call.
+    pub device_poisoned: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[inline(always)]
