@@ -1246,6 +1246,16 @@ pub(crate) async fn export_images_impl(
 
         let errors: Vec<String> = results.into_iter().filter_map(Result::err).collect();
         let error_count = errors.len();
+
+        // All jobs are joined on both the success and cancel paths, so the
+        // export-size processor is idle; release it off the async runtime
+        // since the state mutexes are held across whole renders.
+        let release_handle = app_handle.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let state = release_handle.state::<AppState>();
+            crate::gpu_processing::release_gpu_processor(&state);
+        });
+
         let export_state = app_handle.state::<AppState>();
         let finalized = finish_export_task(
             &export_state.export_task_token,

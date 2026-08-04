@@ -425,6 +425,35 @@ pub fn get_or_init_gpu_context(
     Ok(new_context)
 }
 
+/// Drops the processor and single-slot image cache so a full-resolution
+/// export's high-water allocation does not stay pinned for the session; the
+/// next render rebuilds at its own size through the normal cold-start path.
+/// Also clears the display bind group, which holds a reference to the old
+/// output texture (keeping it alive) and would otherwise keep presenting
+/// from it.
+pub fn release_gpu_processor(state: &AppState) {
+    let display = state
+        .gpu_context
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|c| c.display.clone());
+
+    // Same nesting order as the render path: processor, then image cache,
+    // then the display mutex.
+    let mut processor_lock = state.gpu_processor.lock().unwrap();
+    let mut cache_lock = state.gpu_image_cache.lock().unwrap();
+    if let Some(display) = display {
+        if let Some(display) = display.lock().unwrap().as_mut() {
+            display.current_bind_group = None;
+        }
+    }
+    *cache_lock = None;
+    if processor_lock.take().is_some() {
+        log::info!("Released the GPU processor and image cache after export");
+    }
+}
+
 fn read_texture_data_roi(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -591,6 +620,7 @@ pub struct GpuProcessor {
     dummy_blur_view: wgpu::TextureView,
     dummy_lut_view: wgpu::TextureView,
     dummy_lut_sampler: wgpu::Sampler,
+    dummy_mask_view: wgpu::TextureView,
     ping_pong_view: wgpu::TextureView,
     sharpness_blur_view: wgpu::TextureView,
     tonal_blur_view: wgpu::TextureView,
@@ -1020,6 +1050,35 @@ impl GpuProcessor {
         let dummy_lut_view = dummy_lut_texture.create_view(&Default::default());
         let dummy_lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
+        // Explicitly zero-filled: some callers render with mask_count > 0
+        // but no bitmaps (LUT export/swatches, geometry base), so the shader
+        // does read this dummy there - zero content is what keeps those
+        // reads at zero influence, matching the old zero-filled full-res
+        // array.
+        let dummy_mask_texture = context.device.create_texture_with_data(
+            &context.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Dummy Mask Texture"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 2,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            TextureDataOrder::MipMajor,
+            &[0u8, 0u8],
+        );
+        let dummy_mask_view = dummy_mask_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+
         let full_extent = wgpu::Extent3d {
             width: max_width,
             height: max_height,
@@ -1140,6 +1199,7 @@ impl GpuProcessor {
             dummy_blur_view,
             dummy_lut_view,
             dummy_lut_sampler,
+            dummy_mask_view,
             ping_pong_view,
             sharpness_blur_view,
             tonal_blur_view,
@@ -1177,43 +1237,43 @@ impl GpuProcessor {
         });
         let out_width = bounds.width;
         let out_height = bounds.height;
-        let mask_layer_count = request.mask_bitmaps.len().clamp(2, MAX_MASKS) as u32;
-        let full_texture_size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: mask_layer_count,
-        };
-        let buffer_size = (width as usize) * (height as usize) * (mask_layer_count as usize);
-        let mut mask_texture_data = Vec::with_capacity(buffer_size);
-        if request.mask_bitmaps.is_empty() {
-            mask_texture_data.resize(buffer_size, 0);
+        let mask_texture_view = if request.mask_bitmaps.is_empty() {
+            self.dummy_mask_view.clone()
         } else {
+            let mask_layer_count = request.mask_bitmaps.len().clamp(2, MAX_MASKS) as u32;
+            let full_texture_size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: mask_layer_count,
+            };
+            let buffer_size = (width as usize) * (height as usize) * (mask_layer_count as usize);
+            let mut mask_texture_data = Vec::with_capacity(buffer_size);
             for mask_bitmap in request.mask_bitmaps.iter().take(MAX_MASKS) {
                 mask_texture_data.extend_from_slice(mask_bitmap.as_raw());
             }
             if mask_texture_data.len() < buffer_size {
                 mask_texture_data.resize(buffer_size, 0);
             }
-        }
-        let mask_texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("Full Mask Texture Array"),
-                size: full_texture_size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            TextureDataOrder::MipMajor,
-            &mask_texture_data,
-        );
-        let mask_texture_view = mask_texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
+            let mask_texture = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("Full Mask Texture Array"),
+                    size: full_texture_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                TextureDataOrder::MipMajor,
+                &mask_texture_data,
+            );
+            mask_texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            })
+        };
 
         let (lut_texture_view, lut_sampler) = if let Some(lut_arc) = &request.lut {
             let lut_data = &lut_arc.data;
@@ -2418,6 +2478,104 @@ mod tests {
             sharp_gated != neutral_gated,
             "sharpness=50 had no visible effect; the gating comparison is vacuous"
         );
+    }
+
+    /// mask_count > 0 with an empty bitmap slice (the shape LUT export and
+    /// swatch rendering produce) makes the shader read the 1×1×2 dummy mask
+    /// array; its zero content must yield zero influence, leaving the output
+    /// byte-identical to a neutral render.
+    #[test]
+    fn test_gpu_mask_dummy_zero_influence() {
+        let Some(context) = test_gpu_context("mask dummy test device") else {
+            return;
+        };
+
+        const SIZE: u32 = 512;
+        let img = gradient_rgba(SIZE);
+        let processor =
+            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
+                .expect("GpuProcessor::new");
+        let input_view = upload_rgba16f(&context, &img);
+
+        let render = |adjustments: crate::image_processing::AllAdjustments| -> Vec<u8> {
+            let request = super::RenderRequest {
+                adjustments,
+                mask_bitmaps: &[],
+                lut: None,
+                roi: None,
+            };
+            processor
+                .run(&input_view, SIZE, SIZE, request, false, false, None)
+                .expect("processor.run")
+                .0
+        };
+
+        let neutral = crate::image_processing::get_all_adjustments_from_json(
+            &serde_json::json!({}),
+            false,
+            None,
+        );
+        let mut phantom = neutral;
+        phantom.mask_count = 1;
+        phantom.mask_adjustments[0].clarity = 0.8;
+        phantom.mask_adjustments[0].shadows = 0.5;
+        phantom.mask_adjustments[0].sharpness = 0.5;
+
+        let neutral_out = render(neutral);
+        let phantom_out = render(phantom);
+        assert!(
+            neutral_out == phantom_out,
+            "phantom mask adjustments leaked through the dummy mask texture"
+        );
+    }
+
+    /// Simulates the post-export release: drop an export-size processor out
+    /// of its state slot, poll the device through the teardown, and verify a
+    /// fresh preview-size processor still renders — the same cold-start path
+    /// the release relies on.
+    #[test]
+    fn test_gpu_processor_release_and_rebuild() {
+        let Some(context) = test_gpu_context("release test device") else {
+            return;
+        };
+
+        const SIZE: u32 = 512;
+        let img = gradient_rgba(SIZE);
+        let input_view = upload_rgba16f(&context, &img);
+
+        let slot = std::sync::Mutex::new(Some(crate::app_state::GpuProcessorState {
+            processor: super::GpuProcessor::new(context.clone(), 4096, 4096)
+                .expect("GpuProcessor::new at export size"),
+            width: 4096,
+            height: 4096,
+        }));
+
+        assert!(slot.lock().unwrap().take().is_some());
+        assert!(slot.lock().unwrap().is_none());
+        let _ = context.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_millis(500)),
+        });
+
+        let processor =
+            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
+                .expect("GpuProcessor::new after release");
+        let adjustments = crate::image_processing::get_all_adjustments_from_json(
+            &serde_json::json!({}),
+            false,
+            None,
+        );
+        let request = super::RenderRequest {
+            adjustments,
+            mask_bitmaps: &[],
+            lut: None,
+            roi: None,
+        };
+        let (pixels, ow, oh, _, _) = processor
+            .run(&input_view, SIZE, SIZE, request, false, false, None)
+            .expect("render after release");
+        assert_eq!((ow, oh), (SIZE, SIZE));
+        assert_eq!(pixels.len(), (SIZE * SIZE * 4) as usize);
     }
 
     /// Renders a real image through the full pipeline with the veil texture
