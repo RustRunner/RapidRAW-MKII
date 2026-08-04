@@ -22,6 +22,10 @@
 
 // Numerical stability constant
 const EPSILON: f32 = 1e-10;
+// Dead-band power threshold: MAGNITUDE_FLOOR² from psf_generate.wgsl. Bins
+// with |H|² below it lie where a hardness-1 OTF says the blur destroyed the
+// signal (the floored OTFs never go below it).
+const DEAD_BAND_POWER: f32 = 0.0225;
 
 // ============================================================================
 // Complex Number Operations
@@ -170,9 +174,17 @@ fn wiener_adaptive(@builtin(global_invocation_id) gid: vec3<u32>) {
     let snr_estimate = signal_power / noise_estimate;
 
     // Adaptive λ: higher in low-SNR regions
-    // λ_adaptive = λ_base / SNR (clamped to reasonable range)
+    // λ_adaptive = λ_base / SNR (clamped to reasonable range). The SNR
+    // estimate compares each bin against its spectral neighborhood, so bins
+    // inside an OTF dead band — where G holds only noise and model mismatch
+    // by definition — read as high-SNR and would get λ/10, handing the
+    // unfloored hardness-1 OTFs their 1/(2·sqrt(λ_eff)) noise-gain peak
+    // exactly where the model says no signal survives. Gate by |H|²:
+    // destroyed bands may only raise λ, never drop it below base.
     let base_lambda = max(params.lambda, 0.0001);
-    let adaptive_lambda = base_lambda / clamp(snr_estimate, 0.1, 10.0);
+    let snr_clamped = clamp(snr_estimate, 0.1, 10.0);
+    let lambda_divisor = select(min(snr_clamped, 1.0), snr_clamped, c_mag_sq(H) >= DEAD_BAND_POWER);
+    let adaptive_lambda = base_lambda / lambda_divisor;
 
     // Standard Wiener filter with adaptive λ
     let H_conj = c_conj(H);

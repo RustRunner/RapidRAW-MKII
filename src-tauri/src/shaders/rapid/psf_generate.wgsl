@@ -35,7 +35,8 @@ struct PSFParams {
     motion_angle: f32,   // Degrees
     defocus_radius: f32, // In pixels
     gaussian_sigma: f32, // In pixels
-    hardness: f32,       // Motion OTF shape: 0 = Gaussian envelope, 1 = hard line
+    hardness: f32,       // OTF shape. Motion: 0 = Gaussian envelope, 1 = hard line.
+                         // Defocus: 0 = floored jinc, 1 = raw jinc (true zeros).
 }
 
 // Note on frequency scaling:
@@ -170,18 +171,19 @@ fn motion_blur_spectrum(u: f32, v: f32, length: f32, angle_deg: f32, hardness: f
 /// The pillbox PSF has circular symmetry, producing ring-shaped
 /// zeros in the frequency domain at the roots of J1.
 ///
-/// For stable deconvolution, we limit the effective radius to avoid
-/// too many ring-shaped zeros which cause severe artifacts.
-fn defocus_blur_spectrum(u: f32, v: f32, radius: f32) -> vec2<f32> {
+/// Hardness picks the treatment of those zeros. At 0 the legacy floored
+/// jinc clamps |H| to MAGNITUDE_FLOOR, which makes the Wiener filter
+/// amplify bands the lens destroyed (fabricated content) and puts annular
+/// discontinuities into the OTF — both transform to concentric spatial
+/// rings around every feature. At 1 the raw signed jinc keeps true zeros:
+/// the Wiener form |H|/(|H|^2+lambda) is self-limiting there, mirroring
+/// the motion hard-line OTF at hardness 1.
+fn defocus_blur_spectrum(u: f32, v: f32, radius: f32, hardness: f32) -> vec2<f32> {
     let rho = sqrt(u * u + v * v);
-
-    // Use the full blur radius for proper deconvolution
-    // The safe jinc function prevents exact zeros that cause instability
-    let effective_radius = radius;
-    let arg = TWO_PI * effective_radius * rho;
+    let arg = TWO_PI * radius * rho;
 
     // H(u,v) = jinc(2*pi*r*rho)
-    let magnitude = jinc_safe(arg);
+    let magnitude = mix(jinc_safe(arg), jinc(arg), hardness);
 
     return vec2<f32>(magnitude, 0.0);
 }
@@ -253,7 +255,7 @@ fn generate_psf_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 1u: {
                 // Defocus blur
-                H = defocus_blur_spectrum(u, v, params.defocus_radius);
+                H = defocus_blur_spectrum(u, v, params.defocus_radius, params.hardness);
             }
             case 2u: {
                 // Gaussian blur

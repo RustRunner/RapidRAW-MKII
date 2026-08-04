@@ -80,11 +80,20 @@ pub struct RapidParams {
     /// compiled as this code-level flag for A/B debugging, and tests that
     /// need deterministic fixed-λ math rely on the `false` default.
     pub adaptive: bool,
-    /// Motion-OTF shape: 0 = legacy zero-free Gaussian envelope, 1 = physical
-    /// hard-line OTF (signed sinc with true zeros). The `0.0` default keeps
-    /// existing tests on the exact legacy math; parse_rapid_params supplies
-    /// the production value.
+    /// OTF shape. Motion: 0 = legacy zero-free Gaussian envelope, 1 =
+    /// physical hard-line OTF (signed sinc with true zeros). Defocus: 0 =
+    /// legacy floored jinc, 1 = raw signed jinc (true zeros, Wiener
+    /// self-limiting). The `0.0` default keeps existing tests on the exact
+    /// legacy math; parse_rapid_params supplies the production values.
     pub hardness: f32,
+    /// Clipped-highlight ring guard: fade the recombine gain map back to
+    /// identity near (near-)saturated input pixels. Saturation records
+    /// min(blur(x), 1.0), violating the linear blur model, so even a
+    /// perfect filter rings around clipped sources; the guard trades their
+    /// (impossible) recovery for a ring-free neighborhood. The `false`
+    /// default keeps existing tests bit-exact; parse_rapid_params supplies
+    /// the production value.
+    pub clip_guard: bool,
 }
 
 impl Default for RapidParams {
@@ -102,6 +111,7 @@ impl Default for RapidParams {
             noise_floor: 1e-6,
             adaptive: false,
             hardness: 0.0,
+            clip_guard: false,
         }
     }
 }
@@ -133,6 +143,7 @@ impl RapidParams {
             noise_floor,
             adaptive,
             hardness: 0.0,
+            clip_guard: false,
         }
     }
 
@@ -441,6 +452,110 @@ fn build_padded_input(
             }
         });
     padded
+}
+
+// ============================================================================
+// Clipped-highlight ring guard
+// ============================================================================
+//
+// Saturated pixels record min(blur(x), 1.0), not blur(x): the linear model
+// the Wiener filter inverts is wrong there, and each clipped source radiates
+// a ring train the width of the restoration filter's impulse response — no
+// linear filter can avoid it. The guard detects (near-)clipped input pixels,
+// builds a feathered distance field from them, and fades the recombine gain
+// map back to identity nearby, so unclipped content keeps full recovery.
+
+/// Working-scale value at which a channel counts as clipped. Max-channel,
+/// not luma: a blown red tail light clips R while luma stays ~0.25, and
+/// per-channel saturation is what breaks the linear model.
+const CLIP_GUARD_SAT: f32 = 0.98;
+/// Full suppression within this many kernel extents of a clipped pixel
+/// (the reach of the clipped sample under the blur)...
+const CLIP_GUARD_D0_EXTENTS: f32 = 1.0;
+/// ...fading to zero by this many (the ring train decays over a few
+/// extents of the Wiener impulse response).
+const CLIP_GUARD_D1_EXTENTS: f32 = 3.0;
+
+/// Chamfer 3x3 distance transform: per-pixel distance in pixels to the
+/// nearest set pixel, capped at `cap`. Two raster scans (forward, then
+/// backward) with weights 1/sqrt(2); overestimates Euclidean distance by at
+/// most ~8%, exact enough for a feathered mask. O(n), one Vec<f32>.
+fn chamfer_distance(mask: &[bool], width: usize, height: usize, cap: f32) -> Vec<f32> {
+    const DIAG: f32 = std::f32::consts::SQRT_2;
+    let mut dist = vec![cap; width * height];
+    for (i, &m) in mask.iter().enumerate() {
+        if m {
+            dist[i] = 0.0;
+        }
+    }
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let mut d = dist[i];
+            if x > 0 {
+                d = d.min(dist[i - 1] + 1.0);
+            }
+            if y > 0 {
+                d = d.min(dist[i - width] + 1.0);
+                if x > 0 {
+                    d = d.min(dist[i - width - 1] + DIAG);
+                }
+                if x + 1 < width {
+                    d = d.min(dist[i - width + 1] + DIAG);
+                }
+            }
+            dist[i] = d;
+        }
+    }
+    for y in (0..height).rev() {
+        for x in (0..width).rev() {
+            let i = y * width + x;
+            let mut d = dist[i];
+            if x + 1 < width {
+                d = d.min(dist[i + 1] + 1.0);
+            }
+            if y + 1 < height {
+                d = d.min(dist[i + width] + 1.0);
+                if x + 1 < width {
+                    d = d.min(dist[i + width + 1] + DIAG);
+                }
+                if x > 0 {
+                    d = d.min(dist[i + width - 1] + DIAG);
+                }
+            }
+            dist[i] = d;
+        }
+    }
+    dist
+}
+
+/// Per-pixel guard weight: 1 (reproduce the input) within D0 of a clipped
+/// pixel, 0 (full recovery) beyond D1, smoothstep between. None when nothing
+/// clips, so the recombine loop stays untouched at zero cost.
+fn clip_guard_weights(rgba: &image::Rgba32FImage, extent: usize) -> Option<Vec<f32>> {
+    let (width, height) = (rgba.width() as usize, rgba.height() as usize);
+    let mut mask = vec![false; width * height];
+    let mut any = false;
+    for (i, p) in rgba.pixels().enumerate() {
+        if p[0].max(p[1]).max(p[2]) >= CLIP_GUARD_SAT {
+            mask[i] = true;
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let d0 = CLIP_GUARD_D0_EXTENTS * extent as f32;
+    let d1 = CLIP_GUARD_D1_EXTENTS * extent as f32;
+    let dist = chamfer_distance(&mask, width, height, d1);
+    Some(
+        dist.iter()
+            .map(|&d| {
+                let t = ((d1 - d) / (d1 - d0).max(1e-6)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            })
+            .collect(),
+    )
 }
 
 // ============================================================================
@@ -2249,6 +2364,13 @@ impl RapidDeconvolver {
         // applied as a gain map over the original RGB: hue and saturation
         // survive exactly, and per-channel divergence cannot occur. The gain
         // clamp and denominator floor keep near-black pixels from exploding.
+        // The clip guard fades the gain back to identity near saturated
+        // input pixels; at w = 1 the input pixel is reproduced exactly.
+        let guard = if params.clip_guard {
+            clip_guard_weights(&rgba_image, kernel_extent(params))
+        } else {
+            None
+        };
         let mut output = RgbaImage::new(width, height);
         for y in 0..height {
             for x in 0..width {
@@ -2256,7 +2378,11 @@ impl RapidDeconvolver {
                 let src = rgba_image.get_pixel(x, y);
                 let y_in =
                     src[0] * LUMA_COEFF[0] + src[1] * LUMA_COEFF[1] + src[2] * LUMA_COEFF[2];
-                let gain = (y_data[idx] / y_in.max(1e-4)).clamp(0.0, 4.0);
+                let mut gain = (y_data[idx] / y_in.max(1e-4)).clamp(0.0, 4.0);
+                if let Some(w) = &guard {
+                    let t = w[(y * width + x) as usize];
+                    gain = gain * (1.0 - t) + t;
+                }
                 let r = ((src[0] * gain).clamp(0.0, 1.0) * 255.0) as u8;
                 let g = ((src[1] * gain).clamp(0.0, 1.0) * 255.0) as u8;
                 let b = ((src[2] * gain).clamp(0.0, 1.0) * 255.0) as u8;
@@ -2370,8 +2496,18 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         adaptive: true,
         // Sidecars saved before this key exist get the hard-line model on
         // their next render: the ghosting it fixes is a defect, not a look.
-        hardness: (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0)
-            .clamp(0.0, 1.0),
+        // Defocus ignores the key outright — the slider and estimator only
+        // exist in the motion UI, and a stale motion-fitted value must not
+        // half-floor the defocus OTF after a blur-type switch; the floored
+        // jinc's rings are a defect there, not a look.
+        hardness: if blur_type == BlurType::Defocus {
+            1.0
+        } else {
+            (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0)
+        },
+        // Always on in production, no UI toggle: the light-centered rings it
+        // removes are a defect, not a look.
+        clip_guard: true,
         ..Default::default()
     })
 }
@@ -3514,6 +3650,352 @@ mod tests {
         );
     }
 
+    /// The defocus analog of the ghost-pair test, run at production posture
+    /// (adaptive λ, default λ = 0.01, sensor-style noise): the floored jinc
+    /// applies ~6x constant gain across the OTF's J1 dead bands, amplifying
+    /// the noise that is all those bands contain into concentric ripple
+    /// over the whole frame. The h = 1 raw jinc, with the dead-band λ gate
+    /// in wiener_adaptive, keeps true zeros and caps the dead-band noise
+    /// gain, so flat-field ripple must drop materially and the feature
+    /// neighborhood must land closer to the sharp ground truth. (At h = 1
+    /// without the gate, the adaptive estimator reads noise-only dead-band
+    /// bins as high-SNR, drops λ_eff to λ/10, and the unfloored Wiener's
+    /// 1/(2·sqrt(λ_eff)) gain peak makes ripple *worse* than the floor —
+    /// measured 0.4x here before the gate, 10x after.)
+    #[test]
+    fn test_gpu_defocus_hardness_reduces_ring_energy() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU defocus ring test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID defocus ring test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // Bright square on mid-gray, disc-blurred: the ground truth is flat
+        // away from the square, so any periodic energy out there is OTF
+        // artifact, not content.
+        let (width, height) = (256usize, 200usize);
+        let radius = 8.0f32;
+        let field: Vec<f32> = (0..width * height)
+            .map(|i| {
+                let (x, y) = ((i % width) as i32, (i / width) as i32);
+                if (x - 128).abs() <= 3 && (y - 100).abs() <= 3 { 0.9 } else { 0.4 }
+            })
+            .collect();
+        let blurred = disc_blur_field(&field, width, height, radius);
+        let hash2 = |x: u32, y: u32| -> u32 {
+            let mut h = x.wrapping_mul(0x27D4_EB2F) ^ y.wrapping_mul(0x1656_67B1);
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7FEB_352D);
+            h ^= h >> 15;
+            h
+        };
+
+        let flat_var = |img: &image::DynamicImage| -> f64 {
+            let rgb = img.to_rgb32f();
+            let (x0, x1, y0, y1) = (40u32, 88u32, 68u32, 132u32);
+            let n = ((x1 - x0) * (y1 - y0)) as f64;
+            let (mut sum, mut sum2) = (0.0f64, 0.0f64);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let v = rgb.get_pixel(x, y)[0] as f64;
+                    sum += v;
+                    sum2 += v * v;
+                }
+            }
+            let mean = sum / n;
+            (sum2 / n - mean * mean).max(0.0)
+        };
+        let near_mse = |img: &image::DynamicImage| -> f64 {
+            let rgb = img.to_rgb32f();
+            let (x0, x1, y0, y1) = (96u32, 160u32, 84u32, 116u32);
+            let mut sum = 0.0f64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let truth = if (x as i32 - 128).abs() <= 3 && (y as i32 - 100).abs() <= 3 {
+                        0.9f32
+                    } else {
+                        0.4f32
+                    };
+                    let d = (rgb.get_pixel(x, y)[0] - truth) as f64;
+                    sum += d * d;
+                }
+            }
+            sum / ((x1 - x0) * (y1 - y0)) as f64
+        };
+
+        // Sensor-style noise added after the blur: real captures always
+        // carry it, and it is what dead-band gain turns into ripple. Without
+        // it the metric floor is u8 quantization, ~0.3 levels of std, and
+        // the comparison measures nothing visible.
+        let noisy: Vec<f32> = blurred
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let (x, y) = ((i % width) as u32, (i / width) as u32);
+                v + ((hash2(x, y) & 0xff) as f32 / 255.0 - 0.5) * 0.03
+            })
+            .collect();
+        let input = gray_image(&noisy, width as u32, height as u32);
+
+        let soft_params = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Defocus,
+            defocus_radius: radius,
+            lambda: 0.01,
+            strength: 1.0,
+            adaptive: true,
+            ..Default::default()
+        };
+        let hard_params = RapidParams { hardness: 1.0, ..soft_params };
+
+        let soft = deconv
+            .deconvolve_image(&device, &queue, &input, &soft_params)
+            .expect("soft deconvolve failed");
+        let hard = deconv
+            .deconvolve_image(&device, &queue, &input, &hard_params)
+            .expect("hard deconvolve failed");
+
+        let (v_soft, v_hard) = (flat_var(&soft), flat_var(&hard));
+        let (m_soft, m_hard) = (near_mse(&soft), near_mse(&hard));
+        eprintln!(
+            "defocus h0 vs h1: flat_var {v_soft:.3e} -> {v_hard:.3e} ({:.1}x), \
+             near_mse {m_soft:.3e} -> {m_hard:.3e} ({:.2}x)",
+            v_soft / v_hard,
+            m_soft / m_hard
+        );
+        assert!(
+            v_soft > 4.0 * v_hard,
+            "raw jinc reduced flat-field ripple only {:.1}x (soft {v_soft:.3e}, hard {v_hard:.3e})",
+            v_soft / v_hard
+        );
+        assert!(
+            m_soft > 1.4 * m_hard,
+            "raw jinc improved the feature neighborhood only {:.2}x (soft {m_soft:.3e}, hard {m_hard:.3e})",
+            m_soft / m_hard
+        );
+    }
+
+    /// Chamfer distances against brute-force Euclidean on a small grid: the
+    /// 3x3 1/sqrt(2) transform never undershoots and overestimates by at
+    /// most ~8% before the cap.
+    #[test]
+    fn test_chamfer_distance_transform() {
+        let (w, h) = (17usize, 11usize);
+        let mut mask = vec![false; w * h];
+        let seeds = [(3usize, 2usize), (13usize, 8usize)];
+        for &(x, y) in &seeds {
+            mask[y * w + x] = true;
+        }
+        let cap = 8.0f32;
+        let dist = chamfer_distance(&mask, w, h, cap);
+        for y in 0..h {
+            for x in 0..w {
+                let exact = seeds
+                    .iter()
+                    .map(|&(sx, sy)| {
+                        let (dx, dy) = (x as f32 - sx as f32, y as f32 - sy as f32);
+                        (dx * dx + dy * dy).sqrt()
+                    })
+                    .fold(f32::INFINITY, f32::min)
+                    .min(cap);
+                let got = dist[y * w + x];
+                assert!(
+                    got + 1e-3 >= exact && got <= exact * 1.09 + 1e-3,
+                    "chamfer {got:.3} vs euclidean {exact:.3} at ({x},{y})"
+                );
+            }
+        }
+    }
+
+    /// Clipped-highlight guard: an overbright disc saturates after disc
+    /// blur (recording min(blur, 1.0)), so even the h = 1 filter rings
+    /// around it — a model violation, not an OTF defect. With the guard the
+    /// disc's neighborhood must come back near-input while a bar pattern
+    /// ("text") beyond D1 still sharpens.
+    #[test]
+    fn test_gpu_clip_guard_suppresses_highlight_rings() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU clip guard test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID clip guard test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // Overbright disc (4.0, sensor-clipped to 1.0 after blur) at (70,100)
+        // on mid-gray; 5 px bars at x in [150, 210). The clipped set reaches
+        // x ~ 81, so with kernel extent 16 the guard's D1 = 48 ends near
+        // x = 129 and the bars keep full recovery weight.
+        let (width, height) = (256usize, 200usize);
+        let radius = 8.0f32;
+        let field: Vec<f32> = (0..width * height)
+            .map(|i| {
+                let (x, y) = ((i % width) as i32, (i / width) as i32);
+                let dx = x - 70;
+                let dy = y - 100;
+                if ((dx * dx + dy * dy) as f32).sqrt() <= 6.0 {
+                    4.0
+                } else if (150..210).contains(&x) {
+                    if (x - 150) % 10 < 5 { 0.75 } else { 0.15 }
+                } else {
+                    0.4
+                }
+            })
+            .collect();
+        let blurred = disc_blur_field(&field, width, height, radius);
+        let input = gray_image(&blurred, width as u32, height as u32);
+
+        let unguarded = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Defocus,
+            defocus_radius: radius,
+            lambda: 0.002,
+            strength: 1.0,
+            hardness: 1.0,
+            ..Default::default()
+        };
+        let guarded = RapidParams { clip_guard: true, ..unguarded };
+
+        // (a) Ring energy next to the disc, measured against the input over
+        // a flat window right of the clipped set (inside the guard's feather).
+        let near_disc_mse = |img: &image::DynamicImage| -> f64 {
+            let (rgb, inp) = (img.to_rgb32f(), input.to_rgb32f());
+            let (x0, x1, y0, y1) = (85u32, 125u32, 70u32, 130u32);
+            let mut sum = 0.0f64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = (rgb.get_pixel(x, y)[0] - inp.get_pixel(x, y)[0]) as f64;
+                    sum += d * d;
+                }
+            }
+            sum / ((x1 - x0) * (y1 - y0)) as f64
+        };
+        // (b) Bar contrast: max-min of the row-averaged profile.
+        let bar_amplitude = |img: &image::DynamicImage| -> f32 {
+            let rgb = img.to_rgb32f();
+            let col = |x: u32| -> f32 {
+                (80..120).map(|y| rgb.get_pixel(x, y)[0]).sum::<f32>() / 40.0
+            };
+            let profile: Vec<f32> = (152..208).map(col).collect();
+            profile.iter().fold(f32::MIN, |a, &b| a.max(b))
+                - profile.iter().fold(f32::MAX, |a, &b| a.min(b))
+        };
+
+        let off = deconv
+            .deconvolve_image(&device, &queue, &input, &unguarded)
+            .expect("unguarded deconvolve failed");
+        let on = deconv
+            .deconvolve_image(&device, &queue, &input, &guarded)
+            .expect("guarded deconvolve failed");
+
+        let (mse_off, mse_on) = (near_disc_mse(&off), near_disc_mse(&on));
+        let (amp_in, amp_on) = (bar_amplitude(&input), bar_amplitude(&on));
+        eprintln!(
+            "clip guard: near-disc MSE off {mse_off:.3e} -> on {mse_on:.3e} ({:.1}x), \
+             bar amplitude in {amp_in:.3} -> on {amp_on:.3} ({:.1}x)",
+            mse_off / mse_on,
+            amp_on / amp_in
+        );
+        assert!(
+            mse_off > 3.0 * mse_on,
+            "guard reduced near-disc ring energy only {:.1}x (off {mse_off:.3e}, on {mse_on:.3e})",
+            mse_off / mse_on
+        );
+        assert!(
+            amp_on > 1.5 * amp_in,
+            "bar pattern did not sharpen under the guard (in {amp_in:.3}, on {amp_on:.3})"
+        );
+    }
+
+    /// Without clipped pixels the guard must be a bit-exact no-op: the empty
+    /// mask skips the distance transform and the recombine loop untouched.
+    #[test]
+    fn test_gpu_clip_guard_noop_without_clipping() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU clip guard no-op test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID clip guard no-op test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        // The clip-guard scene minus the disc: nothing reaches CLIP_GUARD_SAT.
+        let (width, height) = (256usize, 200usize);
+        let radius = 8.0f32;
+        let field: Vec<f32> = (0..width * height)
+            .map(|i| {
+                let x = (i % width) as i32;
+                if (150..210).contains(&x) {
+                    if (x - 150) % 10 < 5 { 0.75 } else { 0.15 }
+                } else {
+                    0.4
+                }
+            })
+            .collect();
+        let blurred = disc_blur_field(&field, width, height, radius);
+        let input = gray_image(&blurred, width as u32, height as u32);
+
+        let unguarded = RapidParams {
+            enabled: true,
+            blur_type: BlurType::Defocus,
+            defocus_radius: radius,
+            lambda: 0.002,
+            strength: 1.0,
+            hardness: 1.0,
+            ..Default::default()
+        };
+        let guarded = RapidParams { clip_guard: true, ..unguarded };
+
+        let off = deconv
+            .deconvolve_image(&device, &queue, &input, &unguarded)
+            .expect("unguarded deconvolve failed");
+        let on = deconv
+            .deconvolve_image(&device, &queue, &input, &guarded)
+            .expect("guarded deconvolve failed");
+        assert!(
+            off.as_bytes() == on.as_bytes(),
+            "clip guard changed output bytes on a clip-free image"
+        );
+    }
+
     /// Luma-only deconvolution with gain-map recombine must preserve chroma
     /// even when the source carries per-channel misregistration (chromatic
     /// aberration) — the per-channel pipeline amplified that into red/blue
@@ -3767,6 +4249,43 @@ mod tests {
         })
     }
 
+    /// Convolve a grayscale f32 field with a true pillbox PSF (uniform disk)
+    /// — the real-world defocus blur whose jinc spectrum the deconvolution
+    /// divides by. Border taps average over the in-frame subset, like
+    /// motion_blur_line.
+    fn disc_blur_field(field: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
+        let ri = radius.ceil() as i32;
+        let taps: Vec<(i32, i32)> = (-ri..=ri)
+            .flat_map(|dy| (-ri..=ri).map(move |dx| (dx, dy)))
+            .filter(|&(dx, dy)| ((dx * dx + dy * dy) as f32).sqrt() <= radius)
+            .collect();
+        let mut out = vec![0.0f32; w * h];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let mut acc = 0.0f32;
+                let mut count = 0.0f32;
+                for &(dx, dy) in &taps {
+                    let (sx, sy) = (x + dx, y + dy);
+                    if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
+                        acc += field[(sy * w as i32 + sx) as usize];
+                        count += 1.0;
+                    }
+                }
+                out[(y * w as i32 + x) as usize] = acc / count;
+            }
+        }
+        out
+    }
+
+    /// Quantize a grayscale f32 field to an sRGB-range u8 image, clamping to
+    /// [0, 1] — the sensor's saturation step for overbright field values.
+    fn gray_image(field: &[f32], w: u32, h: u32) -> image::DynamicImage {
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
+            let v = (field[(y * w + x) as usize].clamp(0.0, 1.0) * 255.0).round() as u8;
+            image::Rgba([v, v, v, 255])
+        }))
+    }
+
     /// Convention gate for the estimator: synthetic line blurs at four angles
     /// must come back with the right length and angle in psf_generate.wgsl's
     /// motion_angle convention (degrees, 0-180, image-space Y-down), and a
@@ -3976,6 +4495,34 @@ mod tests {
         let params = parse_rapid_params(&adjustments).expect("params should parse");
         assert!(params.adaptive, "adaptive must be always-on regardless of stale sidecar keys");
         assert!((params.lambda - 0.076).abs() < 1e-6, "lambda must stay raw");
+    }
+
+    /// The hardness slider and estimator only exist in the motion UI, so a
+    /// motion-fitted value left in the sidecar must not half-floor the
+    /// defocus OTF after a blur-type switch: defocus always gets the raw
+    /// jinc, motion keeps the parsed value. The parse must also hardcode
+    /// the clip guard on (no UI toggle).
+    #[test]
+    fn test_parse_defocus_forces_hard_otf() {
+        let mut adjustments = serde_json::json!({
+            "rapidEnabled": true,
+            "rapidBlurType": "defocus",
+            "rapidRadius": 8.0,
+            "rapidLambda": 0.01,
+            "rapidStrength": 100.0,
+            "rapidHardness": 40.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("params should parse");
+        assert_eq!(params.hardness, 1.0, "stale motion hardness leaked into the defocus OTF");
+        assert!(params.clip_guard, "clip guard must be always-on in production");
+
+        adjustments["rapidBlurType"] = serde_json::json!("motion");
+        let params = parse_rapid_params(&adjustments).expect("params should parse");
+        assert!(
+            (params.hardness - 0.4).abs() < 1e-6,
+            "motion must keep the parsed hardness, got {}",
+            params.hardness
+        );
     }
 
     #[test]
