@@ -529,6 +529,12 @@ struct FlareParams {
     _pad: f32,
 }
 
+const TILE_SIZE: u32 = 2048;
+const TILE_OVERLAP: u32 = 128;
+/// Largest per-axis extent any tile dispatch can reach; the six tile-local
+/// textures never need to grow beyond this.
+const TILE_EXTENT: u32 = TILE_SIZE + 2 * TILE_OVERLAP;
+
 pub struct GpuProcessor {
     context: GpuContext,
     blur_bgl: wgpu::BindGroupLayout,
@@ -981,15 +987,23 @@ impl GpuProcessor {
         let dummy_lut_view = dummy_lut_texture.create_view(&Default::default());
         let dummy_lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
-        let max_tile_size = wgpu::Extent3d {
+        let full_extent = wgpu::Extent3d {
             width: max_width,
             height: max_height,
+            depth_or_array_layers: 1,
+        };
+        // The ping-pong, blur, and tile-output textures are only ever
+        // addressed in tile-local coordinates; the min() keeps
+        // smaller-than-tile processors (e.g. previews) at their natural size.
+        let tile_extent = wgpu::Extent3d {
+            width: max_width.min(TILE_EXTENT),
+            height: max_height.min(TILE_EXTENT),
             depth_or_array_layers: 1,
         };
 
         let reusable_texture_desc = wgpu::TextureDescriptor {
             label: None,
-            size: max_tile_size,
+            size: tile_extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1030,7 +1044,7 @@ impl GpuProcessor {
 
         let tile_output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Tile Output Texture"),
-            size: max_tile_size,
+            size: tile_extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1044,7 +1058,7 @@ impl GpuProcessor {
 
         let working_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Working Output Texture"),
-            size: max_tile_size,
+            size: full_extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1059,7 +1073,7 @@ impl GpuProcessor {
 
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Full Output Texture"),
-            size: max_tile_size,
+            size: full_extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1311,9 +1325,6 @@ impl GpuProcessor {
             queue.submit(Some(encoder.finish()));
         }
 
-        const TILE_SIZE: u32 = 2048;
-        const TILE_OVERLAP: u32 = 128;
-
         let mut final_pixels = vec![
             0u8;
             if skip_cpu_readback {
@@ -1444,6 +1455,8 @@ impl GpuProcessor {
                 let mut tile_adjustments = adjustments;
                 tile_adjustments.tile_offset_x = input_x_start;
                 tile_adjustments.tile_offset_y = input_y_start;
+                tile_adjustments.input_width = input_width;
+                tile_adjustments.input_height = input_height;
                 queue.write_buffer(
                     &self.adjustments_buffer,
                     0,
@@ -2131,6 +2144,116 @@ mod tests {
         });
         let err = pollster::block_on(error_scope.pop());
         assert!(err.is_none(), "shader.wgsl failed validation: {:#?}", err);
+    }
+
+    /// Renders a 2560×2560 gradient (2×2 tiles) with neutral adjustments and
+    /// checks the output against the input per pixel. Any tile-local vs
+    /// absolute addressing mistake in the tile-sized textures shows up as
+    /// seams at the 2048 tile boundaries, which this catches.
+    #[test]
+    fn test_gpu_multi_tile_identity_render() {
+        use image::Rgba;
+        use std::sync::Arc;
+        use wgpu::util::{DeviceExt, TextureDataOrder};
+
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping multi-tile identity test: no adapter ({e})");
+                return;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("multi-tile identity test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let context = crate::image_processing::GpuContext {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            limits: adapter.limits(),
+            display: Arc::new(std::sync::Mutex::new(None)),
+            is_integrated: false,
+        };
+
+        const SIZE: u32 = 2560;
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(
+            SIZE,
+            SIZE,
+            |x, y| {
+                let r = (x * 255 / (SIZE - 1)) as u8;
+                let g = (y * 255 / (SIZE - 1)) as u8;
+                let b = ((x + y) * 255 / (2 * (SIZE - 1))) as u8;
+                Rgba([r, g, b, 255])
+            },
+        ));
+
+        let processor =
+            super::GpuProcessor::new(context.clone(), (SIZE + 255) & !255, (SIZE + 255) & !255)
+                .expect("GpuProcessor::new");
+
+        let input_f16 = super::to_rgba_f16(&img);
+        let input_texture = context.device.create_texture_with_data(
+            &context.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("multi-tile identity input"),
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            TextureDataOrder::MipMajor,
+            bytemuck::cast_slice(&input_f16),
+        );
+        let input_view = input_texture.create_view(&Default::default());
+
+        let adjustments = crate::image_processing::get_all_adjustments_from_json(
+            &serde_json::json!({}),
+            false,
+            None,
+        );
+        let request = super::RenderRequest {
+            adjustments,
+            mask_bitmaps: &[],
+            lut: None,
+            roi: None,
+        };
+        let (pixels, ow, oh, _, _) = processor
+            .run(&input_view, SIZE, SIZE, request, false, false, None)
+            .expect("processor.run");
+        assert_eq!((ow, oh), (SIZE, SIZE));
+
+        let src = img.to_rgba8();
+        let mut max_diff = 0i32;
+        let mut max_at = (0u32, 0u32);
+        for (i, (a, b)) in src.as_raw().iter().zip(pixels.iter()).enumerate() {
+            let diff = (*a as i32 - *b as i32).abs();
+            if diff > max_diff {
+                max_diff = diff;
+                let px = (i / 4) as u32;
+                max_at = (px % SIZE, px / SIZE);
+            }
+        }
+        assert!(
+            max_diff <= 1,
+            "neutral multi-tile render deviates from input by {}/255 at {:?}",
+            max_diff,
+            max_at
+        );
     }
 
     /// Renders a real image through the full pipeline with the veil texture

@@ -21,8 +21,7 @@ fn gaussian(x: f32, sigma: f32) -> f32 {
 
 @compute @workgroup_size(256, 1, 1)
 fn horizontal_blur(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = vec2<i32>(textureDimensions(output_texture));
-    if (id.x >= u32(dims.x)) {
+    if (id.x >= params.input_width) {
         return;
     }
 

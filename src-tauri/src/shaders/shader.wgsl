@@ -189,6 +189,10 @@ struct AllAdjustments {
     tile_offset_x: u32,
     tile_offset_y: u32,
     mask_atlas_cols: u32,
+    input_width: u32,
+    input_height: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 struct HslRange {
@@ -1715,8 +1719,10 @@ fn apply_glare_recovery(color: vec3<f32>, veil: vec3<f32>) -> vec3<f32> {
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let out_dims = vec2<u32>(textureDimensions(output_texture));
-    if (id.x >= out_dims.x || id.y >= out_dims.y) { return; }
+    // Guard on the dispatch extent, not the texture size: the tile textures
+    // are allocated at TILE_EXTENT, which only accidentally matches the
+    // rounded-up dispatch for tile-size multiples of the workgroup.
+    if (id.x >= adjustments.input_width || id.y >= adjustments.input_height) { return; }
 
     const REFERENCE_DIMENSION: f32 = 1080.0;
     let full_dims = vec2<f32>(textureDimensions(input_texture));
