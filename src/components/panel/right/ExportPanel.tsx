@@ -278,6 +278,7 @@ function CalloutPreview({
             display: 'inline-block',
             whiteSpace: 'pre',
             color: '#ffffff',
+            fontFamily: "'Courier Prime', ui-monospace, monospace",
             fontSize: `${fontSize}px`,
             lineHeight: 1.35,
             padding: '0.6em',
@@ -382,8 +383,8 @@ export default function ExportPanel({
     currentSettingsObject,
   } = useExportSettings();
 
-  const [calloutMgrs, setCalloutMgrs] = useState(false);
-  const [calloutTemplate, setCalloutTemplate] = useState(DEFAULT_CALLOUT_TEMPLATE);
+  const calloutMgrs = appSettings?.calloutMgrs ?? false;
+  const calloutTemplate = appSettings?.calloutTemplate ?? DEFAULT_CALLOUT_TEMPLATE;
   const [isTemplateSaved, setIsTemplateSaved] = useState(false);
 
   const hasExif = !!selectedImage?.exif && Object.keys(selectedImage.exif).length > 0;
@@ -397,8 +398,14 @@ export default function ExportPanel({
     setCalloutText(insertIntoNotes(calloutText, calloutTemplate));
   };
 
+  const handleSetCalloutMgrs = (value: boolean) => {
+    if (!appSettings) return;
+    onSettingsChange({ ...appSettings, calloutMgrs: value });
+  };
+
   const handleSaveTemplate = () => {
-    setCalloutTemplate(calloutText);
+    if (!appSettings) return;
+    onSettingsChange({ ...appSettings, calloutTemplate: calloutText });
     setIsTemplateSaved(true);
     setTimeout(() => setIsTemplateSaved(false), 1500);
   };
@@ -996,6 +1003,7 @@ export default function ExportPanel({
                     <div className="space-y-4 pl-2 border-l-2 border-surface">
                       <textarea
                         className="w-full bg-surface border border-surface rounded-md p-2 text-sm font-mono text-text-primary focus:ring-accent focus:border-accent"
+                        style={{ fontFamily: "'Courier Prime', ui-monospace, monospace" }}
                         rows={5}
                         value={calloutText}
                         onChange={(e) => setCalloutText(e.target.value)}
@@ -1036,7 +1044,7 @@ export default function ExportPanel({
                       <Switch
                         label={t('export.callout.mgrsCoords')}
                         checked={calloutMgrs}
-                        onChange={setCalloutMgrs}
+                        onChange={handleSetCalloutMgrs}
                         disabled={isExporting}
                         trackClassName="bg-surface"
                       />

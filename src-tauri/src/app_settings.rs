@@ -474,6 +474,10 @@ pub struct AppSettings {
     pub group_preferred_type: Option<String>,
     #[serde(default)]
     pub always_decode_raw_thumbnails: Option<bool>,
+    #[serde(default)]
+    pub callout_template: Option<String>,
+    #[serde(default)]
+    pub callout_mgrs: Option<bool>,
 }
 
 impl Default for AppSettings {
@@ -562,6 +566,8 @@ impl Default for AppSettings {
             group_associated_files: Some(false),
             group_preferred_type: Some("raw".to_string()),
             always_decode_raw_thumbnails: Some(false),
+            callout_template: None,
+            callout_mgrs: None,
         }
     }
 }

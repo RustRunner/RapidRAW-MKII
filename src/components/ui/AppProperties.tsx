@@ -217,6 +217,8 @@ export interface AppSettings {
   groupEditedFiles?: boolean;
   groupPreferredType?: GroupPreference; // legacy
   alwaysDecodeRawThumbnails?: boolean;
+  calloutTemplate?: string;
+  calloutMgrs?: boolean;
 }
 
 export interface BrushSettings {
