@@ -2553,6 +2553,9 @@ pub struct GpuContext {
     pub queue: Arc<wgpu::Queue>,
     pub limits: wgpu::Limits,
     pub display: Arc<std::sync::Mutex<Option<WgpuDisplay>>>,
+    /// True for shared-memory adapters (integrated GPUs, software
+    /// rasterizers) whose allocations compete with the CPU for system RAM.
+    pub is_integrated: bool,
 }
 
 #[inline(always)]

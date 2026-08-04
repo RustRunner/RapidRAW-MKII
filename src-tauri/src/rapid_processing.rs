@@ -758,9 +758,10 @@ impl RapidDeconvolver {
 
         let info = adapter.get_info();
         log::info!(
-            "RAPID GPU check passed: {} ({:?}), max texture: {}",
+            "RAPID GPU check passed: {} ({:?}, {:?}), max texture: {}",
             info.name,
             info.backend,
+            info.device_type,
             limits.max_texture_dimension_2d
         );
 

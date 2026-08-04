@@ -208,6 +208,18 @@ pub fn get_or_init_gpu_context(
         format!("Failed to find a wgpu adapter: {}", e)
     })?;
 
+    let adapter_info = adapter.get_info();
+    let is_integrated = matches!(
+        adapter_info.device_type,
+        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
+    );
+    log::info!(
+        "GPU adapter: {} (backend: {:?}, type: {:?})",
+        adapter_info.name,
+        adapter_info.backend,
+        adapter_info.device_type
+    );
+
     let mut required_features = wgpu::Features::empty();
     if adapter
         .features()
@@ -407,6 +419,7 @@ pub fn get_or_init_gpu_context(
         queue: Arc::new(queue),
         limits,
         display: Arc::new(std::sync::Mutex::new(display_opt)),
+        is_integrated,
     };
     *context_lock = Some(new_context.clone());
     Ok(new_context)
@@ -2160,6 +2173,7 @@ mod tests {
             queue: Arc::new(queue),
             limits: adapter.limits(),
             display: Arc::new(std::sync::Mutex::new(None)),
+            is_integrated: false,
         };
 
         let processor = super::GpuProcessor::new(
