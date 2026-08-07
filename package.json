@@ -1,6 +1,7 @@
 {
   "name": "rapidraw-mkii",
-  "author": "Timon Käch (Original), Modified Version",
+  "description": "A recovery-focused RapidRAW fork for difficult captures and contextual export workflows.",
+  "author": "Timon Käch (original RapidRAW), RustRunner (Mark II)",
   "private": true,
   "scripts": {
     "dev": "vite",

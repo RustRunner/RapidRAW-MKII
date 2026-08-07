@@ -1,7 +1,7 @@
 [package]
 name = "RapidRAW-MKII"
-description = "A modified version of the blazingly-fast, non-destructive, and GPU-accelerated RAW image editor."
-authors = ["Timon Käch (Original)"]
+description = "A recovery-focused RapidRAW fork for difficult captures and contextual export workflows."
+authors = ["Timon Käch (original RapidRAW)", "RustRunner (Mark II)"]
 edition = "2024"
 rust-version = "1.96"
 

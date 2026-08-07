@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RapidRAW Mark II — README Preview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #0d1117;
+        --canvas-subtle: #161b22;
+        --canvas-inset: #010409;
+        --border: #30363d;
+        --border-muted: #21262d;
+        --text: #e6edf3;
+        --text-strong: #f0f6fc;
+        --muted: #8b949e;
+        --link: #58a6ff;
+        --accent: #6f7d61;
+        --accent-deep: #4f5b45;
+        --accent-soft: rgba(111, 125, 97, 0.14);
+        --important: #a371f7;
+        --code: #161b22;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif, 'Apple Color Emoji',
+          'Segoe UI Emoji';
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      a {
+        color: var(--link);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      .topbar {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 24px;
+        background: var(--canvas-inset);
+        border-bottom: 1px solid var(--border-muted);
+      }
+
+      .github-mark {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        border: 1px solid #484f58;
+        border-radius: 50%;
+        color: var(--text-strong);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+      }
+
+      .global-search {
+        width: min(350px, 36vw);
+        padding: 7px 12px;
+        color: var(--muted);
+        background: var(--canvas);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+      }
+
+      .top-links {
+        display: flex;
+        gap: 16px;
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .repo-header {
+        background: var(--canvas-inset);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .repo-heading,
+      .repo-tabs,
+      .page {
+        width: min(1280px, calc(100% - 48px));
+        margin-inline: auto;
+      }
+
+      .repo-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 18px 0 14px;
+      }
+
+      .repo-icon {
+        width: 18px;
+        height: 18px;
+        color: var(--muted);
+      }
+
+      .repo-path {
+        font-size: 20px;
+        font-weight: 600;
+      }
+
+      .repo-path .owner {
+        font-weight: 400;
+      }
+
+      .visibility {
+        margin-left: 4px;
+        padding: 1px 7px;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .repo-actions {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+      }
+
+      .repo-button,
+      .branch-button {
+        min-height: 30px;
+        padding: 5px 10px;
+        color: var(--text);
+        background: #21262d;
+        border: 1px solid #363b42;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .repo-tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+      }
+
+      .repo-tab {
+        position: relative;
+        padding: 11px 13px 13px;
+        color: var(--text);
+        white-space: nowrap;
+        font-size: 14px;
+      }
+
+      .repo-tab.active::after {
+        position: absolute;
+        right: 9px;
+        bottom: -1px;
+        left: 9px;
+        height: 2px;
+        background: #f78166;
+        border-radius: 2px;
+        content: '';
+      }
+
+      .page {
+        padding: 24px 0 64px;
+      }
+
+      .branch-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .branch-button {
+        min-width: 116px;
+        text-align: left;
+      }
+
+      .commit-note {
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .readme-card {
+        overflow: hidden;
+        background: var(--canvas);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        box-shadow: 0 16px 50px rgba(0, 0, 0, 0.16);
+      }
+
+      .readme-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 46px;
+        padding: 0 16px;
+        background: var(--canvas-subtle);
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .book-icon {
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .readme {
+        max-width: 1012px;
+        margin: 0 auto;
+        padding: 42px 52px 64px;
+        overflow-wrap: break-word;
+      }
+
+      .brand {
+        position: relative;
+        text-align: center;
+      }
+
+      .brand::before {
+        position: absolute;
+        top: -18px;
+        left: 50%;
+        width: 240px;
+        height: 150px;
+        transform: translateX(-50%);
+        background: radial-gradient(circle, var(--accent-soft), transparent 68%);
+        pointer-events: none;
+        content: '';
+      }
+
+      .app-icon {
+        position: relative;
+        width: 112px;
+        height: 112px;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.38));
+      }
+
+      h1,
+      h2,
+      h3 {
+        color: var(--text-strong);
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      h1 {
+        position: relative;
+        margin: 18px 0 10px;
+        padding: 0;
+        border: 0;
+        font-size: 2.2em;
+      }
+
+      h2 {
+        margin: 32px 0 16px;
+        padding-bottom: 0.3em;
+        border-bottom: 1px solid var(--border-muted);
+        font-size: 1.5em;
+      }
+
+      h3 {
+        margin: 0 0 14px;
+        font-size: 1.25em;
+      }
+
+      p {
+        margin: 0 0 16px;
+      }
+
+      .tagline {
+        margin-bottom: 8px;
+        color: var(--text-strong);
+        font-size: 17px;
+      }
+
+      .signal-line {
+        color: #9aa38f;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.19em;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 5px;
+        margin: 22px 0 13px;
+      }
+
+      .badge {
+        display: inline-flex;
+        overflow: hidden;
+        color: #fff;
+        border-radius: 3px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        font-size: 11px;
+        line-height: 20px;
+      }
+
+      .badge-label {
+        padding: 0 7px;
+        background: #555f67;
+      }
+
+      .badge-value {
+        padding: 0 7px;
+        background: var(--accent-deep);
+        font-weight: 600;
+      }
+
+      .quick-links {
+        margin-bottom: 28px;
+        font-size: 14px;
+      }
+
+      .quick-links span {
+        padding: 0 7px;
+        color: var(--muted);
+      }
+
+      .hero {
+        margin: 0 0 22px;
+        text-align: center;
+      }
+
+      .hero img {
+        display: block;
+        width: 100%;
+        background: #161b22;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+
+      figcaption {
+        margin-top: 9px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .important {
+        margin: 22px 0 28px;
+        padding: 4px 16px;
+        border-left: 0.25em solid var(--important);
+      }
+
+      .important-title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 8px;
+        color: var(--important);
+        font-weight: 600;
+      }
+
+      .important p {
+        margin-bottom: 0;
+      }
+
+      .focus-grid {
+        width: 100%;
+        margin: 18px 0 26px;
+        border-collapse: collapse;
+        border-spacing: 0;
+      }
+
+      .focus-grid td {
+        padding: 22px;
+        border: 1px solid var(--border);
+        vertical-align: top;
+      }
+
+      .focus-copy {
+        width: 68%;
+      }
+
+      .focus-shot {
+        width: 32%;
+        text-align: center;
+      }
+
+      .focus-shot img {
+        width: min(270px, 100%);
+        border: 1px solid var(--border-muted);
+        border-radius: 6px;
+      }
+
+      ul {
+        margin: 0 0 16px;
+        padding-left: 2em;
+      }
+
+      li + li {
+        margin-top: 0.25em;
+      }
+
+      .feature-table {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        overflow: auto;
+        border-spacing: 0;
+        border-collapse: collapse;
+      }
+
+      .feature-table th,
+      .feature-table td {
+        padding: 8px 13px;
+        border: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .feature-table th {
+        color: var(--text-strong);
+        background: rgba(111, 125, 97, 0.08);
+        font-weight: 600;
+      }
+
+      .feature-table tr:nth-child(2n) {
+        background: rgba(110, 118, 129, 0.05);
+      }
+
+      .feature-table td:first-child {
+        min-width: 190px;
+        color: var(--text-strong);
+        white-space: nowrap;
+      }
+
+      code {
+        padding: 0.2em 0.4em;
+        background: rgba(110, 118, 129, 0.4);
+        border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 85%;
+      }
+
+      pre {
+        padding: 16px;
+        overflow: auto;
+        background: var(--code);
+        border: 1px solid var(--border-muted);
+        border-radius: 6px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+        font-size: 100%;
+      }
+
+      .prompt {
+        color: #91a17f;
+        user-select: none;
+      }
+
+      .credit-list {
+        margin-bottom: 16px;
+      }
+
+      .mockup-footer {
+        padding: 22px 0 0;
+        color: var(--muted);
+        text-align: center;
+        font-size: 12px;
+      }
+
+      @media (max-width: 800px) {
+        .repo-heading,
+        .repo-tabs,
+        .page {
+          width: min(100% - 24px, 1280px);
+        }
+
+        .top-links,
+        .repo-actions,
+        .commit-note {
+          display: none;
+        }
+
+        .global-search {
+          width: 100%;
+        }
+
+        .readme {
+          padding: 30px 22px 44px;
+        }
+
+        .focus-grid,
+        .focus-grid tbody,
+        .focus-grid tr,
+        .focus-grid td {
+          display: block;
+          width: 100%;
+        }
+
+        .focus-grid td + td {
+          border-top: 0;
+        }
+
+        .feature-table td:first-child {
+          min-width: 165px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar" aria-label="GitHub mock navigation">
+      <div class="github-mark">GH</div>
+      <div class="global-search">Type <strong>/</strong> to search</div>
+      <nav class="top-links" aria-label="Global navigation">
+        <span>Issues</span>
+        <span>Pull requests</span>
+        <span>Notifications</span>
+      </nav>
+    </header>
+
+    <section class="repo-header">
+      <div class="repo-heading">
+        <svg class="repo-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path
+            d="M2 2.75A1.75 1.75 0 0 1 3.75 1h8.5A1.75 1.75 0 0 1 14 2.75v10.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25Zm1.5 0v10.5c0 .138.112.25.25.25H5v-12H3.75a.25.25 0 0 0-.25.25ZM6.5 13.5h5.75a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H6.5Z"
+          />
+        </svg>
+        <div class="repo-path">
+          <a class="owner" href="https://github.com/RustRunner">RustRunner</a>
+          <span> / </span>
+          <a href="https://github.com/RustRunner/RapidRAW-MKII">RapidRAW-MKII</a>
+        </div>
+        <span class="visibility">Public</span>
+        <div class="repo-actions">
+          <button class="repo-button" type="button">Watch</button>
+          <button class="repo-button" type="button">Fork</button>
+          <button class="repo-button" type="button">☆ Star</button>
+        </div>
+      </div>
+      <nav class="repo-tabs" aria-label="Repository navigation">
+        <span class="repo-tab active">Code</span>
+        <span class="repo-tab">Issues</span>
+        <span class="repo-tab">Pull requests</span>
+        <span class="repo-tab">Actions</span>
+        <span class="repo-tab">Projects</span>
+        <span class="repo-tab">Security</span>
+        <span class="repo-tab">Insights</span>
+      </nav>
+    </section>
+
+    <main class="page">
+      <div class="branch-row">
+        <button class="branch-button" type="button">⑂ &nbsp; mkii &nbsp;⌄</button>
+        <span class="commit-note">Recovery-focused MKII branch</span>
+      </div>
+
+      <section class="readme-card">
+        <div class="readme-toolbar">
+          <span class="book-icon">▤</span>
+          <span>README</span>
+        </div>
+
+        <article class="readme">
+          <section class="brand">
+            <img class="app-icon" src="../app-icon.png" alt="RapidRAW Mark II aperture icon" />
+            <h1>RapidRAW Mark II</h1>
+            <p class="tagline"><strong>Recovery-first RAW editing for difficult captures.</strong></p>
+            <div class="signal-line">RECOVERY&nbsp;&nbsp;/&nbsp;&nbsp;INSPECTION&nbsp;&nbsp;/&nbsp;&nbsp;CONTEXT</div>
+
+            <div class="badges" aria-label="Project badges">
+              <span class="badge"
+                ><span class="badge-label">MKII</span><span class="badge-value">v1.6.0-mkii.5</span></span
+              >
+              <span class="badge"
+                ><span class="badge-label">Windows</span><span class="badge-value">passing</span></span
+              >
+              <span class="badge"
+                ><span class="badge-label">license</span><span class="badge-value">AGPL-3.0</span></span
+              >
+              <span class="badge"
+                ><span class="badge-label">upstream</span><span class="badge-value">RapidRAW</span></span
+              >
+            </div>
+
+            <p class="quick-links">
+              <a href="https://github.com/RustRunner/RapidRAW-MKII/tags">Source milestones</a>
+              <span>·</span>
+              <a href="#mkii-changes">MKII changes</a>
+              <span>·</span>
+              <a href="#build">Build from source</a>
+              <span>·</span>
+              <a href="https://github.com/CyberTimon/RapidRAW">Original RapidRAW</a>
+            </p>
+          </section>
+
+          <figure class="hero">
+            <img src="assets/mkii-opening.png" alt="RapidRAW Mark II welcome screen" />
+            <figcaption>
+              RapidRAW Mark II welcome screen — a focused entry point for continuing a session or opening a new folder.
+            </figcaption>
+          </figure>
+
+          <aside class="important">
+            <div class="important-title"><span>ⓘ</span><span>Important</span></div>
+            <p>
+              <strong>Upstream credit:</strong> RapidRAW Mark II is an independent derivative of
+              <a href="https://github.com/CyberTimon/RapidRAW">RapidRAW</a>, created by
+              <a href="https://github.com/CyberTimon">Timon Käch (CyberTimon)</a>. RapidRAW provides the core editor,
+              GPU pipeline, RAW workflow, library, masking system, and much more. Mark II is maintained separately by
+              <a href="https://github.com/RustRunner">RustRunner</a>, is not an official RapidRAW release, and focuses
+              on the changes documented below.
+            </p>
+          </aside>
+
+          <h2>Operational focus</h2>
+          <p>
+            Mark II concentrates on source material where visibility and context matter: high-ISO or long-exposure
+            frames, motion or focus blur, veiling glare, and exports that need notes or location data attached. It keeps
+            RapidRAW's fast, non-destructive workflow, then adds a compact recovery stack and a quieter,
+            inspection-oriented interface.
+          </p>
+
+          <table class="focus-grid">
+            <tbody>
+              <tr>
+                <td class="focus-copy">
+                  <h3>Built for difficult frames</h3>
+                  <p>
+                    The adjustment panel is organized as a true accordion, keeping the standard photographic controls
+                    familiar while placing specialized recovery tools in a clear sequence.
+                  </p>
+                  <ul>
+                    <li>Measure noise, suppress hot pixels, and clean high-ISO detail.</li>
+                    <li>Recover motion, defocus, or Gaussian blur in the frequency domain.</li>
+                    <li>Estimate and reduce the smooth veil caused by glare or shooting through glass.</li>
+                    <li>Inspect changes with split comparison, then export with contextual callouts.</li>
+                  </ul>
+                  <p>
+                    Processing remains local-first. MKII removes account and hosted AI-provider integration; optional AI
+                    models are supplied by the user and loaded from the local models directory.
+                  </p>
+                </td>
+                <td class="focus-shot">
+                  <img src="assets/mkii-adjustments.png" alt="RapidRAW Mark II recovery adjustment panel" />
+                  <figcaption>The MKII recovery stack.</figcaption>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h2 id="mkii-changes">What Mark II changes</h2>
+          <table class="feature-table">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>MKII-specific direction</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Low-Light Recovery</strong></td>
+                <td>
+                  Live hot-pixel removal and denoising driven by measured image noise, with separate chroma smoothing
+                  and detail preservation.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Blur Recovery</strong></td>
+                <td>
+                  FFT Wiener deconvolution for motion, defocus, and Gaussian blur; includes blur estimation, interactive
+                  direction control, presets, and artifact suppression.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Glare Recovery</strong></td>
+                <td>
+                  Estimates and subtracts smooth veiling glare while limiting local contrast boost; the estimated veil
+                  can be displayed for inspection.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Inspection workflow</strong></td>
+                <td>
+                  A true accordion adjustment panel with Basic open by default, plus split-view comparison for checking
+                  processed detail against the source.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Contextual export</strong></td>
+                <td>
+                  Configurable callout boxes with notes, metadata prefill, optional MGRS coordinates, saved templates,
+                  placement, spacing, and opacity controls.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Output tools</strong></td>
+                <td>One-step 2× Lanczos upscaling that saves a new file beside the original.</td>
+              </tr>
+              <tr>
+                <td><strong>GPU resilience</strong></td>
+                <td>
+                  VRAM-aware recovery, tile-local allocations, scaled fallbacks, tuned export workers for integrated
+                  GPUs, clearer GPU errors, and a Windows backend fallback ladder.
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Local-first surface</strong></td>
+                <td>
+                  Self-hosted fonts, a strict webview content security policy, local user-provided AI models, and
+                  removal of remote account/provider and community-preset code.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h2>Versions and builds</h2>
+          <p>
+            Versioned MKII source milestones are published under
+            <a href="https://github.com/RustRunner/RapidRAW-MKII/tags">Tags</a>. The Windows tag workflow prepares
+            installer artifacts and draft GitHub Releases; published packages will appear on the
+            <a href="https://github.com/RustRunner/RapidRAW-MKII/releases">Releases page</a>. Until a package is
+            published for your platform, build the <code>mkii</code> branch from source.
+          </p>
+          <p>
+            For the mainstream project, its latest features, and its official packages, use the
+            <a href="https://github.com/CyberTimon/RapidRAW/releases">original RapidRAW releases</a>.
+          </p>
+
+          <h2 id="build">Build from source</h2>
+          <p>
+            Install the <a href="https://v2.tauri.app/start/prerequisites/">Tauri 2 prerequisites</a> for your platform,
+            <a href="https://nodejs.org/">Node.js 22</a>, and the
+            <a href="https://www.rust-lang.org/tools/install">stable Rust toolchain</a>.
+          </p>
+          <pre><code><span class="prompt">$</span> git clone --branch mkii --single-branch https://github.com/RustRunner/RapidRAW-MKII.git
+<span class="prompt">$</span> cd RapidRAW-MKII
+<span class="prompt">$</span> npm ci
+<span class="prompt">$</span> npm start</code></pre>
+          <p>Useful development checks:</p>
+          <pre><code><span class="prompt">$</span> npm run typecheck
+<span class="prompt">$</span> npm run lint
+<span class="prompt">$</span> npm run build</code></pre>
+          <p>
+            MKII inherits RapidRAW's Windows, macOS, Linux, and Android architecture. The recovery pipeline is
+            GPU-intensive; a modern WGPU-compatible adapter and 16 GB of system memory are recommended for large RAW
+            files. Integrated GPUs are supported with reduced worker and VRAM budgets, but processing speed varies by
+            image size and adapter.
+          </p>
+
+          <h2>Contributing</h2>
+          <p>
+            Bug reports and focused pull requests are welcome in this repository. Please target the
+            <code>mkii</code> branch and note whether an issue affects an MKII recovery feature or can also be
+            reproduced in upstream RapidRAW. General RapidRAW fixes may be better contributed directly to the
+            <a href="https://github.com/CyberTimon/RapidRAW/issues">upstream issue tracker</a>.
+          </p>
+
+          <h2>Attribution and license</h2>
+          <ul class="credit-list">
+            <li>
+              <strong>Original project:</strong>
+              <a href="https://github.com/CyberTimon/RapidRAW">RapidRAW</a> by
+              <a href="https://github.com/CyberTimon">Timon Käch</a>
+            </li>
+            <li>
+              <strong>Mark II fork and recovery-focused changes:</strong>
+              <a href="https://github.com/RustRunner/RapidRAW-MKII">RustRunner/RapidRAW-MKII</a>
+            </li>
+            <li>
+              <strong>Original acknowledgements:</strong> RapidRAW's Special Thanks section credits the projects and
+              research that underpin the editor.
+            </li>
+          </ul>
+          <p>
+            RapidRAW Mark II remains licensed under the GNU Affero General Public License v3.0. Copyright in the
+            original work and subsequent modifications belongs to the respective contributors.
+          </p>
+        </article>
+      </section>
+
+      <footer class="mockup-footer">
+        Standalone visual mockup · GitHub dark-mode approximation · no repository data is modified by this page
+      </footer>
+    </main>
+  </body>
+</html>
