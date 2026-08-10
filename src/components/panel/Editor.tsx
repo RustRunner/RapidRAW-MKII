@@ -11,6 +11,7 @@ import { Adjustments, AiPatch, MaskContainer } from '../../utils/adjustments';
 import { calculateCenteredCrop, rotateCropCenter } from '../../utils/cropUtils';
 import EditorToolbar from './editor/EditorToolbar';
 import ImageCanvas from './editor/ImageCanvas';
+import ProcessingRing from './editor/overlays/ProcessingRing';
 import { Mask, SubMask } from './right/Masks';
 import { Panel, TransformState, Invokes } from '../ui/AppProperties';
 import Text from '../ui/Text';
@@ -2079,6 +2080,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             hasRenderedFirstFrame={hasRenderedFirstFrame}
           />
         </div>
+
+        <ProcessingRing suppressed={showSpinner} />
       </div>
     </div>
   );
