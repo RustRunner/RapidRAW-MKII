@@ -5,6 +5,7 @@ import { useEditorStore } from '../store/useEditorStore';
 import { useUIStore } from '../store/useUIStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useLibraryStore } from '../store/useLibraryStore';
+import { useRenderStatusStore } from '../store/useRenderStatusStore';
 import { Adjustments, COPYABLE_ADJUSTMENT_KEYS } from '../utils/adjustments';
 import { Invokes, Panel } from '../components/ui/AppProperties';
 import { debouncedSave } from './useEditorActions';
@@ -49,6 +50,10 @@ export function useImageProcessing(
   const selectedImagePathRef = useRef<string | null>(null);
   useEffect(() => {
     selectedImagePathRef.current = selectedImage?.path ?? null;
+  }, [selectedImage?.path]);
+
+  useEffect(() => {
+    useRenderStatusStore.getState().reset();
   }, [selectedImage?.path]);
 
   const geometricAdjustmentsKey = useMemo(() => {
@@ -172,6 +177,10 @@ export function useImageProcessing(
       const jobId = ++previewJobIdRef.current;
       const roi = calculateROI();
 
+      useRenderStatusStore.getState().jobStarted(jobId, dragging);
+      const jobStart = performance.now();
+      let renderOk = false;
+
       try {
         const buffer: ArrayBuffer = await invoke(Invokes.ApplyAdjustments, {
           jsAdjustments: payload,
@@ -181,6 +190,8 @@ export function useImageProcessing(
           computeWaveform: !!isWaveformVisible,
           activeWaveformChannel: activeWaveformChannelRef.current || null,
         });
+
+        renderOk = true;
 
         if (newlySentPatches.size > 0) {
           newlySentPatches.forEach((id) => patchesSentToBackend.add(id));
@@ -266,6 +277,8 @@ export function useImageProcessing(
             return { interactivePatch: null };
           });
         }
+      } finally {
+        useRenderStatusStore.getState().jobSettled(jobId, performance.now() - jobStart, renderOk, dragging);
       }
     },
     [selectedImage?.path, calculateROI, isWaveformVisible, setEditor, previewJobIdRef, latestRenderedJobIdRef],
