@@ -12,6 +12,8 @@ import { calculateCenteredCrop, rotateCropCenter } from '../../utils/cropUtils';
 import EditorToolbar from './editor/EditorToolbar';
 import ImageCanvas from './editor/ImageCanvas';
 import ProcessingRing from './editor/overlays/ProcessingRing';
+import SplitViewLine from './editor/overlays/SplitViewLine';
+import BlurAngleLine from './editor/overlays/BlurAngleLine';
 import { Mask, SubMask } from './right/Masks';
 import { Panel, TransformState, Invokes } from '../ui/AppProperties';
 import Text from '../ui/Text';
@@ -150,6 +152,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const [showExifDateView, setShowExifDateView] = useState(false);
   const [maskOverlayUrl, setMaskOverlayUrl] = useState<string | null>(null);
   const [transformState, setTransformState] = useState<TransformState>({ scale: 1, positionX: 0, positionY: 0 });
+  const [splitViewportPos, setSplitViewportPos] = useState(0.5);
 
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -310,6 +313,13 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const imageRenderSize = useImageRenderSize(imageContainerRef, croppedDimensions);
   const imageRenderSizeRef = useRef(imageRenderSize);
   imageRenderSizeRef.current = imageRenderSize;
+
+  const splitFraction = useMemo(() => {
+    if (!imageRenderSize.width || !imageRenderSize.containerWidth) return 0.5;
+    const lineX = splitViewportPos * imageRenderSize.containerWidth;
+    const contentX = (lineX - transformState.positionX) / transformState.scale;
+    return Math.min(1, Math.max(0, (contentX - imageRenderSize.offsetX) / imageRenderSize.width));
+  }, [splitViewportPos, imageRenderSize, transformState]);
 
   const transformConfig = useMemo(() => {
     if (!selectedImage || !imageRenderSize.scale || !originalSize) {
@@ -2045,8 +2055,6 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             isMaskControlHovered={isMaskControlHovered}
             isMasking={isMasking}
             isStraightenActive={isStraightenActive}
-            isBlurAngleAdjusting={isBlurAngleAdjusting}
-            blurOverlayAngle={blurOverlayAngle}
             isRotationActive={isRotationActive}
             isSliderDragging={isSliderDragging}
             maskOverlayUrl={maskOverlayUrl}
@@ -2065,6 +2073,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             setIsMaskTouchInteracting={setIsMaskTouchInteracting}
             showOriginal={showOriginal}
             splitView={splitView}
+            splitFraction={splitFraction}
             transformedOriginalUrl={transformedOriginalUrl}
             uncroppedAdjustedPreviewUrl={uncroppedAdjustedPreviewUrl}
             updateSubMask={updateSubMaskLocal}
@@ -2080,6 +2089,11 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             hasRenderedFirstFrame={hasRenderedFirstFrame}
           />
         </div>
+
+        {splitView && !!transformedOriginalUrl && imageRenderSize.width > 0 && (
+          <SplitViewLine pos={splitViewportPos} onPosChange={setSplitViewportPos} />
+        )}
+        {isBlurAngleAdjusting && <BlurAngleLine angle={blurOverlayAngle || 0} />}
 
         <ProcessingRing suppressed={showSpinner} />
       </div>

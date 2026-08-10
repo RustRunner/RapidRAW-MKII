@@ -45,8 +45,6 @@ interface ImageCanvasProps {
   isMasking: boolean;
   isSliderDragging: boolean;
   isStraightenActive: boolean;
-  isBlurAngleAdjusting?: boolean;
-  blurOverlayAngle?: number;
   isRotationActive?: boolean;
   maskOverlayUrl: string | null;
   onGenerateAiMask(id: string | null, start: Coord, end: Coord): void;
@@ -64,6 +62,7 @@ interface ImageCanvasProps {
   setIsMaskTouchInteracting(isInteracting: boolean): void;
   showOriginal: boolean;
   splitView: boolean;
+  splitFraction: number;
   transformedOriginalUrl: string | null;
   uncroppedAdjustedPreviewUrl: string | null;
   updateSubMask(id: string | null, subMask: Partial<SubMask>): void;
@@ -1158,8 +1157,6 @@ const ImageCanvas = memo(
     isMasking,
     isSliderDragging,
     isStraightenActive,
-    isBlurAngleAdjusting,
-    blurOverlayAngle,
     isRotationActive,
     maskOverlayUrl,
     onGenerateAiMask,
@@ -1177,6 +1174,7 @@ const ImageCanvas = memo(
     setIsMaskTouchInteracting,
     showOriginal,
     splitView,
+    splitFraction,
     transformedOriginalUrl,
     uncroppedAdjustedPreviewUrl,
     updateSubMask,
@@ -2510,34 +2508,6 @@ const ImageCanvas = memo(
       };
     }, [originalSrc]);
 
-    const [splitPos, setSplitPos] = useState(0.5);
-    const originalImgRef = useRef<HTMLImageElement>(null);
-    const isDraggingSplitRef = useRef(false);
-
-    const handleSplitPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-      e.stopPropagation();
-      e.preventDefault();
-      isDraggingSplitRef.current = true;
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    }, []);
-
-    const handleSplitPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-      if (!isDraggingSplitRef.current) {
-        return;
-      }
-      const rect = originalImgRef.current?.getBoundingClientRect();
-      if (!rect || rect.width <= 0) {
-        return;
-      }
-      e.stopPropagation();
-      setSplitPos(Math.min(0.95, Math.max(0.05, (e.clientX - rect.left) / rect.width)));
-    }, []);
-
-    const handleSplitPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-      isDraggingSplitRef.current = false;
-      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-    }, []);
-
     const currentTarget = finalPreviewUrl || selectedImage.thumbnailUrl;
     const baseIsReady = displayState.base === currentTarget && !displayState.fade;
 
@@ -2746,35 +2716,11 @@ const ImageCanvas = memo(
                     style={{ imageRendering: isMaxZoom ? 'pixelated' : 'auto' }}
                   />
                 )}
-              {isBlurAngleAdjusting && imageRenderSize.width > 0 && (
-                  <g style={{ opacity: 0.9, transition: 'opacity 300ms' }}>
-                    <line
-                      x1={imageRenderSize.width / 2 - Math.cos(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
-                      y1={imageRenderSize.height / 2 - Math.sin(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
-                      x2={imageRenderSize.width / 2 + Math.cos(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
-                      y2={imageRenderSize.height / 2 + Math.sin(((blurOverlayAngle || 0) * Math.PI) / 180) * imageRenderSize.width}
-                      stroke="rgba(255, 255, 255, 0.85)"
-                      strokeWidth={1.5}
-                      strokeDasharray="6 4"
-                      style={{ vectorEffect: 'non-scaling-stroke' }}
-                    />
-                    <circle
-                      cx={imageRenderSize.width / 2}
-                      cy={imageRenderSize.height / 2}
-                      r={4}
-                      fill="none"
-                      stroke="rgba(255, 255, 255, 0.85)"
-                      strokeWidth={1.5}
-                      style={{ vectorEffect: 'non-scaling-stroke' }}
-                    />
-                  </g>
-                )}
                 </svg>
 
               {originalSrc && (
                 <img
                   alt="Original"
-                  ref={originalImgRef}
                   className={
                     imageRenderSize.width > 0 && imageRenderSize.height > 0
                       ? 'pointer-events-none'
@@ -2791,14 +2737,14 @@ const ImageCanvas = memo(
                           height: `${imageRenderSize.height}px`,
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
                           opacity: (isShowingOriginal || isSplitActive) && originalLoaded ? 1 : 0,
-                          clipPath: isSplitActive ? `inset(0 ${(1 - splitPos) * 100}% 0 0)` : undefined,
+                          clipPath: isSplitActive ? `inset(0 ${(1 - splitFraction) * 100}% 0 0)` : undefined,
                           transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
                         }
                       : {
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
                           opacity: (isShowingOriginal || isSplitActive) && originalLoaded ? 1 : 0,
-                          clipPath: isSplitActive ? `inset(0 ${(1 - splitPos) * 100}% 0 0)` : undefined,
+                          clipPath: isSplitActive ? `inset(0 ${(1 - splitFraction) * 100}% 0 0)` : undefined,
                           transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
                         }
@@ -2818,72 +2764,10 @@ const ImageCanvas = memo(
                     transition: 'opacity 300ms ease-in-out',
                     width: `${imageRenderSize.width}px`,
                     imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                    clipPath: isSplitActive ? `inset(0 0 0 ${splitPos * 100}%)` : undefined,
+                    clipPath: isSplitActive ? `inset(0 0 0 ${splitFraction * 100}%)` : undefined,
                     zIndex: 3,
                   }}
                 />
-              )}
-              {isSplitActive && originalLoaded && imageRenderSize.width > 0 && imageRenderSize.height > 0 && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: `${imageRenderSize.offsetX + imageRenderSize.width * splitPos}px`,
-                    top: `${imageRenderSize.offsetY}px`,
-                    height: `${imageRenderSize.height}px`,
-                    width: '0px',
-                    zIndex: 5,
-                  }}
-                >
-                  <div
-                    className="pointer-events-none"
-                    style={{
-                      position: 'absolute',
-                      left: '-1px',
-                      top: 0,
-                      width: '2px',
-                      height: '100%',
-                      background: 'rgba(255, 255, 255, 0.85)',
-                      boxShadow: '0 0 4px rgba(0, 0, 0, 0.6)',
-                    }}
-                  />
-                  <div
-                    onPointerDown={handleSplitPointerDown}
-                    onPointerMove={handleSplitPointerMove}
-                    onPointerUp={handleSplitPointerUp}
-                    onPointerCancel={handleSplitPointerUp}
-                    style={{
-                      position: 'absolute',
-                      left: '-9px',
-                      top: 0,
-                      width: '18px',
-                      height: '100%',
-                      cursor: 'ew-resize',
-                      touchAction: 'none',
-                    }}
-                  />
-                  <div
-                    className="pointer-events-none"
-                    style={{
-                      position: 'absolute',
-                      left: '-12px',
-                      top: 'calc(50% - 12px)',
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '50%',
-                      background: 'rgba(255, 255, 255, 0.9)',
-                      boxShadow: '0 0 4px rgba(0, 0, 0, 0.6)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'rgba(0, 0, 0, 0.75)',
-                      fontSize: '11px',
-                      lineHeight: 1,
-                      userSelect: 'none',
-                    }}
-                  >
-                    {'◀▶'}
-                  </div>
-                </div>
               )}
             </div>
 
