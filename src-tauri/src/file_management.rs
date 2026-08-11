@@ -2584,6 +2584,11 @@ pub async fn apply_adjustments_to_paths(
                 new_adjustments = serde_json::json!({});
             }
 
+            // A stored legacy rapidEnabled must not survive the merge: an
+            // explicit false would veto freshly pasted blur values in
+            // thumbnails and exports, and the next open would zero them.
+            crate::rapid_processing::migrate_legacy_rapid_keys(&mut new_adjustments);
+
             if let (Some(new_map), Some(pasted_map)) =
                 (new_adjustments.as_object_mut(), adjustments.as_object())
             {

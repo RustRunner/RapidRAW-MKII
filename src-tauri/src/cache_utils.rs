@@ -142,9 +142,9 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
         }
     }
 
-    let rapid_enabled = adjustments["rapidEnabled"].as_bool().unwrap_or(false);
-    rapid_enabled.hash(&mut hasher);
-    if rapid_enabled {
+    let rapid_active = crate::rapid_processing::is_rapid_active(adjustments);
+    rapid_active.hash(&mut hasher);
+    if rapid_active {
         for key in [
             "rapidBlurType",
             "rapidLength",
@@ -314,5 +314,42 @@ pub fn clear_session_caches(state: tauri::State<AppState>) {
     }
     if let Ok(mut geometry_cache) = state.geometry_cache.lock() {
         geometry_cache.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The transform hash tracks blur-recovery activity, not the raw flag:
+    /// inactive slider state must not bust the full-res cache, while active
+    /// parameter changes must, and a legacy explicit-false sidecar hashes
+    /// like one with no rapid keys at all.
+    #[test]
+    fn test_transform_hash_tracks_rapid_activity() {
+        let clean = serde_json::json!({});
+        let inactive_a = serde_json::json!({ "rapidLength": 0.0, "rapidLambda": 0.02 });
+        let inactive_b = serde_json::json!({ "rapidLength": 0.0, "rapidLambda": 0.05 });
+        assert_eq!(
+            calculate_transform_hash(&inactive_a),
+            calculate_transform_hash(&inactive_b)
+        );
+
+        let legacy_off = serde_json::json!({ "rapidEnabled": false, "rapidLength": 50.0 });
+        assert_eq!(
+            calculate_transform_hash(&legacy_off),
+            calculate_transform_hash(&clean)
+        );
+
+        let active_a = serde_json::json!({ "rapidLength": 50.0, "rapidLambda": 0.02 });
+        let active_b = serde_json::json!({ "rapidLength": 50.0, "rapidLambda": 0.05 });
+        assert_ne!(
+            calculate_transform_hash(&active_a),
+            calculate_transform_hash(&clean)
+        );
+        assert_ne!(
+            calculate_transform_hash(&active_a),
+            calculate_transform_hash(&active_b)
+        );
     }
 }

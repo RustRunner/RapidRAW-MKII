@@ -117,36 +117,6 @@ impl Default for RapidParams {
 }
 
 impl RapidParams {
-    /// Create RapidParams from adjustment values (from frontend)
-    pub fn from_adjustments(
-        enabled: bool,
-        blur_type: u32,
-        motion_length: f32,
-        motion_angle: f32,
-        defocus_radius: f32,
-        gaussian_sigma: f32,
-        lambda: f32,
-        strength: f32,
-        noise_floor: f32,
-        adaptive: bool,
-    ) -> Self {
-        Self {
-            enabled,
-            blur_type: BlurType::from(blur_type),
-            motion_length,
-            motion_angle,
-            defocus_radius,
-            gaussian_sigma,
-            lambda,
-            strength: strength / 100.0, // Convert 0-100 to 0-1
-            edge_taper: true,
-            noise_floor,
-            adaptive,
-            hardness: 0.0,
-            clip_guard: false,
-        }
-    }
-
     /// Rescale the spatial kernel parameters for a working image that has been
     /// downscaled by `scale`. Lambda and strength describe frequency-domain
     /// behavior and blending, not pixel extents, so they stay unchanged. The
@@ -2556,26 +2526,55 @@ fn build_rapid_gpu() -> Option<RapidGpu> {
 }
 
 /// Parses blur-recovery params from the frontend adjustment JSON.
-/// Returns None when the feature is off or its section is hidden.
+/// Returns None when the stage would not run: the active mode's kernel
+/// parameter and the strength must both be positive — there is no enable
+/// flag anymore. An explicit legacy `rapidEnabled: false` is still honored
+/// (the "original"/before preview override injects it, and pre-revamp
+/// sidecars saved with the toggle off carry it), and an explicit true
+/// restores the old kernel defaults for keys the sidecar never stored, so
+/// legacy images render exactly as they always did.
 pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams> {
-    if !adjustments["rapidEnabled"].as_bool().unwrap_or(false) {
+    let legacy_enabled = adjustments["rapidEnabled"].as_bool();
+    if legacy_enabled == Some(false) {
         return None;
     }
+    let legacy_on = legacy_enabled == Some(true);
     let blur_type = match adjustments["rapidBlurType"].as_str().unwrap_or("motion") {
         "defocus" => BlurType::Defocus,
         "gaussian" => BlurType::Gaussian,
         _ => BlurType::Motion,
     };
+    let motion_length = adjustments["rapidLength"]
+        .as_f64()
+        .unwrap_or(if legacy_on { 10.0 } else { 0.0 }) as f32;
+    let defocus_radius = adjustments["rapidRadius"]
+        .as_f64()
+        .unwrap_or(if legacy_on { 5.0 } else { 0.0 }) as f32;
+    let gaussian_sigma = adjustments["rapidSigma"]
+        .as_f64()
+        .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32;
+    let strength = (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
+        .clamp(0.0, 1.0);
+    // All-zero parameters are not an inert pass (the FFT round trip
+    // quantizes and gain-shifts the frame, and scaled() floors kernels),
+    // so inactivity must skip the stage entirely.
+    let active_kernel = match blur_type {
+        BlurType::Motion => motion_length,
+        BlurType::Defocus => defocus_radius,
+        BlurType::Gaussian => gaussian_sigma,
+    };
+    if active_kernel <= 0.0 || strength <= 0.0 {
+        return None;
+    }
     Some(RapidParams {
         enabled: true,
         blur_type,
-        motion_length: adjustments["rapidLength"].as_f64().unwrap_or(10.0) as f32,
+        motion_length,
         motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
-        defocus_radius: adjustments["rapidRadius"].as_f64().unwrap_or(5.0) as f32,
-        gaussian_sigma: adjustments["rapidSigma"].as_f64().unwrap_or(2.0) as f32,
+        defocus_radius,
+        gaussian_sigma,
         lambda: adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32,
-        strength: (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
-            .clamp(0.0, 1.0),
+        strength,
         // Always on in production since the toggle was demoted; stale
         // rapidAdaptive keys in old sidecars are ignored.
         adaptive: true,
@@ -2600,6 +2599,40 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
 /// True when blur recovery would actually run for these adjustments.
 pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
     parse_rapid_params(adjustments).is_some()
+}
+
+/// Migrates pre-revamp rapid keys in a raw adjustments object, in place.
+/// An explicit `rapidEnabled: false` zeroes the three kernel parameters
+/// (the stage was off; stored kernel values are abandoned state), an
+/// explicit true pins the old kernel defaults into keys the sidecar never
+/// stored (so the render survives the flag's removal), and the flag itself
+/// is always removed. Twin of `migrateLegacyRapidKeys` in
+/// src/utils/adjustments.ts — change both or neither. Used where the
+/// backend merges partial adjustments into raw sidecar JSON (batch paste);
+/// render paths instead keep honoring the flag via `parse_rapid_params`.
+pub fn migrate_legacy_rapid_keys(adjustments: &mut serde_json::Value) {
+    let legacy_enabled = adjustments["rapidEnabled"].as_bool();
+    let Some(obj) = adjustments.as_object_mut() else {
+        return;
+    };
+    match legacy_enabled {
+        Some(false) => {
+            for key in ["rapidLength", "rapidRadius", "rapidSigma"] {
+                obj.insert(key.to_string(), serde_json::json!(0.0));
+            }
+        }
+        Some(true) => {
+            for (key, default) in [
+                ("rapidLength", 10.0),
+                ("rapidRadius", 5.0),
+                ("rapidSigma", 2.0),
+            ] {
+                obj.entry(key).or_insert_with(|| serde_json::json!(default));
+            }
+        }
+        None => {}
+    }
+    obj.remove("rapidEnabled");
 }
 
 /// Full-image FFT deconvolution pre-pass. Runs before geometry transforms so
@@ -4651,6 +4684,118 @@ mod tests {
             "motion must keep the parsed hardness, got {}",
             params.hardness
         );
+    }
+
+    /// The before-view override and pre-revamp sidecars saved with the
+    /// toggle off both carry an explicit rapidEnabled: false — it must
+    /// keep vetoing the stage even with live kernel values present.
+    #[test]
+    fn test_parse_gate_explicit_false_wins() {
+        let adjustments = serde_json::json!({
+            "rapidEnabled": false,
+            "rapidBlurType": "motion",
+            "rapidLength": 50.0,
+            "rapidStrength": 100.0,
+        });
+        assert!(parse_rapid_params(&adjustments).is_none());
+    }
+
+    /// Without the legacy flag the stage is gated on the active mode's own
+    /// kernel: the other modes' stored values must not activate it.
+    #[test]
+    fn test_parse_gate_active_mode_kernel() {
+        let mk = |blur_type: &str, length: f64, radius: f64, sigma: f64| {
+            serde_json::json!({
+                "rapidBlurType": blur_type,
+                "rapidLength": length,
+                "rapidRadius": radius,
+                "rapidSigma": sigma,
+                "rapidStrength": 100.0,
+            })
+        };
+        assert!(parse_rapid_params(&mk("motion", 0.0, 5.0, 2.0)).is_none());
+        assert!(parse_rapid_params(&mk("motion", 50.0, 0.0, 0.0)).is_some());
+        assert!(parse_rapid_params(&mk("defocus", 50.0, 0.0, 2.0)).is_none());
+        assert!(parse_rapid_params(&mk("defocus", 0.0, 8.0, 0.0)).is_some());
+        assert!(parse_rapid_params(&mk("gaussian", 50.0, 8.0, 0.0)).is_none());
+        assert!(parse_rapid_params(&mk("gaussian", 0.0, 0.0, 2.5)).is_some());
+    }
+
+    #[test]
+    fn test_parse_gate_zero_strength() {
+        let adjustments = serde_json::json!({
+            "rapidBlurType": "motion",
+            "rapidLength": 50.0,
+            "rapidStrength": 0.0,
+        });
+        assert!(parse_rapid_params(&adjustments).is_none());
+    }
+
+    /// A legacy sidecar can be as sparse as {"rapidEnabled": true}: the old
+    /// kernel defaults must come back so the image renders as it always did.
+    #[test]
+    fn test_parse_legacy_enabled_defaults() {
+        let adjustments = serde_json::json!({ "rapidEnabled": true });
+        let params =
+            parse_rapid_params(&adjustments).expect("legacy-enabled sidecar must stay active");
+        assert_eq!(params.blur_type, BlurType::Motion);
+        assert!((params.motion_length - 10.0).abs() < 1e-6);
+        assert!((params.defocus_radius - 5.0).abs() < 1e-6);
+        assert!((params.gaussian_sigma - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_migrate_legacy_rapid_keys() {
+        // Explicit false: kernels zeroed, flag removed, other keys intact.
+        let mut off = serde_json::json!({
+            "rapidEnabled": false, "rapidLength": 50.0, "exposure": 1.0,
+        });
+        migrate_legacy_rapid_keys(&mut off);
+        assert!(off.get("rapidEnabled").is_none());
+        assert_eq!(off["rapidLength"], serde_json::json!(0.0));
+        assert_eq!(off["rapidRadius"], serde_json::json!(0.0));
+        assert_eq!(off["rapidSigma"], serde_json::json!(0.0));
+        assert_eq!(off["exposure"], serde_json::json!(1.0));
+
+        // Explicit true: absent kernels filled with the old defaults,
+        // present values kept verbatim.
+        let mut on = serde_json::json!({ "rapidEnabled": true, "rapidLength": 120.0 });
+        migrate_legacy_rapid_keys(&mut on);
+        assert!(on.get("rapidEnabled").is_none());
+        assert_eq!(on["rapidLength"], serde_json::json!(120.0));
+        assert_eq!(on["rapidRadius"], serde_json::json!(5.0));
+        assert_eq!(on["rapidSigma"], serde_json::json!(2.0));
+
+        // No flag: the object is untouched.
+        let mut modern = serde_json::json!({ "rapidLength": 80.0 });
+        let before = modern.clone();
+        migrate_legacy_rapid_keys(&mut modern);
+        assert_eq!(modern, before);
+    }
+
+    /// Batch paste onto an unopened legacy-disabled sidecar: after the
+    /// write-path migration + merge, the pasted recovery must be active and
+    /// the legacy flag gone — it would otherwise veto the paste in
+    /// thumbnails/exports and zero it on the next open.
+    #[test]
+    fn test_paste_merge_activates_legacy_disabled_target() {
+        let mut sidecar = serde_json::json!({
+            "rapidEnabled": false,
+            "rapidLength": 50.0,
+        });
+        let pasted = serde_json::json!({
+            "rapidBlurType": "motion",
+            "rapidLength": 80.0,
+            "rapidStrength": 100.0,
+        });
+        migrate_legacy_rapid_keys(&mut sidecar);
+        let target = sidecar.as_object_mut().unwrap();
+        for (k, v) in pasted.as_object().unwrap() {
+            target.insert(k.clone(), v.clone());
+        }
+        assert!(sidecar.get("rapidEnabled").is_none());
+        let params = parse_rapid_params(&sidecar).expect("pasted recovery must be active");
+        assert!((params.motion_length - 80.0).abs() < 1e-6);
     }
 
     #[test]
