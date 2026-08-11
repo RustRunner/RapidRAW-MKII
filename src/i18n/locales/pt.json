@@ -342,7 +342,8 @@
       },
       "lowlight": {
         "chroma": "Suavização de croma",
-        "denoise": "Redução de ruído",
+        "denoise": "Redução de ruído adaptativa",
+        "denoiseDescription": "Redução de ruído medida e que preserva bordas: Estimar mede o ruído desta imagem e define as intensidades. Avalie o resultado com zoom de 100% - a pré-visualização ajustada oculta o grão fino.",
         "description": "Ferramentas de recuperação para fotos com ISO alto e longa exposição. A remoção de hot pixels e a redução de ruído têm pré-visualização ao vivo.",
         "detail": "Preservação de detalhes",
         "estimate": "Estimar ruído",

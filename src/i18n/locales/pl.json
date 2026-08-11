@@ -358,7 +358,8 @@
       },
       "lowlight": {
         "chroma": "Wygładzanie chrominancji",
-        "denoise": "Odszumianie",
+        "denoise": "Adaptacyjne odszumianie",
+        "denoiseDescription": "Pomiarowe, chroniące krawędzie odszumianie: Szacuj mierzy szum tego zdjęcia i ustawia siły. Oceniaj wynik przy powiększeniu 100% - dopasowany podgląd ukrywa drobne ziarno.",
         "description": "Narzędzia ratunkowe dla zdjęć z wysokim ISO i długim czasem naświetlania. Usuwanie gorących pikseli i odszumianie działają na żywo.",
         "detail": "Zachowanie detali",
         "estimate": "Oszacuj szum",

@@ -121,6 +121,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
         </div>
         {adjustments.denoiseEnabled && (
           <div className="space-y-2 pt-2 border-t border-bg-secondary">
+            <p className="text-xs text-text-secondary">{t('editor.adjustments.lowlight.denoiseDescription')}</p>
             <button
               className={`w-full py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
                 isEstimating

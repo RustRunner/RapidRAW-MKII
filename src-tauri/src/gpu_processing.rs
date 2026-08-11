@@ -2550,6 +2550,110 @@ mod tests {
         );
     }
 
+    /// The adaptive denoiser must deliver real noise reduction through the
+    /// full pipeline: on an iid-noise flat field (sigma ~7 luma / ~11
+    /// chroma in 8-bit units), full settings measured 5x luma and 8.5x
+    /// chroma std reduction at introduction — the ceilings below hold half
+    /// that margin. Detail preservation trades reduction for edge
+    /// protection by design (Detail 100 keeps roughly two thirds of the
+    /// noise), so only the Detail 50 posture is gated.
+    #[test]
+    fn test_gpu_denoise_reduces_noise() {
+        let Some(context) = test_gpu_context("denoise reduction test device") else {
+            return;
+        };
+        const SIZE: u32 = 512;
+        let hash2 = |x: u32, y: u32, salt: u32| -> u32 {
+            let mut h = x.wrapping_mul(0x27D4_EB2F)
+                ^ y.wrapping_mul(0x1656_67B1)
+                ^ salt.wrapping_mul(0x9E37_79B9);
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7FEB_352D);
+            h ^= h >> 15;
+            h
+        };
+        // Mid-gray flat halves with iid per-channel noise (uniform +/-16
+        // levels, sigma ~9.2) - a high-ISO-like field in the sRGB path -
+        // separated by a step edge.
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(SIZE, SIZE, |x, y| {
+            let base: i32 = if x < SIZE / 2 { 110 } else { 170 };
+            let n = |salt: u32| ((hash2(x, y, salt) & 0x1F) as i32) - 16;
+            let c = |v: i32| v.clamp(0, 255) as u8;
+            image::Rgba([c(base + n(1)), c(base + n(2)), c(base + n(3)), 255])
+        }));
+        let processor =
+            super::GpuProcessor::new(context.clone(), SIZE, SIZE).expect("GpuProcessor::new");
+        let input_view = upload_rgba16f(&context, &img);
+        let render = |js: serde_json::Value| -> image::RgbaImage {
+            let adjustments = crate::image_processing::get_all_adjustments_from_json(&js, false, None);
+            let request = super::RenderRequest {
+                adjustments,
+                mask_bitmaps: &[],
+                lut: None,
+                roi: None,
+            };
+            let (pixels, ow, oh, _, _) = processor
+                .run(&input_view, SIZE, SIZE, request, false, false, None)
+                .expect("processor.run");
+            image::RgbaImage::from_raw(ow, oh, pixels).expect("output buffer")
+        };
+        let stats = |im: &image::RgbaImage| -> (f64, f64) {
+            let (mut sy, mut sy2, mut sc, mut sc2, mut n) = (0f64, 0f64, 0f64, 0f64, 0f64);
+            for y in 8..SIZE - 8 {
+                for x in 8..SIZE / 2 - 8 {
+                    let p = im.get_pixel(x, y);
+                    let l = 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
+                    let cb = p[2] as f64 - l;
+                    sy += l;
+                    sy2 += l * l;
+                    sc += cb;
+                    sc2 += cb * cb;
+                    n += 1.0;
+                }
+            }
+            (
+                ((sy2 / n) - (sy / n).powi(2)).max(0.0).sqrt(),
+                ((sc2 / n) - (sc / n).powi(2)).max(0.0).sqrt(),
+            )
+        };
+        let (base_luma, base_chroma) = stats(&render(serde_json::json!({})));
+        assert!(
+            base_luma > 4.0 && base_chroma > 7.0,
+            "noise fixture lost its noise (luma {base_luma:.2}, chroma {base_chroma:.2}) — the gates below are vacuous"
+        );
+
+        let (full_luma, full_chroma) = stats(&render(serde_json::json!({
+            "denoiseEnabled": true,
+            "denoiseStrength": 100.0,
+            "denoiseDetail": 50.0,
+            "denoiseChroma": 100.0,
+        })));
+        eprintln!(
+            "denoise full settings: luma {base_luma:.2} -> {full_luma:.2}, chroma {base_chroma:.2} -> {full_chroma:.2}"
+        );
+        assert!(
+            full_luma < 0.4 * base_luma,
+            "luma denoising too weak: {base_luma:.2} -> {full_luma:.2} (need at least 2.5x)"
+        );
+        assert!(
+            full_chroma < 0.25 * base_chroma,
+            "chroma denoising too weak: {base_chroma:.2} -> {full_chroma:.2} (need at least 4x)"
+        );
+
+        // A moderate, Estimate-typical posture must still visibly reduce
+        // noise — the slider's lower half must not collapse to a no-op.
+        let (mid_luma, _) = stats(&render(serde_json::json!({
+            "denoiseEnabled": true,
+            "denoiseStrength": 60.0,
+            "denoiseDetail": 50.0,
+            "denoiseChroma": 40.0,
+        })));
+        assert!(
+            mid_luma < 0.7 * base_luma,
+            "strength 60 barely acted: {base_luma:.2} -> {mid_luma:.2}"
+        );
+    }
+
     /// mask_count > 0 with an empty bitmap slice (the shape LUT export and
     /// swatch rendering produce) makes the shader read the 1×1×2 dummy mask
     /// array; its zero content must yield zero influence, leaving the output

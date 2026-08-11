@@ -342,7 +342,8 @@
       },
       "lowlight": {
         "chroma": "Suavizado de croma",
-        "denoise": "Reducción de ruido",
+        "denoise": "Reducción de ruido adaptativa",
+        "denoiseDescription": "Reducción de ruido medida y que preserva bordes: Estimar mide el ruido de esta imagen y ajusta las intensidades. Evalúa el resultado al 100 % de zoom: la vista ajustada oculta el grano fino.",
         "description": "Herramientas de recuperación para tomas con ISO alto y larga exposición. La eliminación de píxeles calientes y la reducción de ruido se previsualizan en vivo.",
         "detail": "Preservación de detalle",
         "estimate": "Estimar ruido",

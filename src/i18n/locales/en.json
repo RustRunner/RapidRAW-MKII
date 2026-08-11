@@ -326,7 +326,8 @@
       },
       "lowlight": {
         "chroma": "Chroma Smoothing",
-        "denoise": "Denoise",
+        "denoise": "Adaptive Denoise",
+        "denoiseDescription": "Edge-aware denoising tuned to this image's measured noise: Estimate reads the noise floor and sets the strengths. Judge results at 100% zoom - a fit-to-screen preview hides fine grain.",
         "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal and denoising preview live.",
         "detail": "Detail Preservation",
         "estimate": "Estimate noise",

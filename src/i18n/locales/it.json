@@ -342,7 +342,8 @@
       },
       "lowlight": {
         "chroma": "Levigatura della crominanza",
-        "denoise": "Riduzione rumore",
+        "denoise": "Riduzione rumore adattiva",
+        "denoiseDescription": "Riduzione del rumore misurata e rispettosa dei bordi: Stima misura il rumore di questa immagine e imposta le intensità. Valuta il risultato allo zoom 100% - l'anteprima adattata nasconde la grana fine.",
         "description": "Strumenti di recupero per scatti ad alto ISO e lunga esposizione. Rimozione hot pixel e riduzione del rumore in anteprima dal vivo.",
         "detail": "Conservazione dei dettagli",
         "estimate": "Stima il rumore",

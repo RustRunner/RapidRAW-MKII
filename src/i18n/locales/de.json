@@ -326,7 +326,8 @@
       },
       "lowlight": {
         "chroma": "Farbrausch-Glättung",
-        "denoise": "Entrauschen",
+        "denoise": "Adaptives Entrauschen",
+        "denoiseDescription": "Messbasiertes, kantenschonendes Entrauschen: Schätzen misst das Rauschen dieses Bildes und setzt die Stärken. Ergebnis bei 100 % Zoom beurteilen - die verkleinerte Vorschau verbirgt feines Korn.",
         "description": "Werkzeuge für High-ISO- und Langzeitaufnahmen. Hot-Pixel-Entfernung und Entrauschen als Live-Vorschau.",
         "detail": "Detailerhalt",
         "estimate": "Rauschen messen",

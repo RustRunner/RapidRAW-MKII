@@ -342,7 +342,8 @@
       },
       "lowlight": {
         "chroma": "Lissage de la chrominance",
-        "denoise": "Débruitage",
+        "denoise": "Débruitage adaptatif",
+        "denoiseDescription": "Débruitage mesuré préservant les contours : Estimer mesure le bruit de cette image et règle les intensités. Jugez le résultat au zoom 100 % - l'aperçu ajusté masque le grain fin.",
         "description": "Outils de récupération pour les prises à haut ISO et longue exposition. La correction des pixels chauds et le débruitage s'affichent en direct.",
         "detail": "Préservation des détails",
         "estimate": "Estimer le bruit",
