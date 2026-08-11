@@ -420,32 +420,40 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
             </>
           )}
 
-          <Slider
-            label={t('editor.adjustments.blurRecovery.lambda')}
-            max={100}
-            min={0}
-            defaultValue={50}
-            onChange={(e: any) => {
-              const s = parseFloat(e.target.value);
-              setAdjustments((prev: Adjustments) => ({
-                ...prev,
-                [BlurRecoveryAdjustment.RapidLambda]: suppressionToLambda(s),
-              }));
-            }}
-            step={1}
-            value={Math.round(lambdaToSuppression(adjustments.rapidLambda))}
-            onDragStateChange={onDragStateChange}
-          />
-          <Slider
-            label={t('editor.adjustments.blurRecovery.strength')}
-            max={100}
-            min={0}
-            defaultValue={50}
-            onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidStrength, e)}
-            step={1}
-            value={adjustments.rapidStrength}
-            onDragStateChange={onDragStateChange}
-          />
+          {/* The shared inversion controls (Artifact suppression, Strength)
+              follow the displayed tab's switch: a tab with its mode off
+              shows nothing below the Enable row. They still govern the
+              whole compound set - values persist across tabs. */}
+          {adjustments[MODE_TOGGLE_KEYS[displayedMode]] && (
+            <>
+              <Slider
+                label={t('editor.adjustments.blurRecovery.lambda')}
+                max={100}
+                min={0}
+                defaultValue={50}
+                onChange={(e: any) => {
+                  const s = parseFloat(e.target.value);
+                  setAdjustments((prev: Adjustments) => ({
+                    ...prev,
+                    [BlurRecoveryAdjustment.RapidLambda]: suppressionToLambda(s),
+                  }));
+                }}
+                step={1}
+                value={Math.round(lambdaToSuppression(adjustments.rapidLambda))}
+                onDragStateChange={onDragStateChange}
+              />
+              <Slider
+                label={t('editor.adjustments.blurRecovery.strength')}
+                max={100}
+                min={0}
+                defaultValue={50}
+                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidStrength, e)}
+                step={1}
+                value={adjustments.rapidStrength}
+                onDragStateChange={onDragStateChange}
+              />
+            </>
+          )}
         </div>
       </div>
     </div>
