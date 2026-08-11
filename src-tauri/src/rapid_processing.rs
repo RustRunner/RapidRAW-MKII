@@ -50,13 +50,46 @@ impl From<u32> for BlurType {
     }
 }
 
+/// The set of blur models composing the active PSF. Blurs that occur
+/// together convolve in image space, so their transfer functions multiply in
+/// the frequency domain: any subset of models forms ONE compound kernel
+/// inverted by a single Wiener pass — never a sequence of deconvolutions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModeSet {
+    pub motion: bool,
+    pub defocus: bool,
+    pub gaussian: bool,
+}
+
+impl ModeSet {
+    pub const MOTION: Self = Self { motion: true, defocus: false, gaussian: false };
+    pub const DEFOCUS: Self = Self { motion: false, defocus: true, gaussian: false };
+    pub const GAUSSIAN: Self = Self { motion: false, defocus: false, gaussian: true };
+
+    pub fn any(self) -> bool {
+        self.motion || self.defocus || self.gaussian
+    }
+
+    /// Uniform encoding for psf_generate.wgsl: bit0 = motion, bit1 =
+    /// defocus, bit2 = gaussian.
+    pub fn bits(self) -> u32 {
+        (self.motion as u32) | ((self.defocus as u32) << 1) | ((self.gaussian as u32) << 2)
+    }
+}
+
+impl Default for ModeSet {
+    fn default() -> Self {
+        Self::MOTION
+    }
+}
+
 /// Parameters for RAPID deconvolution
 #[derive(Debug, Clone, Copy)]
 pub struct RapidParams {
     /// Enable RAPID processing
     pub enabled: bool,
-    /// Type of blur to deconvolve
-    pub blur_type: BlurType,
+    /// Set of blur models composing the compound PSF (OTFs multiply)
+    pub modes: ModeSet,
     /// Motion blur length in pixels
     pub motion_length: f32,
     /// Motion blur angle in degrees
@@ -100,7 +133,7 @@ impl Default for RapidParams {
     fn default() -> Self {
         Self {
             enabled: false,
-            blur_type: BlurType::Motion,
+            modes: ModeSet::MOTION,
             motion_length: 10.0,
             motion_angle: 0.0,
             defocus_radius: 5.0,
@@ -160,27 +193,34 @@ const LUMA_COEFF: [f32; 3] = [0.2126, 0.7152, 0.0722];
 //     the Wiener inverse amplifies, so the seam deconvolves to a soft step
 //     instead of ringing.
 
-/// Spatial extent of the active PSF in pixels: how far the circular wrap can
-/// smear content across the frame boundary.
+/// Spatial extent of the active compound PSF in pixels: how far the circular
+/// wrap can smear content across the frame boundary. The compound PSF is the
+/// convolution of its member PSFs, and convolution supports add, so member
+/// extents sum.
 fn kernel_extent(params: &RapidParams) -> usize {
-    let extent = match params.blur_type {
-        BlurType::Motion => params.motion_length,
-        BlurType::Defocus => 2.0 * params.defocus_radius,
-        BlurType::Gaussian => 6.0 * params.gaussian_sigma,
-    };
+    let mut extent = 0.0f32;
+    if params.modes.motion {
+        extent += params.motion_length;
+    }
+    if params.modes.defocus {
+        extent += 2.0 * params.defocus_radius;
+    }
+    if params.modes.gaussian {
+        extent += 6.0 * params.gaussian_sigma;
+    }
     (extent.ceil() as usize).max(1)
 }
 
-/// Projection of the active PSF onto one axis (0 = x, 1 = y), normalized to
-/// sum 1; `[1.0]` when the projection is sub-pixel (identity).
-fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
-    // Weighted components (weight, half-extent, unnormalized density at
-    // signed distance t from center). These must match the spectra the
-    // Wiener filter divides by (psf_generate.wgsl), not an idealized blur
-    // model — and the motion OTF is a hardness blend of two spectra, whose
-    // projection is the same blend of the two projections.
-    type Density = Box<dyn Fn(f32) -> f32>;
-    let components: Vec<(f32, f32, Density)> = match params.blur_type {
+/// Unnormalized density components of ONE blur model's projection onto an
+/// axis: (weight, half-extent, density at signed distance t from center).
+/// These must match the spectra the Wiener filter divides by
+/// (psf_generate.wgsl), not an idealized blur model — and the motion OTF is
+/// a hardness blend of two spectra, whose projection is the same blend of
+/// the two projections (a MIXTURE, not a convolution: mix() of spectra is
+/// linear, so it is a mixture of PSFs).
+type Density = Box<dyn Fn(f32) -> f32>;
+fn mode_axis_components(params: &RapidParams, mode: BlurType, axis: usize) -> Vec<(f32, f32, Density)> {
+    match mode {
         BlurType::Motion => {
             // Soft arm: the zero-free Gaussian envelope with sigma_freq = 1/L
             // (motion_blur_spectrum), i.e. spatially a Gaussian of
@@ -216,8 +256,12 @@ fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
             let s = params.gaussian_sigma.clamp(1e-3, 8.0);
             vec![(1.0, 3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s)).exp()) as Density)]
         }
-    };
+    }
+}
 
+/// Integrates weighted density components into a normalized tap vector;
+/// `[1.0]` when the projection is sub-pixel (identity).
+fn integrate_axis_components(components: Vec<(f32, f32, Density)>) -> Vec<f32> {
     let radius = components
         .iter()
         .filter(|(weight, _, _)| *weight > 0.0)
@@ -258,6 +302,51 @@ fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
         *w /= sum;
     }
     kernel
+}
+
+/// Full discrete convolution of two unit-mass tap vectors, renormalized to
+/// absorb float rounding (support = a + b - 1).
+fn convolve_taps(a: &[f32], b: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0f32; a.len() + b.len() - 1];
+    for (i, &av) in a.iter().enumerate() {
+        for (j, &bv) in b.iter().enumerate() {
+            out[i + j] += av * bv;
+        }
+    }
+    let sum: f32 = out.iter().sum();
+    if sum > f32::EPSILON {
+        for w in &mut out {
+            *w /= sum;
+        }
+    }
+    out
+}
+
+/// Projection of the active compound PSF onto one axis (0 = x, 1 = y),
+/// normalized to sum 1; `[1.0]` when the projection is sub-pixel (identity).
+/// The compound PSF is the convolution of its member PSFs, and the
+/// projection of a convolution is the convolution of the projections — so
+/// member vectors convolve here, while each member's hardness-blend arms
+/// stay a mixture INSIDE its own vector (see `mode_axis_components`). A
+/// single-member set takes the integration path untouched, bit-identical to
+/// the pre-compound implementation.
+fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
+    let mut projection: Option<Vec<f32>> = None;
+    for (active, mode) in [
+        (params.modes.motion, BlurType::Motion),
+        (params.modes.defocus, BlurType::Defocus),
+        (params.modes.gaussian, BlurType::Gaussian),
+    ] {
+        if !active {
+            continue;
+        }
+        let taps = integrate_axis_components(mode_axis_components(params, mode, axis));
+        projection = Some(match projection {
+            None => taps,
+            Some(acc) => convolve_taps(&acc, &taps),
+        });
+    }
+    projection.unwrap_or_else(|| vec![1.0])
 }
 
 /// PSF-consistent border taper along one axis: cross-fade each border strip
@@ -558,7 +647,7 @@ struct BitRevParams {
 struct PSFParams {
     width: u32,
     height: u32,
-    blur_type: u32,
+    active_modes: u32,
     motion_length: f32,
     motion_angle: f32,
     defocus_radius: f32,
@@ -1799,7 +1888,7 @@ impl RapidDeconvolver {
         let psf_params = PSFParams {
             width,
             height,
-            blur_type: params.blur_type as u32,
+            active_modes: params.modes.bits(),
             motion_length: params.motion_length,
             motion_angle: params.motion_angle,
             defocus_radius: params.defocus_radius,
@@ -2087,7 +2176,7 @@ impl RapidDeconvolver {
         // For now, just log that we would process
         log::info!(
             "RAPID: Would deconvolve {:?} blur (length={}, angle={}, radius={}, sigma={})",
-            params.blur_type,
+            params.modes,
             params.motion_length,
             params.motion_angle,
             params.defocus_radius,
@@ -2126,7 +2215,7 @@ impl RapidDeconvolver {
         log::info!(
             "RAPID deconvolve_image: {}x{} image, {:?} blur (L={:.1}, A={:.1}°, R={:.1}, σ={:.1}), λ={:.4}, strength={:.1}%",
             width, height,
-            params.blur_type,
+            params.modes,
             params.motion_length,
             params.motion_angle,
             params.defocus_radius,
@@ -2568,7 +2657,11 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
     }
     Some(RapidParams {
         enabled: true,
-        blur_type,
+        modes: match blur_type {
+            BlurType::Motion => ModeSet::MOTION,
+            BlurType::Defocus => ModeSet::DEFOCUS,
+            BlurType::Gaussian => ModeSet::GAUSSIAN,
+        },
         motion_length,
         motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
         defocus_radius,
@@ -3828,7 +3921,7 @@ mod tests {
     fn test_rapid_params_default() {
         let params = RapidParams::default();
         assert!(!params.enabled);
-        assert_eq!(params.blur_type, BlurType::Motion);
+        assert_eq!(params.modes, ModeSet::MOTION);
         assert!((params.lambda - 0.01).abs() < 0.001);
         assert!((params.strength - 1.0).abs() < 0.001);
     }
@@ -4095,7 +4188,7 @@ mod tests {
 
         let params = RapidParams {
             enabled: true,
-            blur_type: BlurType::Gaussian,
+            modes: ModeSet::GAUSSIAN,
             gaussian_sigma: 1.5,
             lambda: 0.01,
             strength: 1.0,
@@ -4120,6 +4213,123 @@ mod tests {
         assert!(center[0] > 150, "bright square lost after deconvolution: {:?}", center);
         let outside = rgb.get_pixel(15, 15);
         assert!(outside[0] < 150, "background blown out after deconvolution: {:?}", outside);
+    }
+
+    /// Adapter + device + deconvolver for GPU tests, or None to skip on
+    /// machines without a usable adapter (mirrors the spike test's skip).
+    fn gpu_test_context(label: &str) -> Option<(wgpu::Device, wgpu::Queue, RapidDeconvolver)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping {label}: no adapter ({e})");
+                return None;
+            }
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID GPU test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+        Some((device, queue, deconv))
+    }
+
+    /// Square-on-gray fixture shared by the compound-mode GPU tests.
+    fn gpu_test_image() -> image::DynamicImage {
+        let mut img = image::RgbaImage::from_pixel(160, 120, image::Rgba([90, 90, 90, 255]));
+        for y in 40..80 {
+            for x in 60..100 {
+                img.put_pixel(x, y, image::Rgba([230, 230, 230, 255]));
+            }
+        }
+        image::DynamicImage::ImageRgba8(img)
+    }
+
+    /// A compound mode set must run as ONE pass and produce a result that is
+    /// finite and distinct from either member alone — the product OTF is a
+    /// different filter than each factor.
+    #[test]
+    fn test_gpu_deconvolve_compound_modes() {
+        use image::GenericImageView;
+
+        let Some((device, queue, mut deconv)) = gpu_test_context("compound GPU test") else {
+            return;
+        };
+        let input = gpu_test_image();
+        let run = |deconv: &mut RapidDeconvolver, modes: ModeSet| -> image::DynamicImage {
+            let params = RapidParams {
+                enabled: true,
+                modes,
+                motion_length: 12.0,
+                motion_angle: 0.0,
+                gaussian_sigma: 1.5,
+                lambda: 0.01,
+                strength: 1.0,
+                ..Default::default()
+            };
+            deconv
+                .deconvolve_image(&device, &queue, &input, &params)
+                .expect("deconvolve_image failed")
+        };
+        let compound = run(&mut deconv, ModeSet { motion: true, defocus: false, gaussian: true });
+        assert_eq!(compound.dimensions(), input.dimensions());
+        for p in compound.to_rgb32f().pixels() {
+            assert!(p.0.iter().all(|c| c.is_finite()), "non-finite pixel in compound output");
+        }
+        let motion_only = run(&mut deconv, ModeSet::MOTION);
+        let gaussian_only = run(&mut deconv, ModeSet::GAUSSIAN);
+        let differs = |a: &image::DynamicImage, b: &image::DynamicImage| -> bool {
+            a.to_rgb8()
+                .pixels()
+                .zip(b.to_rgb8().pixels())
+                .any(|(pa, pb)| pa.0.iter().zip(&pb.0).any(|(&ca, &cb)| ca.abs_diff(cb) > 1))
+        };
+        assert!(differs(&compound, &motion_only), "compound output equals motion-only");
+        assert!(differs(&compound, &gaussian_only), "compound output equals gaussian-only");
+    }
+
+    /// The defocus component's hardness is pinned to 1.0 inside the shader
+    /// (the slider only exists in the motion UI), so a defocus-only render
+    /// must be invariant under the hardness parameter.
+    #[test]
+    fn test_gpu_defocus_hardness_invariance() {
+        let Some((device, queue, mut deconv)) = gpu_test_context("defocus hardness GPU test") else {
+            return;
+        };
+        let input = gpu_test_image();
+        let run = |deconv: &mut RapidDeconvolver, hardness: f32| -> image::RgbaImage {
+            let params = RapidParams {
+                enabled: true,
+                modes: ModeSet::DEFOCUS,
+                defocus_radius: 3.0,
+                lambda: 0.01,
+                strength: 1.0,
+                hardness,
+                ..Default::default()
+            };
+            deconv
+                .deconvolve_image(&device, &queue, &input, &params)
+                .expect("deconvolve_image failed")
+                .to_rgba8()
+        };
+        let soft = run(&mut deconv, 0.0);
+        let hard = run(&mut deconv, 1.0);
+        let max_diff = soft
+            .pixels()
+            .zip(hard.pixels())
+            .flat_map(|(a, b)| a.0.iter().zip(&b.0).map(|(&ca, &cb)| ca.abs_diff(cb)))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_diff <= 1,
+            "defocus render varied with hardness (max channel diff {max_diff})"
+        );
     }
 
     /// Banding metric: Hann-windowed spectral power of the red channel over
@@ -4206,7 +4416,7 @@ mod tests {
         let blur_len = 32usize;
         let base_params = RapidParams {
             enabled: true,
-            blur_type: BlurType::Motion,
+            modes: ModeSet::MOTION,
             motion_length: blur_len as f32,
             motion_angle: 0.0,
             lambda: 0.002,
@@ -4330,7 +4540,7 @@ mod tests {
 
         let soft_params = RapidParams {
             enabled: true,
-            blur_type: BlurType::Motion,
+            modes: ModeSet::MOTION,
             motion_length: blur_len as f32,
             motion_angle: 0.0,
             lambda: 0.002,
@@ -4381,19 +4591,21 @@ mod tests {
     }
 
     /// The defocus analog of the ghost-pair test, run at production posture
-    /// (adaptive λ, default λ = 0.01, sensor-style noise): the floored jinc
-    /// applies ~6x constant gain across the OTF's J1 dead bands, amplifying
-    /// the noise that is all those bands contain into concentric ripple
-    /// over the whole frame. The h = 1 raw jinc, with the dead-band λ gate
-    /// in wiener_adaptive, keeps true zeros and caps the dead-band noise
-    /// gain, so flat-field ripple must drop materially and the feature
-    /// neighborhood must land closer to the sharp ground truth. (At h = 1
-    /// without the gate, the adaptive estimator reads noise-only dead-band
-    /// bins as high-SNR, drops λ_eff to λ/10, and the unfloored Wiener's
-    /// 1/(2·sqrt(λ_eff)) gain peak makes ripple *worse* than the floor —
-    /// measured 0.4x here before the gate, 10x after.)
+    /// (adaptive λ, default λ = 0.01, sensor-style noise). The raw jinc with
+    /// the dead-band λ gate in wiener_adaptive keeps true zeros and caps the
+    /// dead-band noise gain; this bounds flat-field ripple and the feature
+    /// neighborhood absolutely. Historically an A/B against the floored jinc
+    /// (hardness 0), but the shader now pins the defocus component to the
+    /// raw jinc unconditionally, so the floored baseline is unreachable —
+    /// the ceilings below are calibrated from the measured production values
+    /// (flat_var 2.8e-4, near_mse 2.0e-3) with margin, and the regressions
+    /// they guard sit far above: the floored jinc measured ~10x the ripple
+    /// (~2.8e-3), and h = 1 *without* the dead-band gate measured ~25x
+    /// (~7e-3; the adaptive estimator reads noise-only dead-band bins as
+    /// high-SNR, drops λ_eff to λ/10, and the unfloored Wiener's
+    /// 1/(2·sqrt(λ_eff)) gain peak rings harder than the floor ever did).
     #[test]
-    fn test_gpu_defocus_hardness_reduces_ring_energy() {
+    fn test_gpu_defocus_dead_band_ripple_bounded() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -4481,41 +4693,29 @@ mod tests {
             .collect();
         let input = gray_image(&noisy, width as u32, height as u32);
 
-        let soft_params = RapidParams {
+        let params = RapidParams {
             enabled: true,
-            blur_type: BlurType::Defocus,
+            modes: ModeSet::DEFOCUS,
             defocus_radius: radius,
             lambda: 0.01,
             strength: 1.0,
             adaptive: true,
             ..Default::default()
         };
-        let hard_params = RapidParams { hardness: 1.0, ..soft_params };
+        let out = deconv
+            .deconvolve_image(&device, &queue, &input, &params)
+            .expect("defocus deconvolve failed");
 
-        let soft = deconv
-            .deconvolve_image(&device, &queue, &input, &soft_params)
-            .expect("soft deconvolve failed");
-        let hard = deconv
-            .deconvolve_image(&device, &queue, &input, &hard_params)
-            .expect("hard deconvolve failed");
-
-        let (v_soft, v_hard) = (flat_var(&soft), flat_var(&hard));
-        let (m_soft, m_hard) = (near_mse(&soft), near_mse(&hard));
-        eprintln!(
-            "defocus h0 vs h1: flat_var {v_soft:.3e} -> {v_hard:.3e} ({:.1}x), \
-             near_mse {m_soft:.3e} -> {m_hard:.3e} ({:.2}x)",
-            v_soft / v_hard,
-            m_soft / m_hard
+        let (v, m) = (flat_var(&out), near_mse(&out));
+        eprintln!("defocus dead-band posture: flat_var {v:.3e}, near_mse {m:.3e}");
+        assert!(
+            v < 8e-4,
+            "flat-field ripple {v:.3e} exceeds the dead-band ceiling (production ~2.8e-4; \
+             floored jinc ~2.8e-3, ungated λ ~7e-3)"
         );
         assert!(
-            v_soft > 4.0 * v_hard,
-            "raw jinc reduced flat-field ripple only {:.1}x (soft {v_soft:.3e}, hard {v_hard:.3e})",
-            v_soft / v_hard
-        );
-        assert!(
-            m_soft > 1.4 * m_hard,
-            "raw jinc improved the feature neighborhood only {:.2}x (soft {m_soft:.3e}, hard {m_hard:.3e})",
-            m_soft / m_hard
+            m < 2.7e-3,
+            "feature neighborhood MSE {m:.3e} exceeds the ceiling (production ~2.0e-3)"
         );
     }
 
@@ -4603,7 +4803,7 @@ mod tests {
 
         let unguarded = RapidParams {
             enabled: true,
-            blur_type: BlurType::Defocus,
+            modes: ModeSet::DEFOCUS,
             defocus_radius: radius,
             lambda: 0.002,
             strength: 1.0,
@@ -4705,7 +4905,7 @@ mod tests {
 
         let unguarded = RapidParams {
             enabled: true,
-            blur_type: BlurType::Defocus,
+            modes: ModeSet::DEFOCUS,
             defocus_radius: radius,
             lambda: 0.002,
             strength: 1.0,
@@ -4774,7 +4974,7 @@ mod tests {
 
         let params = RapidParams {
             enabled: true,
-            blur_type: BlurType::Gaussian,
+            modes: ModeSet::GAUSSIAN,
             gaussian_sigma: 1.5,
             lambda: 0.01,
             strength: 1.0,
@@ -4874,7 +5074,7 @@ mod tests {
     fn test_psf_axis_projection() {
         // Horizontal motion: box along x, identity along y.
         let p = RapidParams {
-            blur_type: BlurType::Motion,
+            modes: ModeSet::MOTION,
             motion_length: 32.0,
             motion_angle: 0.0,
             ..Default::default()
@@ -4887,14 +5087,150 @@ mod tests {
 
         // Defocus and gaussian project onto both axes.
         for p in [
-            RapidParams { blur_type: BlurType::Defocus, defocus_radius: 5.0, ..Default::default() },
-            RapidParams { blur_type: BlurType::Gaussian, gaussian_sigma: 2.0, ..Default::default() },
+            RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() },
+            RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() },
         ] {
             for axis in 0..2 {
                 let k = psf_axis_projection(&p, axis);
                 assert!(k.len() > 1);
                 assert!((k.iter().sum::<f32>() - 1.0).abs() < 1e-4);
             }
+        }
+    }
+
+    #[test]
+    fn test_mode_set_bits() {
+        assert_eq!(ModeSet::MOTION.bits(), 1);
+        assert_eq!(ModeSet::DEFOCUS.bits(), 2);
+        assert_eq!(ModeSet::GAUSSIAN.bits(), 4);
+        let all = ModeSet { motion: true, defocus: true, gaussian: true };
+        assert_eq!(all.bits(), 7);
+        assert!(all.any());
+        let none = ModeSet { motion: false, defocus: false, gaussian: false };
+        assert_eq!(none.bits(), 0);
+        assert!(!none.any());
+    }
+
+    #[test]
+    fn test_kernel_extent_compound() {
+        // Single modes keep their pre-compound extents.
+        let motion = RapidParams { modes: ModeSet::MOTION, motion_length: 10.0, ..Default::default() };
+        assert_eq!(kernel_extent(&motion), 10);
+        let defocus = RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() };
+        assert_eq!(kernel_extent(&defocus), 10);
+        let gaussian = RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() };
+        assert_eq!(kernel_extent(&gaussian), 12);
+        // Compound supports add (convolution support is the sum).
+        let compound = RapidParams {
+            modes: ModeSet { motion: true, defocus: false, gaussian: true },
+            motion_length: 10.0,
+            gaussian_sigma: 2.0,
+            ..Default::default()
+        };
+        assert_eq!(kernel_extent(&compound), 22);
+        // An empty set floors at 1 like a sub-pixel kernel.
+        let empty = RapidParams {
+            modes: ModeSet { motion: false, defocus: false, gaussian: false },
+            ..Default::default()
+        };
+        assert_eq!(kernel_extent(&empty), 1);
+    }
+
+    /// Bit-for-bit parity of single-mode projections with the pre-compound
+    /// implementation: goldens captured from the last commit before the
+    /// ModeSet refactor. A single-member set must take the integration path
+    /// untouched — any drift here means the refactor was not pure code
+    /// motion.
+    #[test]
+    fn test_psf_axis_projection_single_mode_parity() {
+        const MOTION20_H04_AX0: [f32; 19] = [
+            6.156384014e-3, 2.419506386e-2, 2.641135640e-2, 3.114545345e-2, 3.982412070e-2,
+            5.334763229e-2, 7.095774263e-2, 8.947129548e-2, 1.038440987e-1, 1.092937514e-1,
+            1.038440987e-1, 8.947130293e-2, 7.095774263e-2, 5.334763229e-2, 3.982412070e-2,
+            3.114545345e-2, 2.641135640e-2, 2.419506386e-2, 6.156384014e-3,
+        ];
+        const MOTION20_H04_AX1: [f32; 11] = [
+            2.123314701e-2, 4.692157730e-2, 6.645793468e-2, 1.089163870e-1, 1.623771340e-1,
+            1.881877035e-1, 1.623771340e-1, 1.089163944e-1, 6.645793468e-2, 4.692157730e-2,
+            2.123314701e-2,
+        ];
+        const DEFOCUS5_AX0: [f32; 11] = [
+            1.914434321e-2, 7.534631342e-2, 1.013437882e-1, 1.162930802e-1, 1.243876815e-1,
+            1.269696504e-1, 1.243876815e-1, 1.162930802e-1, 1.013437882e-1, 7.534631342e-2,
+            1.914434321e-2,
+        ];
+        const GAUSSIAN2_AX0: [f32; 13] = [
+            2.393511590e-3, 9.225073270e-3, 2.781469934e-2, 6.561533362e-2, 1.211178526e-1,
+            1.749509126e-1, 1.977652311e-1, 1.749508977e-1, 1.211178526e-1, 6.561533362e-2,
+            2.781470306e-2, 9.225073270e-3, 2.393511357e-3,
+        ];
+        let motion = RapidParams {
+            modes: ModeSet::MOTION,
+            motion_length: 20.0,
+            motion_angle: 30.0,
+            hardness: 0.4,
+            ..Default::default()
+        };
+        let defocus = RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() };
+        let gaussian = RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() };
+        let cases: [(&str, &RapidParams, usize, &[f32]); 4] = [
+            ("motion ax0", &motion, 0, &MOTION20_H04_AX0),
+            ("motion ax1", &motion, 1, &MOTION20_H04_AX1),
+            ("defocus ax0", &defocus, 0, &DEFOCUS5_AX0),
+            ("gaussian ax0", &gaussian, 0, &GAUSSIAN2_AX0),
+        ];
+        for (name, p, axis, golden) in cases {
+            let k = psf_axis_projection(p, axis);
+            assert_eq!(k.len(), golden.len(), "{name}: support width changed");
+            for (i, (got, want)) in k.iter().zip(golden).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-8,
+                    "{name}[{i}]: got {got:.9e}, golden {want:.9e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_psf_axis_projection_compound() {
+        // Motion at 30° + defocus: support = sum of member supports
+        // (19 + 11 - 1), unit mass, symmetric (both members are symmetric).
+        let p = RapidParams {
+            modes: ModeSet { motion: true, defocus: true, gaussian: false },
+            motion_length: 20.0,
+            motion_angle: 30.0,
+            hardness: 0.4,
+            defocus_radius: 5.0,
+            ..Default::default()
+        };
+        let k = psf_axis_projection(&p, 0);
+        assert_eq!(k.len(), 29, "compound support must be the sum of member supports");
+        assert!((k.iter().sum::<f32>() - 1.0).abs() < 1e-4);
+        for i in 0..k.len() / 2 {
+            assert!(
+                (k[i] - k[k.len() - 1 - i]).abs() < 1e-6,
+                "compound of symmetric members must be symmetric at tap {i}"
+            );
+        }
+
+        // A member whose projection is the identity leaves the other member
+        // unchanged: horizontal motion projects onto y as [1.0], so
+        // motion+defocus on axis 1 equals defocus alone.
+        let horiz = RapidParams {
+            modes: ModeSet { motion: true, defocus: true, gaussian: false },
+            motion_length: 20.0,
+            motion_angle: 0.0,
+            defocus_radius: 5.0,
+            ..Default::default()
+        };
+        let compound_y = psf_axis_projection(&horiz, 1);
+        let defocus_only = psf_axis_projection(
+            &RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() },
+            1,
+        );
+        assert_eq!(compound_y.len(), defocus_only.len());
+        for (a, b) in compound_y.iter().zip(&defocus_only) {
+            assert!((a - b).abs() < 1e-6);
         }
     }
 
@@ -5602,7 +5938,7 @@ mod tests {
         let adjustments = serde_json::json!({ "rapidEnabled": true });
         let params =
             parse_rapid_params(&adjustments).expect("legacy-enabled sidecar must stay active");
-        assert_eq!(params.blur_type, BlurType::Motion);
+        assert_eq!(params.modes, ModeSet::MOTION);
         assert!((params.motion_length - 10.0).abs() < 1e-6);
         assert!((params.defocus_radius - 5.0).abs() < 1e-6);
         assert!((params.gaussian_sigma - 2.0).abs() < 1e-6);

@@ -30,7 +30,7 @@ const MAGNITUDE_FLOOR: f32 = 0.15;
 struct PSFParams {
     width: u32,
     height: u32,
-    blur_type: u32,      // 0 = motion, 1 = defocus, 2 = gaussian
+    active_modes: u32,   // Bitmask: bit0 = motion, bit1 = defocus, bit2 = gaussian
     motion_length: f32,  // In pixels
     motion_angle: f32,   // Degrees
     defocus_radius: f32, // In pixels
@@ -247,25 +247,31 @@ fn generate_psf_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Wiener filter becomes: F_hat = G * 1 / (1 + λ) ≈ G (scaled)
         H = vec2<f32>(1.0, 0.0);
     } else {
-        // Generate PSF spectrum based on blur type
-        switch (params.blur_type) {
-            case 0u: {
-                // Motion blur
-                H = motion_blur_spectrum(u, v, params.motion_length, params.motion_angle, params.hardness);
-            }
-            case 1u: {
-                // Defocus blur
-                H = defocus_blur_spectrum(u, v, params.defocus_radius, params.hardness);
-            }
-            case 2u: {
-                // Gaussian blur
-                H = gaussian_blur_spectrum(u, v, params.gaussian_sigma);
-            }
-            default: {
-                // Identity (no blur)
-                H = vec2<f32>(1.0, 0.0);
-            }
+        // Compound OTF: blurs that occur together convolve in image space,
+        // so their transfer functions MULTIPLY here — any subset of the
+        // three models forms one compound kernel inverted by the single
+        // Wiener pass. An empty set falls through to the identity (the old
+        // default arm). Per-component floors/hardness treatments are kept:
+        // small compound magnitudes reduce the Wiener gain toward zero
+        // rather than spiking it (|H|/(|H|^2+λ) is bounded by 1/(2√λ)).
+        var mag = 1.0;
+        if ((params.active_modes & 1u) != 0u) {
+            mag *= motion_blur_spectrum(u, v, params.motion_length, params.motion_angle, params.hardness).x;
         }
+        if ((params.active_modes & 2u) != 0u) {
+            // Hardness pinned to 1.0: the raw signed jinc with true zeros.
+            // The hardness slider and estimator only exist in the motion UI,
+            // and a motion-fitted value must not half-floor the defocus OTF
+            // — the floored jinc's rings are a defect here, not a look.
+            // Pinned in the shader rather than parse so the one hardness
+            // uniform can serve motion's slider and this pin simultaneously
+            // when both modes are active.
+            mag *= defocus_blur_spectrum(u, v, params.defocus_radius, 1.0).x;
+        }
+        if ((params.active_modes & 4u) != 0u) {
+            mag *= gaussian_blur_spectrum(u, v, params.gaussian_sigma).x;
+        }
+        H = vec2<f32>(mag, 0.0);
     }
 
     textureStore(output_tex, coord, vec4<f32>(H, 0.0, 1.0));
