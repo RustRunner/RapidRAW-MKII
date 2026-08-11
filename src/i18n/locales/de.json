@@ -297,6 +297,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Aktivieren",
         "estimate": "Unschärfe schätzen",
         "estimateFailedDefocus": "Kein Defokus-Radius erkannt - Radius manuell einstellen.",
         "estimateFailedGaussian": "Gaußsche Unschärfe nicht messbar - Sigma manuell einstellen.",
@@ -314,6 +315,7 @@
       "glareRecovery": {
         "amount": "Stärke",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "Aktivieren",
         "estimate": "Blendung schätzen",
         "estimateFailed": "Keine deutliche Blendung erkannt - bei Bedarf manuell anpassen.",
         "estimating": "Schätzung läuft...",
@@ -324,15 +326,15 @@
       "lowlight": {
         "chroma": "Farbrausch-Glättung",
         "denoise": "Entrauschen",
-        "description": "Werkzeuge für High-ISO- und Langzeitaufnahmen. Hot-Pixel-Entfernung und Entrauschen als Live-Vorschau; Tiefenreinigung (BM3D) speichert das Ergebnis als neue Datei und öffnet sie.",
+        "description": "Werkzeuge für High-ISO- und Langzeitaufnahmen. Hot-Pixel-Entfernung und Entrauschen als Live-Vorschau.",
         "detail": "Detailerhalt",
         "estimate": "Rauschen messen",
         "estimateFailed": "Rauschen konnte nicht gemessen werden – Stärke manuell einstellen",
         "estimating": "Messen...",
         "hotPixels": "Hot Pixels",
         "measured": "Gemessenes Rauschen → Stärke {{strength}}, Chroma {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "Empfindlichkeit",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "Basis",

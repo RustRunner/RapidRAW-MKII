@@ -297,6 +297,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "啟用",
         "estimate": "估算模糊",
         "estimateFailedDefocus": "未能偵測到散焦半徑，請手動設定半徑。",
         "estimateFailedGaussian": "未能測量高斯模糊程度，請手動設定 Sigma。",
@@ -314,6 +315,7 @@
       "glareRecovery": {
         "amount": "強度",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "啟用",
         "estimate": "估算眩光",
         "estimateFailed": "未偵測到明顯眩光，如有需要請手動調整。",
         "estimating": "估算中...",
@@ -324,15 +326,15 @@
       "lowlight": {
         "chroma": "色度平滑",
         "denoise": "降噪",
-        "description": "針對高 ISO 與長曝光照片的修復工具。熱像素移除與降噪支援即時預覽；深度清理 (BM3D) 會將結果儲存為新檔案並開啟。",
+        "description": "針對高 ISO 與長曝光照片的修復工具。熱像素移除與降噪支援即時預覽。",
         "detail": "細節保留",
         "estimate": "估計噪點",
         "estimateFailed": "無法測量噪點，請手動設定強度",
         "estimating": "測量中...",
         "hotPixels": "Hot Pixels",
         "measured": "測得噪點 → 強度 {{strength}}，色度 {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "靈敏度",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "基礎",

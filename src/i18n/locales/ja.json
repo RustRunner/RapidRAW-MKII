@@ -297,6 +297,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "有効化",
         "estimate": "ブレを推定",
         "estimateFailedDefocus": "デフォーカス半径を検出できませんでした。半径を手動で設定してください。",
         "estimateFailedGaussian": "ガウスぼかしの強さを測定できませんでした。シグマを手動で設定してください。",
@@ -314,6 +315,7 @@
       "glareRecovery": {
         "amount": "適用量",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "有効化",
         "estimate": "グレアを推定",
         "estimateFailed": "顕著なグレアは検出されませんでした。必要に応じて手動で調整してください。",
         "estimating": "推定中...",
@@ -324,15 +326,15 @@
       "lowlight": {
         "chroma": "色ノイズ平滑化",
         "denoise": "ノイズ除去",
-        "description": "高ISO・長時間露光向けの回復ツール。ホットピクセル除去とノイズ除去はライブプレビュー。ディープクリーン (BM3D) は結果を新しいファイルとして保存して開きます。",
+        "description": "高ISO・長時間露光向けの回復ツール。ホットピクセル除去とノイズ除去はライブプレビュー。",
         "detail": "ディテール保持",
         "estimate": "ノイズを推定",
         "estimateFailed": "ノイズを測定できませんでした。強度を手動で設定してください",
         "estimating": "測定中...",
         "hotPixels": "Hot Pixels",
         "measured": "測定ノイズ → 強度 {{strength}}、クロマ {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "感度",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "基本",

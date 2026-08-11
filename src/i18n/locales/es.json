@@ -313,6 +313,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Activar",
         "estimate": "Estimar desenfoque",
         "estimateFailedDefocus": "No se detectó el radio de desenfoque: ajusta el radio manualmente.",
         "estimateFailedGaussian": "No se pudo medir el nivel de desenfoque gaussiano: ajusta el sigma manualmente.",
@@ -330,6 +331,7 @@
       "glareRecovery": {
         "amount": "Intensidad",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "Activar",
         "estimate": "Estimar velo",
         "estimateFailed": "No se detectó un velo significativo: ajusta manualmente si es necesario.",
         "estimating": "Estimando...",
@@ -340,15 +342,15 @@
       "lowlight": {
         "chroma": "Suavizado de croma",
         "denoise": "Reducción de ruido",
-        "description": "Herramientas de recuperación para tomas con ISO alto y larga exposición. La eliminación de píxeles calientes y la reducción de ruido se previsualizan en vivo; la limpieza profunda (BM3D) guarda el resultado como un archivo nuevo y lo abre.",
+        "description": "Herramientas de recuperación para tomas con ISO alto y larga exposición. La eliminación de píxeles calientes y la reducción de ruido se previsualizan en vivo.",
         "detail": "Preservación de detalle",
         "estimate": "Estimar ruido",
         "estimateFailed": "No se pudo medir el ruido: ajusta la intensidad manualmente",
         "estimating": "Midiendo...",
         "hotPixels": "Hot Pixels",
         "measured": "Ruido medido → intensidad {{strength}}, croma {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "Sensibilidad",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "Básico",

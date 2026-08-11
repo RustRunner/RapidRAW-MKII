@@ -7,132 +7,144 @@ TRANSLATIONS = {
     "de": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Keine Bewegungsunschärfe-Richtung erkannt - Länge und Winkel manuell einstellen.",
-                    "estimateFailedDefocus": "Kein Defokus-Radius erkannt - Radius manuell einstellen.",
-                    "estimateFailedGaussian": "Gaußsche Unschärfe nicht messbar - Sigma manuell einstellen.",
-                }
+                "blurRecovery": {"enable": "Aktivieren"},
+                "glareRecovery": {"enable": "Aktivieren"},
+                "lowlight": {
+                    "sensitivity": "Empfindlichkeit",
+                    "description": "Werkzeuge für High-ISO- und Langzeitaufnahmen. Hot-Pixel-Entfernung und Entrauschen als Live-Vorschau.",
+                },
             }
         }
     },
     "en": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Could not detect a motion-blur direction - set length and angle manually.",
-                    "estimateFailedDefocus": "Could not detect a defocus radius - set the radius manually.",
-                    "estimateFailedGaussian": "Could not measure a gaussian blur level - set the sigma manually.",
-                }
+                "blurRecovery": {"enable": "Enable"},
+                "glareRecovery": {"enable": "Enable"},
+                "lowlight": {
+                    "sensitivity": "Sensitivity",
+                    "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal and denoising preview live.",
+                },
             }
         }
     },
     "es": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "No se detectó la dirección del desenfoque de movimiento: ajusta longitud y ángulo manualmente.",
-                    "estimateFailedDefocus": "No se detectó el radio de desenfoque: ajusta el radio manualmente.",
-                    "estimateFailedGaussian": "No se pudo medir el nivel de desenfoque gaussiano: ajusta el sigma manualmente.",
-                }
+                "blurRecovery": {"enable": "Activar"},
+                "glareRecovery": {"enable": "Activar"},
+                "lowlight": {
+                    "sensitivity": "Sensibilidad",
+                    "description": "Herramientas de recuperación para tomas con ISO alto y larga exposición. La eliminación de píxeles calientes y la reducción de ruido se previsualizan en vivo.",
+                },
             }
         }
     },
     "fr": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Direction du flou de bougé non détectée - réglez la longueur et l'angle manuellement.",
-                    "estimateFailedDefocus": "Rayon de défocalisation non détecté - réglez le rayon manuellement.",
-                    "estimateFailedGaussian": "Niveau de flou gaussien non mesurable - réglez le sigma manuellement.",
-                }
+                "blurRecovery": {"enable": "Activer"},
+                "glareRecovery": {"enable": "Activer"},
+                "lowlight": {
+                    "sensitivity": "Sensibilité",
+                    "description": "Outils de récupération pour les prises à haut ISO et longue exposition. La correction des pixels chauds et le débruitage s'affichent en direct.",
+                },
             }
         }
     },
     "it": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Direzione del mosso non rilevata: imposta lunghezza e angolo manualmente.",
-                    "estimateFailedDefocus": "Raggio di sfocatura non rilevato: imposta il raggio manualmente.",
-                    "estimateFailedGaussian": "Livello di sfocatura gaussiana non misurabile: imposta il sigma manualmente.",
-                }
+                "blurRecovery": {"enable": "Attiva"},
+                "glareRecovery": {"enable": "Attiva"},
+                "lowlight": {
+                    "sensitivity": "Sensibilità",
+                    "description": "Strumenti di recupero per scatti ad alto ISO e lunga esposizione. Rimozione hot pixel e riduzione del rumore in anteprima dal vivo.",
+                },
             }
         }
     },
     "ja": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "ブレの方向を検出できませんでした。長さと角度を手動で設定してください。",
-                    "estimateFailedDefocus": "デフォーカス半径を検出できませんでした。半径を手動で設定してください。",
-                    "estimateFailedGaussian": "ガウスぼかしの強さを測定できませんでした。シグマを手動で設定してください。",
-                }
+                "blurRecovery": {"enable": "有効化"},
+                "glareRecovery": {"enable": "有効化"},
+                "lowlight": {
+                    "sensitivity": "感度",
+                    "description": "高ISO・長時間露光向けの回復ツール。ホットピクセル除去とノイズ除去はライブプレビュー。",
+                },
             }
         }
     },
     "ko": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "모션 블러 방향을 감지하지 못했습니다. 길이와 각도를 직접 설정하세요.",
-                    "estimateFailedDefocus": "디포커스 반경을 감지하지 못했습니다. 반경을 직접 설정하세요.",
-                    "estimateFailedGaussian": "가우시안 블러 정도를 측정하지 못했습니다. 시그마를 직접 설정하세요.",
-                }
+                "blurRecovery": {"enable": "활성화"},
+                "glareRecovery": {"enable": "활성화"},
+                "lowlight": {
+                    "sensitivity": "감도",
+                    "description": "고감도·장노출 촬영을 위한 복구 도구입니다. 핫픽셀 제거와 노이즈 제거는 실시간 미리보기됩니다.",
+                },
             }
         }
     },
     "pl": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Nie wykryto kierunku rozmycia ruchu - ustaw długość i kąt ręcznie.",
-                    "estimateFailedDefocus": "Nie wykryto promienia rozogniskowania - ustaw promień ręcznie.",
-                    "estimateFailedGaussian": "Nie udało się zmierzyć poziomu rozmycia gaussowskiego - ustaw sigmę ręcznie.",
-                }
+                "blurRecovery": {"enable": "Włącz"},
+                "glareRecovery": {"enable": "Włącz"},
+                "lowlight": {
+                    "sensitivity": "Czułość",
+                    "description": "Narzędzia ratunkowe dla zdjęć z wysokim ISO i długim czasem naświetlania. Usuwanie gorących pikseli i odszumianie działają na żywo.",
+                },
             }
         }
     },
     "pt": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Direção do borrão de movimento não detectada - ajuste comprimento e ângulo manualmente.",
-                    "estimateFailedDefocus": "Raio de desfoque não detectado - ajuste o raio manualmente.",
-                    "estimateFailedGaussian": "Não foi possível medir o nível de desfoque gaussiano - ajuste o sigma manualmente.",
-                }
+                "blurRecovery": {"enable": "Ativar"},
+                "glareRecovery": {"enable": "Ativar"},
+                "lowlight": {
+                    "sensitivity": "Sensibilidade",
+                    "description": "Ferramentas de recuperação para fotos com ISO alto e longa exposição. A remoção de hot pixels e a redução de ruído têm pré-visualização ao vivo.",
+                },
             }
         }
     },
     "ru": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "Направление смаза не обнаружено - задайте длину и угол вручную.",
-                    "estimateFailedDefocus": "Радиус расфокусировки не обнаружен - задайте радиус вручную.",
-                    "estimateFailedGaussian": "Не удалось измерить уровень гауссова размытия - задайте сигму вручную.",
-                }
+                "blurRecovery": {"enable": "Включить"},
+                "glareRecovery": {"enable": "Включить"},
+                "lowlight": {
+                    "sensitivity": "Чувствительность",
+                    "description": "Инструменты восстановления для снимков с высоким ISO и длинной выдержкой. Удаление горячих пикселей и шумоподавление работают в реальном времени.",
+                },
             }
         }
     },
     "zh-CN": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "未能检测到运动模糊方向，请手动设置长度和角度。",
-                    "estimateFailedDefocus": "未能检测到散焦半径，请手动设置半径。",
-                    "estimateFailedGaussian": "未能测量高斯模糊程度，请手动设置 Sigma。",
-                }
+                "blurRecovery": {"enable": "启用"},
+                "glareRecovery": {"enable": "启用"},
+                "lowlight": {
+                    "sensitivity": "灵敏度",
+                    "description": "针对高 ISO 和长曝光照片的修复工具。热像素移除和降噪支持实时预览。",
+                },
             }
         }
     },
     "zh-TW": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {
-                    "estimateFailedMotion": "未能偵測到運動模糊方向，請手動設定長度與角度。",
-                    "estimateFailedDefocus": "未能偵測到散焦半徑，請手動設定半徑。",
-                    "estimateFailedGaussian": "未能測量高斯模糊程度，請手動設定 Sigma。",
-                }
+                "blurRecovery": {"enable": "啟用"},
+                "glareRecovery": {"enable": "啟用"},
+                "lowlight": {
+                    "sensitivity": "靈敏度",
+                    "description": "針對高 ISO 與長曝光照片的修復工具。熱像素移除與降噪支援即時預覽。",
+                },
             }
         }
     },

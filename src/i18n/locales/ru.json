@@ -329,6 +329,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Включить",
         "estimate": "Оценить смаз",
         "estimateFailedDefocus": "Радиус расфокусировки не обнаружен - задайте радиус вручную.",
         "estimateFailedGaussian": "Не удалось измерить уровень гауссова размытия - задайте сигму вручную.",
@@ -346,6 +347,7 @@
       "glareRecovery": {
         "amount": "Интенсивность",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "Включить",
         "estimate": "Оценить вуаль",
         "estimateFailed": "Заметная вуаль не обнаружена - при необходимости настройте вручную.",
         "estimating": "Оценка...",
@@ -356,15 +358,15 @@
       "lowlight": {
         "chroma": "Сглаживание цветового шума",
         "denoise": "Шумоподавление",
-        "description": "Инструменты восстановления для снимков с высоким ISO и длинной выдержкой. Удаление горячих пикселей и шумоподавление работают в реальном времени; глубокая очистка (BM3D) сохраняет результат в новый файл и открывает его.",
+        "description": "Инструменты восстановления для снимков с высоким ISO и длинной выдержкой. Удаление горячих пикселей и шумоподавление работают в реальном времени.",
         "detail": "Сохранение деталей",
         "estimate": "Оценить шум",
         "estimateFailed": "Не удалось измерить шум — задайте силу вручную",
         "estimating": "Измерение...",
         "hotPixels": "Hot Pixels",
         "measured": "Измеренный шум → сила {{strength}}, цветность {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "Чувствительность",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "Основные",

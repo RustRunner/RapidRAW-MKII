@@ -329,6 +329,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Włącz",
         "estimate": "Oszacuj rozmycie",
         "estimateFailedDefocus": "Nie wykryto promienia rozogniskowania - ustaw promień ręcznie.",
         "estimateFailedGaussian": "Nie udało się zmierzyć poziomu rozmycia gaussowskiego - ustaw sigmę ręcznie.",
@@ -346,6 +347,7 @@
       "glareRecovery": {
         "amount": "Intensywność",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "Włącz",
         "estimate": "Oszacuj odblask",
         "estimateFailed": "Nie wykryto wyraźnego odblasku - w razie potrzeby dostosuj ręcznie.",
         "estimating": "Szacowanie...",
@@ -356,15 +358,15 @@
       "lowlight": {
         "chroma": "Wygładzanie chrominancji",
         "denoise": "Odszumianie",
-        "description": "Narzędzia ratunkowe dla zdjęć z wysokim ISO i długim czasem naświetlania. Usuwanie gorących pikseli i odszumianie działają na żywo; głębokie czyszczenie (BM3D) zapisuje wynik jako nowy plik i go otwiera.",
+        "description": "Narzędzia ratunkowe dla zdjęć z wysokim ISO i długim czasem naświetlania. Usuwanie gorących pikseli i odszumianie działają na żywo.",
         "detail": "Zachowanie detali",
         "estimate": "Oszacuj szum",
         "estimateFailed": "Nie udało się zmierzyć szumu – ustaw siłę ręcznie",
         "estimating": "Pomiar...",
         "hotPixels": "Hot Pixels",
         "measured": "Zmierzony szum → siła {{strength}}, chroma {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "Czułość",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "Podstawowe",
