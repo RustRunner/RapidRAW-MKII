@@ -297,6 +297,7 @@
         "angle": "Blur Angle",
         "defocus": "Defocus",
         "description": "Frequency-domain deconvolution (FFT Wiener filter) that recovers detail from motion, defocus, or gaussian blur. Match the blur type and size, then tune regularization against noise.",
+        "enable": "Enable",
         "estimate": "Estimate blur",
         "estimateFailedDefocus": "Could not detect a defocus radius - set the radius manually.",
         "estimateFailedGaussian": "Could not measure a gaussian blur level - set the sigma manually.",
@@ -314,6 +315,7 @@
       "glareRecovery": {
         "amount": "Amount",
         "description": "Removes veiling glare - the smooth reflection layer washing out subjects behind glass. Amount subtracts the estimated veil and restores contrast; Show veil displays what will be subtracted.",
+        "enable": "Enable",
         "estimate": "Estimate glare",
         "estimateFailed": "No significant glare detected - adjust manually if needed.",
         "estimating": "Estimating...",
@@ -324,15 +326,15 @@
       "lowlight": {
         "chroma": "Chroma Smoothing",
         "denoise": "Denoise",
-        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal and denoising preview live; Deep Clean (BM3D) saves the result as a new file and opens it.",
+        "description": "Recovery tools for high-ISO and long-exposure shots. Hot-pixel removal and denoising preview live.",
         "detail": "Detail Preservation",
         "estimate": "Estimate noise",
         "estimateFailed": "Could not measure noise - set strength manually",
         "estimating": "Measuring...",
         "hotPixels": "Hot Pixels",
         "measured": "Measured noise → strength {{strength}}, chroma {{chroma}}",
-        "strength": "Denoise Strength",
-        "threshold": "Detection Threshold"
+        "sensitivity": "Sensitivity",
+        "strength": "Denoise Strength"
       },
       "sections": {
         "basic": "Basic",

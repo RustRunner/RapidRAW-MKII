@@ -12,6 +12,7 @@ import {
   COPYABLE_ADJUSTMENT_KEYS,
   PasteMode,
   LensAdjustment,
+  completeRecoveryGroups,
   normalizeLoadedAdjustments,
 } from '../utils/adjustments';
 import { calculateCenteredCrop } from '../utils/cropUtils';
@@ -210,6 +211,10 @@ export function useEditorActions() {
           }
         }
       }
+      // Merge mode strips INITIAL-equal keys, which would leave recovery
+      // subsystems half-carried (e.g. a toggle without its strength) and
+      // break the absent-key-means-legacy rule on the receiving side.
+      completeRecoveryGroups(adjustmentsToApply, copiedAdjustments);
 
       if (includedAdjustments.includes(LensAdjustment.LensMaker)) {
         if (!adjustmentsToApply.lensMaker) {

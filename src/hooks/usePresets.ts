@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import debounce from 'lodash.debounce';
-import { Adjustments, COPYABLE_ADJUSTMENT_KEYS, ADJUSTMENT_GROUPS, INITIAL_ADJUSTMENTS } from '../utils/adjustments';
+import {
+  Adjustments,
+  COPYABLE_ADJUSTMENT_KEYS,
+  ADJUSTMENT_GROUPS,
+  INITIAL_ADJUSTMENTS,
+  completeRecoveryGroups,
+} from '../utils/adjustments';
 import { Folder, Invokes, Preset } from '../components/ui/AppProperties';
 
 export enum PresetListType {
@@ -81,6 +87,14 @@ export function usePresets(currentAdjustments: Adjustments) {
           presetAdjustments[key] = currentValue;
         }
       }
+    }
+
+    // Tool presets strip default-valued keys, which would leave recovery
+    // subsystems half-captured (e.g. denoiseEnabled without its zero-start
+    // strengths); complete touched groups so the preset carries the
+    // author's whole subsystem state.
+    if (presetType === 'tool') {
+      completeRecoveryGroups(presetAdjustments, currentAdjustments);
     }
 
     const newPresetData: Preset = {

@@ -6,7 +6,7 @@ import { useUIStore } from '../store/useUIStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { useRenderStatusStore } from '../store/useRenderStatusStore';
-import { Adjustments, COPYABLE_ADJUSTMENT_KEYS } from '../utils/adjustments';
+import { Adjustments, COPYABLE_ADJUSTMENT_KEYS, completeRecoveryGroups } from '../utils/adjustments';
 import { Invokes, Panel } from '../components/ui/AppProperties';
 import { debouncedSave } from './useEditorActions';
 import { globalImageCache } from '../utils/ImageLRUCache';
@@ -461,6 +461,10 @@ export function useImageProcessing(
                 }
               }
             }
+            // A changed-keys delta can carry half a recovery subsystem
+            // (a toggle without its strength); complete touched groups so
+            // the backend merge never has to guess absent keys.
+            completeRecoveryGroups(delta, adjustments);
             if (Object.keys(delta).length > 0) {
               otherPaths.forEach((p) => globalImageCache.delete(p));
               invoke(Invokes.ApplyAdjustmentsToPaths, { paths: otherPaths, adjustments: delta }).catch((err) => {

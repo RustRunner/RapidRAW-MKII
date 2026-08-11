@@ -82,6 +82,9 @@ export enum LowLightAdjustment {
 }
 
 export enum BlurRecoveryAdjustment {
+  RapidMotionEnabled = 'rapidMotionEnabled',
+  RapidDefocusEnabled = 'rapidDefocusEnabled',
+  RapidGaussianEnabled = 'rapidGaussianEnabled',
   RapidBlurType = 'rapidBlurType',
   RapidLength = 'rapidLength',
   RapidAngle = 'rapidAngle',
@@ -93,6 +96,7 @@ export enum BlurRecoveryAdjustment {
 }
 
 export enum GlareRecoveryAdjustment {
+  GlareEnabled = 'glareEnabled',
   GlareAmount = 'glareAmount',
   GlareVeilSize = 'glareVeilSize',
   GlareMaxBoost = 'glareMaxBoost',
@@ -190,6 +194,9 @@ export interface Adjustments {
   denoiseStrength: number;
   denoiseDetail: number;
   denoiseChroma: number;
+  rapidMotionEnabled: boolean;
+  rapidDefocusEnabled: boolean;
+  rapidGaussianEnabled: boolean;
   rapidBlurType: 'motion' | 'defocus' | 'gaussian';
   rapidLength: number;
   rapidAngle: number;
@@ -198,6 +205,7 @@ export interface Adjustments {
   rapidLambda: number;
   rapidHardness: number;
   rapidStrength: number;
+  glareEnabled: boolean;
   glareAmount: number;
   glareVeilSize: number;
   glareMaxBoost: number;
@@ -527,19 +535,25 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 
 export const INITIAL_ADJUSTMENTS: Adjustments = {
   hotPixelEnabled: false,
-  hotPixelThreshold: 50,
+  // Stored threshold 100 = Sensitivity 0 (the panel displays 100 - stored):
+  // toggling Hot Pixels on starts inert.
+  hotPixelThreshold: 100,
   denoiseEnabled: false,
-  denoiseStrength: 50,
+  denoiseStrength: 0,
   denoiseDetail: 50,
-  denoiseChroma: 50,
+  denoiseChroma: 0,
+  rapidMotionEnabled: false,
+  rapidDefocusEnabled: false,
+  rapidGaussianEnabled: false,
   rapidBlurType: 'motion',
   rapidLength: 0,
   rapidAngle: 0,
   rapidRadius: 0,
   rapidSigma: 0,
   rapidLambda: 0.01,
-  rapidHardness: 100,
-  rapidStrength: 100,
+  rapidHardness: 50,
+  rapidStrength: 50,
+  glareEnabled: false,
   glareAmount: 0,
   glareVeilSize: 50,
   glareMaxBoost: 50,
@@ -662,32 +676,169 @@ const deepCloneParametric = (pCurve: any): ParametricCurve => ({
   blue: { ...DEFAULT_PARAMETRIC_CURVE_SETTINGS, ...(pCurve?.blue || {}) },
 });
 
-// Migrates pre-revamp rapid keys on a copy: an explicit rapidEnabled: false
-// zeroes the three kernel parameters (the stage was off; stored kernel
-// values are abandoned state), an explicit true pins the old kernel
-// defaults into keys the object never stored (so the render survives the
-// flag's removal), and the flag itself is always removed. Partial-safe:
-// objects without the flag pass through untouched, so a curves-only preset
-// cannot disturb blur state. Twin of migrate_legacy_rapid_keys in
-// src-tauri/src/rapid_processing.rs - change both or neither.
-export const migrateLegacyRapidKeys = <T extends Partial<Adjustments> & { rapidEnabled?: boolean }>(
-  adjustments: T,
-): T => {
-  const legacyEnabled = adjustments.rapidEnabled;
-  if (legacyEnabled === undefined) {
-    return adjustments;
+// The four recovery subsystems, used to keep sparse payload writes
+// group-atomic (merge-paste, auto-sync deltas, tool-preset capture): a
+// payload either omits a subsystem entirely or carries it whole, so
+// "absent key = legacy" stays decidable for everything the current build
+// writes.
+export const RECOVERY_KEY_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
+  Object.values(BlurRecoveryAdjustment),
+  Object.values(GlareRecoveryAdjustment),
+  [LowLightAdjustment.HotPixelEnabled, LowLightAdjustment.HotPixelThreshold],
+  [
+    LowLightAdjustment.DenoiseEnabled,
+    LowLightAdjustment.DenoiseStrength,
+    LowLightAdjustment.DenoiseDetail,
+    LowLightAdjustment.DenoiseChroma,
+  ],
+];
+
+// Restores group-atomicity to a sparse payload in place: if any key of a
+// recovery subsystem survived the caller's filter (merge-paste's
+// INITIAL-strip, auto-sync's delta, tool presets' default-strip), the whole
+// group is copied from the dense source, so consumers never see a
+// half-carried subsystem and absent keys stay decidable as legacy. The
+// copy/paste modal offers section-level selection, so completing a group
+// never overrides a per-key user choice.
+export const completeRecoveryGroups = (
+  payload: Partial<Adjustments>,
+  source: Partial<Adjustments>,
+): void => {
+  for (const group of RECOVERY_KEY_GROUPS) {
+    if (group.some((key) => key in payload)) {
+      for (const key of group) {
+        payload[key] = source[key] ?? INITIAL_ADJUSTMENTS[key];
+      }
+    }
   }
-  const migrated: Partial<Adjustments> & { rapidEnabled?: boolean } = { ...adjustments };
+};
+
+type RecoveryLegacy = Partial<Adjustments> & { rapidEnabled?: boolean };
+
+const RAPID_TOGGLE_KEYS = ['rapidMotionEnabled', 'rapidDefocusEnabled', 'rapidGaussianEnabled'] as const;
+const RAPID_LEGACY_KEYS = [
+  'rapidEnabled',
+  'rapidBlurType',
+  'rapidLength',
+  'rapidAngle',
+  'rapidRadius',
+  'rapidSigma',
+  'rapidLambda',
+  'rapidHardness',
+  'rapidStrength',
+] as const;
+const GLARE_LEGACY_KEYS = ['glareAmount', 'glareVeilSize', 'glareMaxBoost', 'glareShowVeil'] as const;
+
+// Synthesizes the per-mode blur toggles for pre-toggle objects, honoring
+// each generation's activity rule (rapidEnabled veto/defaults for gen 0,
+// the saved-mode kernel gate for the kernel-gated interim). Presence-guarded
+// and toggle-passthrough, so current or unrelated objects come out
+// untouched. `pinTaste` additionally pins the legacy 100 defaults for
+// strength/hardness — correct for full records where absence is
+// unambiguous legacy, wrong for sparse patches which must not overwrite
+// target taste values.
+const migrateRapidKeys = (migrated: RecoveryLegacy, pinTaste: boolean): void => {
+  if (RAPID_TOGGLE_KEYS.some((key) => typeof migrated[key] === 'boolean')) {
+    delete migrated.rapidEnabled;
+    return;
+  }
+  if (RAPID_LEGACY_KEYS.every((key) => migrated[key] === undefined)) {
+    return;
+  }
+  const legacyEnabled = migrated.rapidEnabled;
+  const mode = migrated.rapidBlurType ?? 'motion';
   if (legacyEnabled === false) {
+    // The stage was off; stored kernel values are abandoned state.
+    migrated.rapidMotionEnabled = false;
+    migrated.rapidDefocusEnabled = false;
+    migrated.rapidGaussianEnabled = false;
     migrated.rapidLength = 0;
     migrated.rapidRadius = 0;
     migrated.rapidSigma = 0;
-  } else {
+  } else if (legacyEnabled === true) {
+    // The saved mode was active; pin the old kernel defaults into keys the
+    // object never stored so the render survives the flag's removal.
+    migrated.rapidMotionEnabled = mode === 'motion';
+    migrated.rapidDefocusEnabled = mode === 'defocus';
+    migrated.rapidGaussianEnabled = mode === 'gaussian';
     migrated.rapidLength = migrated.rapidLength ?? 10;
     migrated.rapidRadius = migrated.rapidRadius ?? 5;
     migrated.rapidSigma = migrated.rapidSigma ?? 2;
+  } else {
+    // Kernel-gated interim: only the saved mode could be active, iff its
+    // kernel was positive.
+    migrated.rapidMotionEnabled = mode === 'motion' && (migrated.rapidLength ?? 0) > 0;
+    migrated.rapidDefocusEnabled = mode === 'defocus' && (migrated.rapidRadius ?? 0) > 0;
+    migrated.rapidGaussianEnabled = mode === 'gaussian' && (migrated.rapidSigma ?? 0) > 0;
+  }
+  if (pinTaste) {
+    migrated.rapidStrength = migrated.rapidStrength ?? 100;
+    migrated.rapidHardness = migrated.rapidHardness ?? 100;
   }
   delete migrated.rapidEnabled;
+};
+
+// Synthesizes glareEnabled from the stored amount. glareShowVeil is
+// deliberately ignored even though the legacy gate honored it: it is a
+// transient estimate-flash flag, and a stale true must not enable the
+// stage. `requireAmount` restricts synthesis to objects that carry the
+// amount itself — a sparse patch touching only veil/boost must not inject
+// a toggle it cannot infer.
+const migrateGlareKeys = (migrated: RecoveryLegacy, requireAmount: boolean): void => {
+  if (typeof migrated.glareEnabled === 'boolean') {
+    return;
+  }
+  if (requireAmount) {
+    if (migrated.glareAmount === undefined) {
+      return;
+    }
+  } else if (GLARE_LEGACY_KEYS.every((key) => migrated[key] === undefined)) {
+    return;
+  }
+  migrated.glareEnabled = (migrated.glareAmount ?? 0) > 0;
+};
+
+// Pins the old 50 defaults for enabled Low-Light sections before the new
+// INITIALs (Sensitivity 0, zero-start strengths) can reinterpret absent
+// keys. These pins are activation-critical in patches too: an old sparse
+// tool preset carrying only denoiseEnabled: true rendered at 50s on its
+// author's build, and without them it would land inert.
+const migrateLowLightKeys = (migrated: RecoveryLegacy): void => {
+  if (migrated.hotPixelEnabled === true) {
+    migrated.hotPixelThreshold = migrated.hotPixelThreshold ?? 50;
+  }
+  if (migrated.denoiseEnabled === true) {
+    migrated.denoiseStrength = migrated.denoiseStrength ?? 50;
+    migrated.denoiseDetail = migrated.denoiseDetail ?? 50;
+    migrated.denoiseChroma = migrated.denoiseChroma ?? 50;
+  }
+};
+
+// Migrates the recovery keys of a FULL adjustments record (a loaded
+// sidecar) to the current schema, on a copy. In a full record, absence
+// within a present subsystem is unambiguous legacy, so toggles are
+// synthesized and the legacy defaults pinned. Twin of
+// migrate_legacy_recovery_state in src-tauri/src/rapid_processing.rs -
+// change both or neither.
+export const migrateLegacyRecoveryState = <T extends RecoveryLegacy>(adjustments: T): T => {
+  const migrated: RecoveryLegacy = { ...adjustments };
+  migrateRapidKeys(migrated, true);
+  migrateGlareKeys(migrated, false);
+  migrateLowLightKeys(migrated);
+  return migrated as T;
+};
+
+// Migrates a SPARSE patch (a preset's captured adjustments) on a copy:
+// synthesis preserves the patch's activation intent under the new schema
+// (toggles, activation-critical pins) but never pins taste values or
+// injects toggles into subsystems the patch does not decide — the spread
+// into live state must not disable or retune what the author never
+// touched.
+export const migrateRecoveryPatch = <T extends RecoveryLegacy>(patch: T): T => {
+  const migrated: RecoveryLegacy = { ...patch };
+  migrateRapidKeys(migrated, false);
+  migrateGlareKeys(migrated, true);
+  migrateLowLightKeys(migrated);
   return migrated as T;
 };
 
@@ -743,37 +894,43 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     subMasks: normalizeSubMasks(patch.subMasks),
   }));
 
-  // The spread below must carry the migrated rapid keys, and the rapid
-  // ??-fills must read the migrated object too: an explicit-false legacy
-  // sidecar's stored kernels would otherwise ride back in through a fill
-  // reading the raw object, and its rapidEnabled would veto live edits on
-  // every render (the backend honors explicit false).
-  const migratedRapid = migrateLegacyRapidKeys(loadedAdjustments);
+  // The spread below must carry the migrated recovery keys, and every
+  // recovery ??-fill must read the migrated object too: an explicit-false
+  // legacy sidecar's stored kernels would otherwise ride back in through a
+  // fill reading the raw object (and its rapidEnabled would veto live
+  // edits on every render), while a legacy record's absent Low-Light
+  // values would fill from the new INITIALs instead of the migration's
+  // legacy pins, silently weakening its render.
+  const migratedRecovery = migrateLegacyRecoveryState(loadedAdjustments);
 
   return {
     ...INITIAL_ADJUSTMENTS,
-    ...migratedRapid,
+    ...migratedRecovery,
     flareAmount: loadedAdjustments.flareAmount ?? INITIAL_ADJUSTMENTS.flareAmount,
     glowAmount: loadedAdjustments.glowAmount ?? INITIAL_ADJUSTMENTS.glowAmount,
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
-    hotPixelEnabled: loadedAdjustments.hotPixelEnabled ?? INITIAL_ADJUSTMENTS.hotPixelEnabled,
-    hotPixelThreshold: loadedAdjustments.hotPixelThreshold ?? INITIAL_ADJUSTMENTS.hotPixelThreshold,
-    denoiseEnabled: loadedAdjustments.denoiseEnabled ?? INITIAL_ADJUSTMENTS.denoiseEnabled,
-    denoiseStrength: loadedAdjustments.denoiseStrength ?? INITIAL_ADJUSTMENTS.denoiseStrength,
-    denoiseDetail: loadedAdjustments.denoiseDetail ?? INITIAL_ADJUSTMENTS.denoiseDetail,
-    denoiseChroma: loadedAdjustments.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
-    rapidBlurType: migratedRapid.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
-    rapidLength: migratedRapid.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
-    rapidAngle: migratedRapid.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
-    rapidRadius: migratedRapid.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
-    rapidSigma: migratedRapid.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
-    rapidLambda: migratedRapid.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
-    rapidHardness: migratedRapid.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
-    rapidStrength: migratedRapid.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
-    glareAmount: loadedAdjustments.glareAmount ?? INITIAL_ADJUSTMENTS.glareAmount,
-    glareVeilSize: loadedAdjustments.glareVeilSize ?? INITIAL_ADJUSTMENTS.glareVeilSize,
-    glareMaxBoost: loadedAdjustments.glareMaxBoost ?? INITIAL_ADJUSTMENTS.glareMaxBoost,
-    glareShowVeil: loadedAdjustments.glareShowVeil ?? INITIAL_ADJUSTMENTS.glareShowVeil,
+    hotPixelEnabled: migratedRecovery.hotPixelEnabled ?? INITIAL_ADJUSTMENTS.hotPixelEnabled,
+    hotPixelThreshold: migratedRecovery.hotPixelThreshold ?? INITIAL_ADJUSTMENTS.hotPixelThreshold,
+    denoiseEnabled: migratedRecovery.denoiseEnabled ?? INITIAL_ADJUSTMENTS.denoiseEnabled,
+    denoiseStrength: migratedRecovery.denoiseStrength ?? INITIAL_ADJUSTMENTS.denoiseStrength,
+    denoiseDetail: migratedRecovery.denoiseDetail ?? INITIAL_ADJUSTMENTS.denoiseDetail,
+    denoiseChroma: migratedRecovery.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
+    rapidMotionEnabled: migratedRecovery.rapidMotionEnabled ?? INITIAL_ADJUSTMENTS.rapidMotionEnabled,
+    rapidDefocusEnabled: migratedRecovery.rapidDefocusEnabled ?? INITIAL_ADJUSTMENTS.rapidDefocusEnabled,
+    rapidGaussianEnabled: migratedRecovery.rapidGaussianEnabled ?? INITIAL_ADJUSTMENTS.rapidGaussianEnabled,
+    rapidBlurType: migratedRecovery.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
+    rapidLength: migratedRecovery.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
+    rapidAngle: migratedRecovery.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
+    rapidRadius: migratedRecovery.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
+    rapidSigma: migratedRecovery.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
+    rapidLambda: migratedRecovery.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
+    rapidHardness: migratedRecovery.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
+    rapidStrength: migratedRecovery.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
+    glareEnabled: migratedRecovery.glareEnabled ?? INITIAL_ADJUSTMENTS.glareEnabled,
+    glareAmount: migratedRecovery.glareAmount ?? INITIAL_ADJUSTMENTS.glareAmount,
+    glareVeilSize: migratedRecovery.glareVeilSize ?? INITIAL_ADJUSTMENTS.glareVeilSize,
+    glareMaxBoost: migratedRecovery.glareMaxBoost ?? INITIAL_ADJUSTMENTS.glareMaxBoost,
+    glareShowVeil: migratedRecovery.glareShowVeil ?? INITIAL_ADJUSTMENTS.glareShowVeil,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,
     lensBlurShape: loadedAdjustments.lensBlurShape ?? INITIAL_ADJUSTMENTS.lensBlurShape,

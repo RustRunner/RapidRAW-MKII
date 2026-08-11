@@ -126,6 +126,28 @@ pub fn all_available_adjustments() -> HashSet<String> {
         "glowAmount",
         "halationAmount",
         "flareAmount",
+        "rapidMotionEnabled",
+        "rapidDefocusEnabled",
+        "rapidGaussianEnabled",
+        "rapidBlurType",
+        "rapidLength",
+        "rapidAngle",
+        "rapidRadius",
+        "rapidSigma",
+        "rapidLambda",
+        "rapidHardness",
+        "rapidStrength",
+        "glareEnabled",
+        "glareAmount",
+        "glareVeilSize",
+        "glareMaxBoost",
+        "glareShowVeil",
+        "hotPixelEnabled",
+        "hotPixelThreshold",
+        "denoiseEnabled",
+        "denoiseStrength",
+        "denoiseDetail",
+        "denoiseChroma",
         "crop",
         "aspectRatio",
         "rotation",
@@ -620,33 +642,12 @@ pub fn load_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
         settings_modified = true;
     }
 
-    let is_first_migration = settings.copy_paste_settings.known_adjustments.is_empty();
-
-    if is_first_migration {
-        settings.copy_paste_settings.included_adjustments = default_included;
-        settings.copy_paste_settings.known_adjustments = all_current_keys.clone();
+    if migrate_included_adjustments(
+        &mut settings.copy_paste_settings,
+        &all_current_keys,
+        default_included,
+    ) {
         settings_modified = true;
-    } else {
-        let new_features: Vec<String> = all_current_keys
-            .difference(&settings.copy_paste_settings.known_adjustments)
-            .cloned()
-            .collect();
-
-        if !new_features.is_empty() {
-            for feature in new_features {
-                if default_included.contains(&feature) {
-                    settings
-                        .copy_paste_settings
-                        .included_adjustments
-                        .insert(feature.clone());
-                }
-                settings
-                    .copy_paste_settings
-                    .known_adjustments
-                    .insert(feature);
-            }
-            settings_modified = true;
-        }
     }
 
     if settings_modified && let Ok(json_string) = serde_json::to_string_pretty(&settings) {
@@ -654,6 +655,96 @@ pub fn load_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
     }
 
     Ok(settings)
+}
+
+/// Brings a persisted copy/paste include list up to date with the current
+/// adjustment registry: a first-run settings file adopts the defaults
+/// wholesale, while an existing one gains exactly the keys that are new to
+/// this build (into the include list when default-included, and always into
+/// the known set, so a user's deliberate exclusions survive). Returns true
+/// when anything changed.
+fn migrate_included_adjustments(
+    copy_paste: &mut CopyPasteSettings,
+    all_current_keys: &HashSet<String>,
+    default_included: HashSet<String>,
+) -> bool {
+    if copy_paste.known_adjustments.is_empty() {
+        copy_paste.included_adjustments = default_included;
+        copy_paste.known_adjustments = all_current_keys.clone();
+        return true;
+    }
+    let new_features: Vec<String> = all_current_keys
+        .difference(&copy_paste.known_adjustments)
+        .cloned()
+        .collect();
+    if new_features.is_empty() {
+        return false;
+    }
+    for feature in new_features {
+        if default_included.contains(&feature) {
+            copy_paste.included_adjustments.insert(feature.clone());
+        }
+        copy_paste.known_adjustments.insert(feature);
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An install predating the recovery keys must gain them in both the
+    /// include list and the known set on load — copy/paste and auto-sync
+    /// filter by the persisted include list, so without this migration the
+    /// recovery subsystems would silently never paste.
+    #[test]
+    fn test_settings_migration_adds_recovery_keys() {
+        let recovery_keys = [
+            "rapidMotionEnabled",
+            "rapidDefocusEnabled",
+            "rapidGaussianEnabled",
+            "rapidLength",
+            "glareEnabled",
+            "glareAmount",
+            "hotPixelEnabled",
+            "denoiseStrength",
+        ];
+        let mut copy_paste = CopyPasteSettings::default();
+        for key in recovery_keys {
+            copy_paste.known_adjustments.remove(key);
+            copy_paste.included_adjustments.remove(key);
+        }
+        let changed = migrate_included_adjustments(
+            &mut copy_paste,
+            &all_available_adjustments(),
+            default_included_adjustments(),
+        );
+        assert!(changed);
+        for key in recovery_keys {
+            assert!(copy_paste.known_adjustments.contains(key), "{key} missing from known set");
+            assert!(
+                copy_paste.included_adjustments.contains(key),
+                "{key} missing from include list"
+            );
+        }
+
+        // A second load is a no-op.
+        assert!(!migrate_included_adjustments(
+            &mut copy_paste,
+            &all_available_adjustments(),
+            default_included_adjustments(),
+        ));
+
+        // A user's deliberate exclusion of an already-known key survives.
+        let mut tuned = CopyPasteSettings::default();
+        tuned.included_adjustments.remove("exposure");
+        assert!(!migrate_included_adjustments(
+            &mut tuned,
+            &all_available_adjustments(),
+            default_included_adjustments(),
+        ));
+        assert!(!tuned.included_adjustments.contains("exposure"));
+    }
 }
 
 #[tauri::command]

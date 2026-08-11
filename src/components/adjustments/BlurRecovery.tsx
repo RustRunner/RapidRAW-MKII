@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { useShallow } from 'zustand/react/shallow';
 
 import Slider from '../ui/Slider';
+import Switch from '../ui/Switch';
 import { Adjustments, BlurRecoveryAdjustment } from '../../utils/adjustments';
 import { Invokes } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -57,6 +58,12 @@ const lambdaToSuppression = (lambda: number) => {
   return (100 * Math.log10(clamped / LAMBDA_MIN)) / Math.log10(LAMBDA_MAX / LAMBDA_MIN);
 };
 
+const MODE_TOGGLE_KEYS = {
+  motion: BlurRecoveryAdjustment.RapidMotionEnabled,
+  defocus: BlurRecoveryAdjustment.RapidDefocusEnabled,
+  gaussian: BlurRecoveryAdjustment.RapidGaussianEnabled,
+} as const;
+
 const estimateButtonClass = (busy: boolean) =>
   `w-full py-2 px-4 rounded font-medium text-sm transition-colors border-2 ${
     busy
@@ -85,42 +92,36 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
     [],
   );
 
-  // The stage is active iff the displayed mode's kernel and the strength
-  // are positive - there is no enable switch. A clean image's tab is pure
-  // browsing state (last-used mode); an image with blur edits opens on its
-  // own saved mode.
-  const hasBlurEdits =
-    adjustments.rapidLength > 0 || adjustments.rapidRadius > 0 || adjustments.rapidSigma > 0;
+  // Modes are independent: any subset may be enabled, and the enabled
+  // modes compose into one compound kernel backend-side. A mode
+  // contributes iff its switch is on AND its kernel is positive
+  // (zero-start sliders make toggle-on inert until dialed in). The
+  // displayed tab is pure browsing state - the switches carry activation,
+  // so tab clicks never write adjustments.
+  const contributes: Record<BlurType, boolean> = {
+    motion: adjustments.rapidMotionEnabled && adjustments.rapidLength > 0,
+    defocus: adjustments.rapidDefocusEnabled && adjustments.rapidRadius > 0,
+    gaussian: adjustments.rapidGaussianEnabled && adjustments.rapidSigma > 0,
+  };
   // lastBlurMode is user-editable JSON on disk - whitelist it so a
   // malformed value cannot leave the panel with no tab and no body.
   const storedMode = appSettings?.lastBlurMode;
-  const lastMode: BlurType =
+  const displayedMode: BlurType =
     storedMode && (BLUR_TYPES as readonly string[]).includes(storedMode) ? storedMode : 'motion';
-  const displayedMode: BlurType = hasBlurEdits ? adjustments.rapidBlurType : lastMode;
 
   const handleTabClick = (type: BlurType) => {
-    // On a clean image a tab click is browsing: writing rapidBlurType would
-    // create a history entry and debounce-save a sidecar for an untouched
-    // file. On an edited image the click is an edit (the previous mode's
-    // recovery turns off under the kernel gate) and must be undoable.
-    if (hasBlurEdits) {
-      setAdjustments((prev: Adjustments) => ({ ...prev, [BlurRecoveryAdjustment.RapidBlurType]: type }));
-    }
     if (appSettings) {
       handleSettingsChange({ ...appSettings, lastBlurMode: type });
     }
   };
 
-  // Every mutating handler stamps the displayed mode so the sidecar's
-  // rapidBlurType always matches the kernel that was set - on a clean
-  // image the displayed tab is only browsing state until an edit lands.
   const handleValueChange = (key: BlurRecoveryAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
-    setAdjustments((prev: Adjustments) => ({
-      ...prev,
-      [key]: numericValue,
-      [BlurRecoveryAdjustment.RapidBlurType]: displayedMode,
-    }));
+    setAdjustments((prev: Adjustments) => ({ ...prev, [key]: numericValue }));
+  };
+
+  const handleToggle = (type: BlurType, checked: boolean) => {
+    setAdjustments((prev: Adjustments) => ({ ...prev, [MODE_TOGGLE_KEYS[type]]: checked }));
   };
 
   // An estimate takes seconds on big frames; if the user navigates to
@@ -147,13 +148,14 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       const angle = Math.min(180, Math.max(0, Math.round(estimate.angle)));
       const hardness = Math.min(100, Math.max(0, Math.round(100 * estimate.hardness)));
       const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
+      // A landed estimate must never leave its own mode off.
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidLength]: length,
         [BlurRecoveryAdjustment.RapidAngle]: angle,
         [BlurRecoveryAdjustment.RapidHardness]: hardness,
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
-        [BlurRecoveryAdjustment.RapidBlurType]: 'motion',
+        [BlurRecoveryAdjustment.RapidMotionEnabled]: true,
       }));
       // Flash the angle overlay so the detected direction is visible.
       setEditor({ isBlurAngleAdjusting: true, blurOverlayAngle: angle });
@@ -184,15 +186,15 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         return;
       }
       // Snap to the slider's 0.5 step; the floor of 1 keeps a confident
-      // estimate from writing 0 and leaving the stage off. No hardness
-      // write - the parse forces the raw jinc for defocus.
+      // estimate from writing 0 and leaving the mode inert. No hardness
+      // write - the shader pins the raw jinc for the defocus component.
       const radius = Math.min(20, Math.max(1, Math.round(estimate.radius * 2) / 2));
       const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidRadius]: radius,
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
-        [BlurRecoveryAdjustment.RapidBlurType]: 'defocus',
+        [BlurRecoveryAdjustment.RapidDefocusEnabled]: true,
       }));
     } catch (err) {
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedDefocus')} (${err})`);
@@ -224,7 +226,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         ...prev,
         [BlurRecoveryAdjustment.RapidSigma]: sigma,
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
-        [BlurRecoveryAdjustment.RapidBlurType]: 'gaussian',
+        [BlurRecoveryAdjustment.RapidGaussianEnabled]: true,
       }));
     } catch (err) {
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedGaussian')} (${err})`);
@@ -239,7 +241,6 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
     setAdjustments((prev: Adjustments) => ({
       ...prev,
       [BlurRecoveryAdjustment.RapidAngle]: numericValue,
-      [BlurRecoveryAdjustment.RapidBlurType]: displayedMode,
     }));
   };
 
@@ -256,6 +257,18 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
     </button>
   );
 
+  const modeSwitchRow = (type: BlurType) => (
+    <div className="flex items-center justify-between">
+      <p className="text-sm font-medium text-text-primary">{t('editor.adjustments.blurRecovery.enable')}</p>
+      <Switch
+        id={`blur-${type}-toggle`}
+        label=""
+        checked={!!adjustments[MODE_TOGGLE_KEYS[type]]}
+        onChange={(checked: boolean) => handleToggle(type, checked)}
+      />
+    </div>
+  );
+
   return (
     <div>
       <div className="mb-4 p-2 bg-bg-secondary rounded-md flex items-start gap-2">
@@ -269,7 +282,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
             {BLUR_TYPES.map((type) => (
               <button
                 key={type}
-                className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                className={`relative flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
                   displayedMode === type
                     ? 'bg-primary text-white'
                     : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
@@ -277,113 +290,133 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                 onClick={() => handleTabClick(type)}
               >
                 {t(`editor.adjustments.blurRecovery.${type}`)}
+                {contributes[type] && (
+                  <span
+                    className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${
+                      displayedMode === type ? 'bg-white' : 'bg-primary'
+                    }`}
+                  />
+                )}
               </button>
             ))}
           </div>
 
           {displayedMode === 'motion' && (
             <>
-              {estimateButton(handleEstimateMotion)}
-              <div className="flex gap-1">
-                {MOTION_LENGTH_PRESETS.map((preset) => (
-                  <button
-                    key={preset}
-                    className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
-                      adjustments.rapidLength === preset
-                        ? 'bg-primary text-white'
-                        : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
-                    }`}
-                    onClick={() =>
-                      setAdjustments((prev: Adjustments) => ({
-                        ...prev,
-                        [BlurRecoveryAdjustment.RapidLength]: preset,
-                        [BlurRecoveryAdjustment.RapidBlurType]: displayedMode,
-                      }))
-                    }
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <Slider
-                label={t('editor.adjustments.blurRecovery.length')}
-                max={200}
-                min={0}
-                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidLength, e)}
-                step={1}
-                value={adjustments.rapidLength}
-                onDragStateChange={onDragStateChange}
-              />
-              <Slider
-                label={t('editor.adjustments.blurRecovery.angle')}
-                max={180}
-                min={0}
-                onChange={handleAngleChange}
-                step={1}
-                value={adjustments.rapidAngle}
-                onDragStateChange={handleAngleDragState}
-              />
-              <Slider
-                label={t('editor.adjustments.blurRecovery.hardness')}
-                max={100}
-                min={0}
-                defaultValue={100}
-                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidHardness, e)}
-                step={1}
-                value={adjustments.rapidHardness}
-                onDragStateChange={onDragStateChange}
-              />
+              {modeSwitchRow('motion')}
+              {adjustments.rapidMotionEnabled && (
+                <div className="space-y-2 pt-2 border-t border-bg-secondary">
+                  {estimateButton(handleEstimateMotion)}
+                  <div className="flex gap-1">
+                    {MOTION_LENGTH_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                          adjustments.rapidLength === preset
+                            ? 'bg-primary text-white'
+                            : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
+                        }`}
+                        onClick={() =>
+                          setAdjustments((prev: Adjustments) => ({
+                            ...prev,
+                            [BlurRecoveryAdjustment.RapidLength]: preset,
+                          }))
+                        }
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                  <Slider
+                    label={t('editor.adjustments.blurRecovery.length')}
+                    max={200}
+                    min={0}
+                    onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidLength, e)}
+                    step={1}
+                    value={adjustments.rapidLength}
+                    onDragStateChange={onDragStateChange}
+                  />
+                  <Slider
+                    label={t('editor.adjustments.blurRecovery.angle')}
+                    max={180}
+                    min={0}
+                    onChange={handleAngleChange}
+                    step={1}
+                    value={adjustments.rapidAngle}
+                    onDragStateChange={handleAngleDragState}
+                  />
+                  <Slider
+                    label={t('editor.adjustments.blurRecovery.hardness')}
+                    max={100}
+                    min={0}
+                    defaultValue={50}
+                    onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidHardness, e)}
+                    step={1}
+                    value={adjustments.rapidHardness}
+                    onDragStateChange={onDragStateChange}
+                  />
+                </div>
+              )}
             </>
           )}
 
           {displayedMode === 'defocus' && (
             <>
-              {estimateButton(handleEstimateDefocus)}
-              <div className="flex gap-1">
-                {DEFOCUS_RADIUS_PRESETS.map((preset) => (
-                  <button
-                    key={preset}
-                    className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
-                      adjustments.rapidRadius === preset
-                        ? 'bg-primary text-white'
-                        : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
-                    }`}
-                    onClick={() =>
-                      setAdjustments((prev: Adjustments) => ({
-                        ...prev,
-                        [BlurRecoveryAdjustment.RapidRadius]: preset,
-                        [BlurRecoveryAdjustment.RapidBlurType]: displayedMode,
-                      }))
-                    }
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <Slider
-                label={t('editor.adjustments.blurRecovery.radius')}
-                max={20}
-                min={0}
-                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
-                step={0.5}
-                value={adjustments.rapidRadius}
-                onDragStateChange={onDragStateChange}
-              />
+              {modeSwitchRow('defocus')}
+              {adjustments.rapidDefocusEnabled && (
+                <div className="space-y-2 pt-2 border-t border-bg-secondary">
+                  {estimateButton(handleEstimateDefocus)}
+                  <div className="flex gap-1">
+                    {DEFOCUS_RADIUS_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        className={`flex-1 py-1 px-2 rounded text-xs font-medium transition-colors ${
+                          adjustments.rapidRadius === preset
+                            ? 'bg-primary text-white'
+                            : 'bg-bg-secondary text-text-secondary hover:text-text-primary'
+                        }`}
+                        onClick={() =>
+                          setAdjustments((prev: Adjustments) => ({
+                            ...prev,
+                            [BlurRecoveryAdjustment.RapidRadius]: preset,
+                          }))
+                        }
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                  <Slider
+                    label={t('editor.adjustments.blurRecovery.radius')}
+                    max={20}
+                    min={0}
+                    onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
+                    step={0.5}
+                    value={adjustments.rapidRadius}
+                    onDragStateChange={onDragStateChange}
+                  />
+                </div>
+              )}
             </>
           )}
 
           {displayedMode === 'gaussian' && (
             <>
-              {estimateButton(handleEstimateGaussian)}
-              <Slider
-                label={t('editor.adjustments.blurRecovery.sigma')}
-                max={10}
-                min={0}
-                onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidSigma, e)}
-                step={0.1}
-                value={adjustments.rapidSigma}
-                onDragStateChange={onDragStateChange}
-              />
+              {modeSwitchRow('gaussian')}
+              {adjustments.rapidGaussianEnabled && (
+                <div className="space-y-2 pt-2 border-t border-bg-secondary">
+                  {estimateButton(handleEstimateGaussian)}
+                  <Slider
+                    label={t('editor.adjustments.blurRecovery.sigma')}
+                    max={10}
+                    min={0}
+                    onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidSigma, e)}
+                    step={0.1}
+                    value={adjustments.rapidSigma}
+                    onDragStateChange={onDragStateChange}
+                  />
+                </div>
+              )}
             </>
           )}
 
@@ -397,7 +430,6 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
               setAdjustments((prev: Adjustments) => ({
                 ...prev,
                 [BlurRecoveryAdjustment.RapidLambda]: suppressionToLambda(s),
-                [BlurRecoveryAdjustment.RapidBlurType]: displayedMode,
               }));
             }}
             step={1}
@@ -408,7 +440,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
             label={t('editor.adjustments.blurRecovery.strength')}
             max={100}
             min={0}
-            defaultValue={100}
+            defaultValue={50}
             onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidStrength, e)}
             step={1}
             value={adjustments.rapidStrength}

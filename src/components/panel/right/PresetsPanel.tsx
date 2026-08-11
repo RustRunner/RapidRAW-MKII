@@ -44,7 +44,7 @@ import {
   Adjustments,
   INITIAL_ADJUSTMENTS,
   ADJUSTMENT_GROUPS,
-  migrateLegacyRapidKeys,
+  migrateRecoveryPatch,
 } from '../../../utils/adjustments';
 import { Invokes, OPTION_SEPARATOR, Panel, Preset, SelectedImage } from '../../ui/AppProperties';
 import { useEditorStore } from '../../../store/useEditorStore';
@@ -832,14 +832,14 @@ export default function PresetsPanel({}: PresetsPanelProps) {
     // veto blur edits with no switch left to clear it.
     setAdjustments((prevAdjustments: Adjustments) => ({
       ...prevAdjustments,
-      ...migrateLegacyRapidKeys(preset.adjustments),
+      ...migrateRecoveryPatch(preset.adjustments),
     }));
   };
 
   const handleIntensityChange = useCallback(
     (preset: Preset, intensity: number) => {
       setPresetIntensity(intensity);
-      const mixed = mixAdjustments(migrateLegacyRapidKeys(preset.adjustments), intensity);
+      const mixed = mixAdjustments(migrateRecoveryPatch(preset.adjustments), intensity);
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...mixed,

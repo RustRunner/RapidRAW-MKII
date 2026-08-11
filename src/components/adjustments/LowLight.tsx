@@ -85,13 +85,24 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
         </div>
         {adjustments.hotPixelEnabled && (
           <div className="space-y-2 pt-2 border-t border-bg-secondary">
+            {/* The shader's detection threshold is inverted (0 flags every
+                deviating pixel, 100 flags none), so the display shows
+                Sensitivity = 100 - stored: 0 = detect nothing (inert,
+                the backend gates the stage off), 100 = flag everything.
+                Stored sidecar values keep their threshold meaning. */}
             <Slider
-              label={t('editor.adjustments.lowlight.threshold')}
+              label={t('editor.adjustments.lowlight.sensitivity')}
               max={100}
               min={0}
-              onChange={(e: any) => handleValueChange(LowLightAdjustment.HotPixelThreshold, e)}
+              defaultValue={0}
+              onChange={(e: any) =>
+                setAdjustments((prev: Adjustments) => ({
+                  ...prev,
+                  [LowLightAdjustment.HotPixelThreshold]: 100 - parseFloat(e.target.value),
+                }))
+              }
               step={1}
-              value={adjustments.hotPixelThreshold}
+              value={100 - adjustments.hotPixelThreshold}
               onDragStateChange={onDragStateChange}
             />
           </div>
@@ -144,6 +155,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
               label={t('editor.adjustments.lowlight.detail')}
               max={100}
               min={0}
+              defaultValue={50}
               onChange={(e: any) => handleValueChange(LowLightAdjustment.DenoiseDetail, e)}
               step={1}
               value={adjustments.denoiseDetail}
