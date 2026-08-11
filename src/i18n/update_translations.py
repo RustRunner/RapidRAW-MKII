@@ -7,7 +7,7 @@ TRANSLATIONS = {
     "de": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Aktivieren"},
+                "blurRecovery": {"enable": "Aktivieren", "shared": "Gemeinsam"},
                 "glareRecovery": {"enable": "Aktivieren"},
                 "lowlight": {
                     "sensitivity": "Empfindlichkeit",
@@ -19,7 +19,7 @@ TRANSLATIONS = {
     "en": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Enable"},
+                "blurRecovery": {"enable": "Enable", "shared": "Shared"},
                 "glareRecovery": {"enable": "Enable"},
                 "lowlight": {
                     "sensitivity": "Sensitivity",
@@ -31,7 +31,7 @@ TRANSLATIONS = {
     "es": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Activar"},
+                "blurRecovery": {"enable": "Activar", "shared": "Compartidos"},
                 "glareRecovery": {"enable": "Activar"},
                 "lowlight": {
                     "sensitivity": "Sensibilidad",
@@ -43,7 +43,7 @@ TRANSLATIONS = {
     "fr": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Activer"},
+                "blurRecovery": {"enable": "Activer", "shared": "Partagés"},
                 "glareRecovery": {"enable": "Activer"},
                 "lowlight": {
                     "sensitivity": "Sensibilité",
@@ -55,7 +55,7 @@ TRANSLATIONS = {
     "it": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Attiva"},
+                "blurRecovery": {"enable": "Attiva", "shared": "Condivisi"},
                 "glareRecovery": {"enable": "Attiva"},
                 "lowlight": {
                     "sensitivity": "Sensibilità",
@@ -67,7 +67,7 @@ TRANSLATIONS = {
     "ja": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "有効化"},
+                "blurRecovery": {"enable": "有効化", "shared": "共通"},
                 "glareRecovery": {"enable": "有効化"},
                 "lowlight": {
                     "sensitivity": "感度",
@@ -79,7 +79,7 @@ TRANSLATIONS = {
     "ko": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "활성화"},
+                "blurRecovery": {"enable": "활성화", "shared": "공통"},
                 "glareRecovery": {"enable": "활성화"},
                 "lowlight": {
                     "sensitivity": "감도",
@@ -91,7 +91,7 @@ TRANSLATIONS = {
     "pl": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Włącz"},
+                "blurRecovery": {"enable": "Włącz", "shared": "Wspólne"},
                 "glareRecovery": {"enable": "Włącz"},
                 "lowlight": {
                     "sensitivity": "Czułość",
@@ -103,7 +103,7 @@ TRANSLATIONS = {
     "pt": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Ativar"},
+                "blurRecovery": {"enable": "Ativar", "shared": "Compartilhados"},
                 "glareRecovery": {"enable": "Ativar"},
                 "lowlight": {
                     "sensitivity": "Sensibilidade",
@@ -115,7 +115,7 @@ TRANSLATIONS = {
     "ru": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "Включить"},
+                "blurRecovery": {"enable": "Включить", "shared": "Общие"},
                 "glareRecovery": {"enable": "Включить"},
                 "lowlight": {
                     "sensitivity": "Чувствительность",
@@ -127,7 +127,7 @@ TRANSLATIONS = {
     "zh-CN": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "启用"},
+                "blurRecovery": {"enable": "启用", "shared": "共用"},
                 "glareRecovery": {"enable": "启用"},
                 "lowlight": {
                     "sensitivity": "灵敏度",
@@ -139,7 +139,7 @@ TRANSLATIONS = {
     "zh-TW": {
         "editor": {
             "adjustments": {
-                "blurRecovery": {"enable": "啟用"},
+                "blurRecovery": {"enable": "啟用", "shared": "共用"},
                 "glareRecovery": {"enable": "啟用"},
                 "lowlight": {
                     "sensitivity": "靈敏度",

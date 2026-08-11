@@ -325,6 +325,7 @@
         "length": "Blur Length",
         "motion": "Motion",
         "radius": "Blur Radius",
+        "shared": "Partagés",
         "sigma": "Blur Sigma",
         "strength": "Strength"
       },

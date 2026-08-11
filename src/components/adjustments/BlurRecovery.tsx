@@ -422,10 +422,16 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
 
           {/* The shared inversion controls (Artifact suppression, Strength)
               follow the displayed tab's switch: a tab with its mode off
-              shows nothing below the Enable row. They still govern the
-              whole compound set - values persist across tabs. */}
+              shows nothing below the Enable row. They govern the whole
+              compound set - one value across all modes, hence the
+              subheading - and persist across tabs. */}
           {adjustments[MODE_TOGGLE_KEYS[displayedMode]] && (
             <>
+              <div className="pt-2 border-t border-bg-secondary">
+                <p className="text-xs font-medium text-text-secondary">
+                  {t('editor.adjustments.blurRecovery.shared')}
+                </p>
+              </div>
               <Slider
                 label={t('editor.adjustments.blurRecovery.lambda')}
                 max={100}
