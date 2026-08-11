@@ -2085,6 +2085,21 @@ fn get_global_adjustments_from_json(
 
     let glare_amount_slider = js_adjustments["glareAmount"].as_f64().unwrap_or(0.0) as f32;
     let glare_show_veil = js_adjustments["glareShowVeil"].as_bool().unwrap_or(false);
+    // The enable switch vetoes the stage outright; an absent key is a
+    // legacy sidecar, which reproduces the old derived gate exactly
+    // (amount > 0, or the veil preview flag).
+    let glare_toggle = js_adjustments["glareEnabled"].as_bool().unwrap_or(true);
+    let glare_on = glare_toggle && (glare_amount_slider > 0.0 || glare_show_veil);
+
+    // Hot-pixel Sensitivity 0 (stored threshold >= 100) must be truly
+    // inert: the deviation metric is unbounded (a hot pixel on a dark
+    // background scores far past 1.0), so threshold 1.0 alone still
+    // catches flagrant outliers — the stage is forced off instead.
+    let hot_pixel_threshold_stored =
+        js_adjustments["hotPixelThreshold"].as_f64().unwrap_or(50.0) as f32;
+    let hot_pixel_on = js_adjustments["hotPixelEnabled"].as_bool().unwrap_or(false)
+        && hot_pixel_threshold_stored < 100.0;
+    let denoise_on = js_adjustments["denoiseEnabled"].as_bool().unwrap_or(false);
 
     let default_curve = serde_json::json!([{"x": 0.0, "y": 0.0}, {"x": 255.0, "y": 255.0}]);
     let curves_obj = js_adjustments.get("curves").cloned().unwrap_or_default();
@@ -2330,29 +2345,38 @@ fn get_global_adjustments_from_json(
         red_curve_count: red_points.len() as u32,
         green_curve_count: green_points.len() as u32,
         blue_curve_count: blue_points.len() as u32,
-        hot_pixel_enabled: if js_adjustments["hotPixelEnabled"].as_bool().unwrap_or(false)
-            && is_visible("lowlight")
-        {
-            1
+        // Gated-off sections canonicalize their value uniforms: the shader
+        // never reads them then, and is_image_edited byte-compares resolved
+        // uniforms against the empty object — a disabled section's slider
+        // positions must not differ from {}'s resolution, or every sidecar
+        // saved at the new INITIAL values would read as edited.
+        hot_pixel_enabled: if hot_pixel_on && is_visible("lowlight") { 1 } else { 0 },
+        hot_pixel_threshold: if hot_pixel_on {
+            hot_pixel_threshold_stored / 100.0
         } else {
-            0
+            0.0
         },
-        hot_pixel_threshold: js_adjustments["hotPixelThreshold"].as_f64().unwrap_or(50.0) as f32 / 100.0,
-        denoise_enabled: if js_adjustments["denoiseEnabled"].as_bool().unwrap_or(false)
-            && is_visible("lowlight")
-        {
-            1
-        } else {
-            0
-        },
+        denoise_enabled: if denoise_on && is_visible("lowlight") { 1 } else { 0 },
         // Strength/detail/chroma stay 0-100; the shader normalizes internally.
         // Stale denoiseIsoMultiplier keys in old sidecars are deliberately
         // ignored: the ISO-multiplier mechanism was replaced by measured
         // noise estimation, and honoring a stored throttle would silently
         // weaken denoising with no control left to undo it.
-        denoise_strength: js_adjustments["denoiseStrength"].as_f64().unwrap_or(50.0) as f32,
-        denoise_detail: js_adjustments["denoiseDetail"].as_f64().unwrap_or(50.0) as f32,
-        denoise_chroma: js_adjustments["denoiseChroma"].as_f64().unwrap_or(50.0) as f32,
+        denoise_strength: if denoise_on {
+            js_adjustments["denoiseStrength"].as_f64().unwrap_or(50.0) as f32
+        } else {
+            0.0
+        },
+        denoise_detail: if denoise_on {
+            js_adjustments["denoiseDetail"].as_f64().unwrap_or(50.0) as f32
+        } else {
+            0.0
+        },
+        denoise_chroma: if denoise_on {
+            js_adjustments["denoiseChroma"].as_f64().unwrap_or(50.0) as f32
+        } else {
+            0.0
+        },
         _pad_end3: 0.0,
         _pad_end4: 0.0,
 
@@ -2367,24 +2391,28 @@ fn get_global_adjustments_from_json(
         ),
 
         // Raw 0-100 slider values; the physical mappings live in
-        // glare_recovery so the estimator can use their inverses.
-        glare_amount: crate::glare_recovery::map_amount(glare_amount_slider),
-        glare_max_boost: crate::glare_recovery::map_max_boost(
-            js_adjustments["glareMaxBoost"].as_f64().unwrap_or(50.0) as f32,
-        ),
+        // glare_recovery so the estimator can use their inverses. Gated-off
+        // glare canonicalizes to {}'s resolution (see the lowlight note
+        // above): amount 0, the default 50 mappings, veil flag clear.
+        glare_amount: if glare_on {
+            crate::glare_recovery::map_amount(glare_amount_slider)
+        } else {
+            0.0
+        },
+        glare_max_boost: crate::glare_recovery::map_max_boost(if glare_on {
+            js_adjustments["glareMaxBoost"].as_f64().unwrap_or(50.0) as f32
+        } else {
+            50.0
+        }),
         // Overwritten with the thumbnail-derived scalar in the GPU path.
         glare_reexposure: 1.0,
-        glare_veil_size: crate::glare_recovery::map_veil_size(
-            js_adjustments["glareVeilSize"].as_f64().unwrap_or(50.0) as f32,
-        ),
-        glare_show_veil: if glare_show_veil { 1 } else { 0 },
-        // No section enable switch: Amount 0 disables, Show veil previews the
-        // estimate even at Amount 0.
-        glare_enabled: if glare_amount_slider > 0.0 || glare_show_veil {
-            1
+        glare_veil_size: crate::glare_recovery::map_veil_size(if glare_on {
+            js_adjustments["glareVeilSize"].as_f64().unwrap_or(50.0) as f32
         } else {
-            0
-        },
+            50.0
+        }),
+        glare_show_veil: if glare_on && glare_show_veil { 1 } else { 0 },
+        glare_enabled: if glare_on { 1 } else { 0 },
         _pad_glare1: 0.0,
         _pad_glare2: 0.0,
     }
@@ -3495,4 +3523,123 @@ pub fn calculate_auto_adjustments(
     let results = perform_auto_analysis(&original_image);
 
     Ok(auto_results_to_json(&results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn glare_enabled_uniform(adjustments: &serde_json::Value) -> u32 {
+        get_global_adjustments_from_json(adjustments, false, None).glare_enabled
+    }
+
+    /// The glare gate: an absent glareEnabled key is a legacy sidecar and
+    /// reproduces the old derived gate exactly; an explicit toggle vetoes or
+    /// requires activity as usual, and toggle-on with nothing to do stays
+    /// inert.
+    #[test]
+    fn test_glare_gate_matrix() {
+        // Legacy: amount > 0 activates, amount 0 does not.
+        assert_eq!(glare_enabled_uniform(&serde_json::json!({ "glareAmount": 60.0 })), 1);
+        assert_eq!(glare_enabled_uniform(&serde_json::json!({ "glareAmount": 0.0 })), 0);
+        // Legacy: the veil preview flag alone kept the stage on.
+        assert_eq!(
+            glare_enabled_uniform(&serde_json::json!({ "glareAmount": 0.0, "glareShowVeil": true })),
+            1
+        );
+        // Explicit false vetoes even with amount set.
+        assert_eq!(
+            glare_enabled_uniform(
+                &serde_json::json!({ "glareEnabled": false, "glareAmount": 60.0 })
+            ),
+            0
+        );
+        // Explicit true still needs something to do (zero-start Amount).
+        assert_eq!(
+            glare_enabled_uniform(&serde_json::json!({ "glareEnabled": true, "glareAmount": 0.0 })),
+            0
+        );
+        assert_eq!(
+            glare_enabled_uniform(
+                &serde_json::json!({ "glareEnabled": true, "glareAmount": 60.0 })
+            ),
+            1
+        );
+    }
+
+    /// Sensitivity 0 (stored threshold >= 100) forces the hot-pixel stage
+    /// off: the deviation metric is unbounded, so the threshold alone
+    /// cannot make the stage inert.
+    #[test]
+    fn test_hot_pixel_sensitivity_zero_is_off() {
+        let on = serde_json::json!({ "hotPixelEnabled": true, "hotPixelThreshold": 50.0 });
+        assert_eq!(get_global_adjustments_from_json(&on, false, None).hot_pixel_enabled, 1);
+        let inert = serde_json::json!({ "hotPixelEnabled": true, "hotPixelThreshold": 100.0 });
+        assert_eq!(get_global_adjustments_from_json(&inert, false, None).hot_pixel_enabled, 0);
+        // Legacy absent-key fallback (50) keeps rendering.
+        let legacy = serde_json::json!({ "hotPixelEnabled": true });
+        let resolved = get_global_adjustments_from_json(&legacy, false, None);
+        assert_eq!(resolved.hot_pixel_enabled, 1);
+        assert!((resolved.hot_pixel_threshold - 0.5).abs() < 1e-6);
+    }
+
+    /// A sidecar holding the complete new INITIAL state (toggles off,
+    /// zero-start amounts, 50-defaults, Sensitivity 0) must not read as
+    /// edited: gated-off sections canonicalize their value uniforms, so the
+    /// byte-compare against {} sees no difference.
+    #[test]
+    fn test_dense_initial_state_is_unedited() {
+        let initial = serde_json::json!({
+            "rapidMotionEnabled": false,
+            "rapidDefocusEnabled": false,
+            "rapidGaussianEnabled": false,
+            "rapidBlurType": "motion",
+            "rapidLength": 0.0,
+            "rapidAngle": 0.0,
+            "rapidRadius": 0.0,
+            "rapidSigma": 0.0,
+            "rapidLambda": 0.01,
+            "rapidHardness": 50.0,
+            "rapidStrength": 50.0,
+            "glareEnabled": false,
+            "glareAmount": 0.0,
+            "glareVeilSize": 50.0,
+            "glareMaxBoost": 50.0,
+            "glareShowVeil": false,
+            "hotPixelEnabled": false,
+            "hotPixelThreshold": 100.0,
+            "denoiseEnabled": false,
+            "denoiseStrength": 0.0,
+            "denoiseDetail": 50.0,
+            "denoiseChroma": 0.0,
+        });
+        assert!(
+            !is_image_edited(&initial, false, None),
+            "the dense new-INITIAL state must compare clean against {{}}"
+        );
+        // Sanity: the comparison still catches real edits.
+        let mut edited = initial.clone();
+        edited["denoiseEnabled"] = serde_json::json!(true);
+        edited["denoiseStrength"] = serde_json::json!(40.0);
+        assert!(is_image_edited(&edited, false, None));
+        let mut toned = initial.clone();
+        toned["exposure"] = serde_json::json!(0.5);
+        assert!(is_image_edited(&toned, false, None));
+    }
+
+    /// Disabled sections' slider positions no longer count as edits — the
+    /// values are unreachable by the shader, so they are state, not look.
+    #[test]
+    fn test_disabled_section_values_are_not_edits() {
+        let parked = serde_json::json!({
+            "denoiseEnabled": false,
+            "denoiseStrength": 77.0,
+            "hotPixelEnabled": false,
+            "hotPixelThreshold": 20.0,
+            "glareEnabled": false,
+            "glareAmount": 60.0,
+            "glareVeilSize": 80.0,
+        });
+        assert!(!is_image_edited(&parked, false, None));
+    }
 }
