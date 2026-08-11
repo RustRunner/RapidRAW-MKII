@@ -2584,10 +2584,12 @@ pub async fn apply_adjustments_to_paths(
                 new_adjustments = serde_json::json!({});
             }
 
-            // A stored legacy rapidEnabled must not survive the merge: an
-            // explicit false would veto freshly pasted blur values in
-            // thumbnails and exports, and the next open would zero them.
-            crate::rapid_processing::migrate_legacy_rapid_keys(&mut new_adjustments);
+            // Stored legacy recovery state must not survive the merge raw: a
+            // legacy rapidEnabled: false would veto freshly pasted blur
+            // values in thumbnails and exports (and the next open would zero
+            // them), and pre-toggle records need their toggles synthesized
+            // before gen-2 pasted keys land on top.
+            crate::rapid_processing::migrate_legacy_recovery_state(&mut new_adjustments);
 
             if let (Some(new_map), Some(pasted_map)) =
                 (new_adjustments.as_object_mut(), adjustments.as_object())

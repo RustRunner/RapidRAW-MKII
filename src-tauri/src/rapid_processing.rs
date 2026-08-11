@@ -2615,24 +2615,30 @@ fn build_rapid_gpu() -> Option<RapidGpu> {
 }
 
 /// Parses blur-recovery params from the frontend adjustment JSON.
-/// Returns None when the stage would not run: the active mode's kernel
-/// parameter and the strength must both be positive — there is no enable
-/// flag anymore. An explicit legacy `rapidEnabled: false` is still honored
-/// (the "original"/before preview override injects it, and pre-revamp
-/// sidecars saved with the toggle off carry it), and an explicit true
-/// restores the old kernel defaults for keys the sidecar never stored, so
-/// legacy images render exactly as they always did.
+/// A mode contributes iff its enable toggle is on AND its kernel parameter
+/// is positive; the stage runs iff any mode contributes and strength is
+/// positive. Three sidecar generations parse without mutation:
+/// - gen 0 (pre-revamp): explicit `rapidEnabled: false` vetoes everything
+///   (the "original"/before preview override injects it), explicit true
+///   activates the saved `rapidBlurType` mode with the old kernel defaults
+///   for keys the sidecar never stored;
+/// - gen 1 (kernel-gated interim): no toggles saved — the saved
+///   `rapidBlurType` mode is on iff its kernel is positive, exactly the
+///   gate that era shipped;
+/// - gen 2: explicit per-mode toggles. Detection is OBJECT-WIDE: if any
+///   toggle key is present, absent siblings mean false — falling back
+///   per-key would let a legacy-selected mode reactivate inside partially
+///   keyed gen-2 JSON.
+/// Absent `rapidStrength`/`rapidHardness` fall back to the legacy 100s
+/// (not the new-edit defaults of 50): pre-gen-2 sidecars must keep their
+/// full-strength hard-line renders.
 pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams> {
     let legacy_enabled = adjustments["rapidEnabled"].as_bool();
     if legacy_enabled == Some(false) {
         return None;
     }
     let legacy_on = legacy_enabled == Some(true);
-    let blur_type = match adjustments["rapidBlurType"].as_str().unwrap_or("motion") {
-        "defocus" => BlurType::Defocus,
-        "gaussian" => BlurType::Gaussian,
-        _ => BlurType::Motion,
-    };
+    let legacy_mode = adjustments["rapidBlurType"].as_str().unwrap_or("motion");
     let motion_length = adjustments["rapidLength"]
         .as_f64()
         .unwrap_or(if legacy_on { 10.0 } else { 0.0 }) as f32;
@@ -2644,24 +2650,31 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32;
     let strength = (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
         .clamp(0.0, 1.0);
-    // All-zero parameters are not an inert pass (the FFT round trip
-    // quantizes and gain-shifts the frame, and scaled() floors kernels),
-    // so inactivity must skip the stage entirely.
-    let active_kernel = match blur_type {
-        BlurType::Motion => motion_length,
-        BlurType::Defocus => defocus_radius,
-        BlurType::Gaussian => gaussian_sigma,
+    let gen2 = ["rapidMotionEnabled", "rapidDefocusEnabled", "rapidGaussianEnabled"]
+        .iter()
+        .any(|k| adjustments[*k].is_boolean());
+    let mode_on = |key: &str, name: &str, kernel: f32| {
+        adjustments[key]
+            .as_bool()
+            .unwrap_or(!gen2 && legacy_mode == name && (legacy_on || kernel > 0.0))
     };
-    if active_kernel <= 0.0 || strength <= 0.0 {
+    // An on-but-zero-kernel mode is inert by design, and all-zero parameters
+    // are not an inert pass (the FFT round trip quantizes and gain-shifts
+    // the frame, and scaled() floors kernels), so each member needs a
+    // positive kernel and inactivity must skip the stage entirely.
+    let modes = ModeSet {
+        motion: mode_on("rapidMotionEnabled", "motion", motion_length) && motion_length > 0.0,
+        defocus: mode_on("rapidDefocusEnabled", "defocus", defocus_radius)
+            && defocus_radius > 0.0,
+        gaussian: mode_on("rapidGaussianEnabled", "gaussian", gaussian_sigma)
+            && gaussian_sigma > 0.0,
+    };
+    if !modes.any() || strength <= 0.0 {
         return None;
     }
     Some(RapidParams {
         enabled: true,
-        modes: match blur_type {
-            BlurType::Motion => ModeSet::MOTION,
-            BlurType::Defocus => ModeSet::DEFOCUS,
-            BlurType::Gaussian => ModeSet::GAUSSIAN,
-        },
+        modes,
         motion_length,
         motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
         defocus_radius,
@@ -2673,15 +2686,12 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         adaptive: true,
         // Sidecars saved before this key exist get the hard-line model on
         // their next render: the ghosting it fixes is a defect, not a look.
-        // Defocus ignores the key outright — the slider and estimator only
-        // exist in the motion UI, and a stale motion-fitted value must not
-        // half-floor the defocus OTF after a blur-type switch; the floored
-        // jinc's rings are a defect there, not a look.
-        hardness: if blur_type == BlurType::Defocus {
-            1.0
-        } else {
-            (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0)
-        },
+        // The slider value passes through for every mode — the defocus
+        // component pins its own hardness to the raw jinc inside
+        // psf_generate.wgsl, where one uniform can serve motion's slider
+        // and that pin simultaneously in a compound set.
+        hardness: (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0)
+            .clamp(0.0, 1.0),
         // Always on in production, no UI toggle: the light-centered rings it
         // removes are a defect, not a look.
         clip_guard: true,
@@ -2694,27 +2704,88 @@ pub fn is_rapid_active(adjustments: &serde_json::Value) -> bool {
     parse_rapid_params(adjustments).is_some()
 }
 
-/// Migrates pre-revamp rapid keys in a raw adjustments object, in place.
-/// An explicit `rapidEnabled: false` zeroes the three kernel parameters
-/// (the stage was off; stored kernel values are abandoned state), an
-/// explicit true pins the old kernel defaults into keys the sidecar never
-/// stored (so the render survives the flag's removal), and the flag itself
-/// is always removed. Twin of `migrateLegacyRapidKeys` in
-/// src/utils/adjustments.ts — change both or neither. Used where the
+/// Migrates the recovery keys of a FULL adjustments record (a sidecar's
+/// complete JSON) to the current schema, in place. In a full record,
+/// absence within a present subsystem is unambiguous legacy, so this
+/// synthesizes the per-mode toggles and pins the legacy defaults the new
+/// INITIAL values no longer provide. Every arm is presence-guarded: a
+/// record that never touched a subsystem comes out untouched (a
+/// curves-only object gains nothing). Twin of `migrateLegacyRecoveryState`
+/// in src/utils/adjustments.ts — change both or neither. Used where the
 /// backend merges partial adjustments into raw sidecar JSON (batch paste);
-/// render paths instead keep honoring the flag via `parse_rapid_params`.
-pub fn migrate_legacy_rapid_keys(adjustments: &mut serde_json::Value) {
+/// render paths instead keep honoring legacy keys via `parse_rapid_params`.
+pub fn migrate_legacy_recovery_state(adjustments: &mut serde_json::Value) {
+    migrate_rapid_state(adjustments);
+    migrate_glare_state(adjustments);
+    migrate_lowlight_state(adjustments);
+}
+
+fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
+    const TOGGLES: [&str; 3] = [
+        "rapidMotionEnabled",
+        "rapidDefocusEnabled",
+        "rapidGaussianEnabled",
+    ];
+    // Any toggle present means the record is already current — only a stray
+    // hand-edited rapidEnabled needs cleaning up.
+    if TOGGLES.iter().any(|k| adjustments[*k].is_boolean()) {
+        if let Some(obj) = adjustments.as_object_mut() {
+            obj.remove("rapidEnabled");
+        }
+        return;
+    }
+    const LEGACY_KEYS: [&str; 9] = [
+        "rapidEnabled",
+        "rapidBlurType",
+        "rapidLength",
+        "rapidAngle",
+        "rapidRadius",
+        "rapidSigma",
+        "rapidLambda",
+        "rapidHardness",
+        "rapidStrength",
+    ];
+    if LEGACY_KEYS.iter().all(|k| adjustments[*k].is_null()) {
+        return;
+    }
     let legacy_enabled = adjustments["rapidEnabled"].as_bool();
+    let legacy_mode = adjustments["rapidBlurType"]
+        .as_str()
+        .unwrap_or("motion")
+        .to_string();
+    let kernel_len = adjustments["rapidLength"].as_f64().unwrap_or(0.0);
+    let kernel_rad = adjustments["rapidRadius"].as_f64().unwrap_or(0.0);
+    let kernel_sig = adjustments["rapidSigma"].as_f64().unwrap_or(0.0);
     let Some(obj) = adjustments.as_object_mut() else {
         return;
     };
+    let mut set_toggles = |motion: bool, defocus: bool, gaussian: bool| {
+        obj.insert("rapidMotionEnabled".to_string(), serde_json::json!(motion));
+        obj.insert("rapidDefocusEnabled".to_string(), serde_json::json!(defocus));
+        obj.insert(
+            "rapidGaussianEnabled".to_string(),
+            serde_json::json!(gaussian),
+        );
+    };
     match legacy_enabled {
+        // Explicit false: the stage was off; stored kernel values are
+        // abandoned state, zeroed as before, and every toggle comes out
+        // explicit false.
         Some(false) => {
+            set_toggles(false, false, false);
             for key in ["rapidLength", "rapidRadius", "rapidSigma"] {
                 obj.insert(key.to_string(), serde_json::json!(0.0));
             }
         }
+        // Explicit true: the saved mode was active; pin the old kernel
+        // defaults into keys the sidecar never stored so the render
+        // survives the flag's removal.
         Some(true) => {
+            set_toggles(
+                legacy_mode == "motion",
+                legacy_mode == "defocus",
+                legacy_mode == "gaussian",
+            );
             for (key, default) in [
                 ("rapidLength", 10.0),
                 ("rapidRadius", 5.0),
@@ -2723,9 +2794,67 @@ pub fn migrate_legacy_rapid_keys(adjustments: &mut serde_json::Value) {
                 obj.entry(key).or_insert_with(|| serde_json::json!(default));
             }
         }
-        None => {}
+        // Gen 1 (kernel-gated interim): only the saved mode could be
+        // active, iff its kernel was positive.
+        None => {
+            set_toggles(
+                legacy_mode == "motion" && kernel_len > 0.0,
+                legacy_mode == "defocus" && kernel_rad > 0.0,
+                legacy_mode == "gaussian" && kernel_sig > 0.0,
+            );
+        }
     }
+    // Pin the legacy taste defaults: pre-gen-2 records rendered absent
+    // strength/hardness at 100, and the new INITIALs (50) must not
+    // reinterpret them.
+    obj.entry("rapidStrength")
+        .or_insert_with(|| serde_json::json!(100.0));
+    obj.entry("rapidHardness")
+        .or_insert_with(|| serde_json::json!(100.0));
     obj.remove("rapidEnabled");
+}
+
+fn migrate_glare_state(adjustments: &mut serde_json::Value) {
+    if adjustments["glareEnabled"].is_boolean() {
+        return;
+    }
+    const GLARE_KEYS: [&str; 4] = [
+        "glareAmount",
+        "glareVeilSize",
+        "glareMaxBoost",
+        "glareShowVeil",
+    ];
+    if GLARE_KEYS.iter().all(|k| adjustments[*k].is_null()) {
+        return;
+    }
+    // Deliberate exception: glareShowVeil is ignored even though the legacy
+    // gate honored it — it is a transient estimate-flash flag, and a stale
+    // true must not enable the stage.
+    let active = adjustments["glareAmount"].as_f64().unwrap_or(0.0) > 0.0;
+    if let Some(obj) = adjustments.as_object_mut() {
+        obj.insert("glareEnabled".to_string(), serde_json::json!(active));
+    }
+}
+
+fn migrate_lowlight_state(adjustments: &mut serde_json::Value) {
+    // Pin the old defaults for sections that were enabled before the
+    // INITIAL changes (threshold 50 -> 100, strengths 50 -> 0) can
+    // reinterpret absent keys. Guarded on the enabled flags themselves:
+    // a record that never touched Low-Light comes out untouched.
+    let hot_pixels = adjustments["hotPixelEnabled"].as_bool() == Some(true);
+    let denoise = adjustments["denoiseEnabled"].as_bool() == Some(true);
+    let Some(obj) = adjustments.as_object_mut() else {
+        return;
+    };
+    if hot_pixels {
+        obj.entry("hotPixelThreshold")
+            .or_insert_with(|| serde_json::json!(50.0));
+    }
+    if denoise {
+        for key in ["denoiseStrength", "denoiseDetail", "denoiseChroma"] {
+            obj.entry(key).or_insert_with(|| serde_json::json!(50.0));
+        }
+    }
 }
 
 /// Full-image FFT deconvolution pre-pass. Runs before geometry transforms so
@@ -5858,13 +5987,13 @@ mod tests {
         assert!((params.lambda - 0.076).abs() < 1e-6, "lambda must stay raw");
     }
 
-    /// The hardness slider and estimator only exist in the motion UI, so a
-    /// motion-fitted value left in the sidecar must not half-floor the
-    /// defocus OTF after a blur-type switch: defocus always gets the raw
-    /// jinc, motion keeps the parsed value. The parse must also hardcode
-    /// the clip guard on (no UI toggle).
+    /// The hardness slider passes through parse unchanged for every mode:
+    /// the defocus component pins its own raw jinc inside psf_generate.wgsl
+    /// (guarded by test_gpu_defocus_hardness_invariance), so parse must not
+    /// mask the slider — in a compound set the same uniform serves motion.
+    /// The parse must also hardcode the clip guard on (no UI toggle).
     #[test]
-    fn test_parse_defocus_forces_hard_otf() {
+    fn test_parse_hardness_slider_passthrough() {
         let mut adjustments = serde_json::json!({
             "rapidEnabled": true,
             "rapidBlurType": "defocus",
@@ -5874,7 +6003,11 @@ mod tests {
             "rapidHardness": 40.0,
         });
         let params = parse_rapid_params(&adjustments).expect("params should parse");
-        assert_eq!(params.hardness, 1.0, "stale motion hardness leaked into the defocus OTF");
+        assert!(
+            (params.hardness - 0.4).abs() < 1e-6,
+            "defocus must pass the slider through (the pin lives in the shader), got {}",
+            params.hardness
+        );
         assert!(params.clip_guard, "clip guard must be always-on in production");
 
         adjustments["rapidBlurType"] = serde_json::json!("motion");
@@ -5884,6 +6017,82 @@ mod tests {
             "motion must keep the parsed hardness, got {}",
             params.hardness
         );
+    }
+
+    /// Explicit gen-2 toggles all off veto the stage even with kernels set:
+    /// toggling a mode off preserves its kernel values in the sidecar.
+    #[test]
+    fn test_parse_toggles_all_off() {
+        let adjustments = serde_json::json!({
+            "rapidMotionEnabled": false,
+            "rapidDefocusEnabled": false,
+            "rapidGaussianEnabled": false,
+            "rapidLength": 50.0,
+            "rapidRadius": 8.0,
+            "rapidStrength": 100.0,
+        });
+        assert!(parse_rapid_params(&adjustments).is_none());
+    }
+
+    /// An on-but-zero-kernel mode is inert by design (zero-start sliders):
+    /// the toggle alone must not run the stage.
+    #[test]
+    fn test_parse_toggle_on_zero_kernel_inert() {
+        let adjustments = serde_json::json!({
+            "rapidDefocusEnabled": true,
+            "rapidRadius": 0.0,
+            "rapidStrength": 100.0,
+        });
+        assert!(parse_rapid_params(&adjustments).is_none());
+    }
+
+    /// Any subset of modes composes into one set; each member needs its
+    /// toggle AND a positive kernel.
+    #[test]
+    fn test_parse_compound_modes() {
+        let adjustments = serde_json::json!({
+            "rapidMotionEnabled": true,
+            "rapidDefocusEnabled": false,
+            "rapidGaussianEnabled": true,
+            "rapidLength": 24.0,
+            "rapidRadius": 8.0,
+            "rapidSigma": 1.5,
+            "rapidStrength": 100.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("compound set should parse");
+        assert_eq!(
+            params.modes,
+            ModeSet { motion: true, defocus: false, gaussian: true }
+        );
+    }
+
+    /// Gen-2 detection is object-wide: one toggle present means absent
+    /// siblings are false — the legacy blurType/kernel fallback must not
+    /// reactivate a mode inside partially keyed gen-2 JSON.
+    #[test]
+    fn test_parse_gen2_siblings_default_false() {
+        let adjustments = serde_json::json!({
+            "rapidDefocusEnabled": true,
+            "rapidRadius": 8.0,
+            "rapidBlurType": "motion",
+            "rapidLength": 50.0,
+            "rapidStrength": 100.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("defocus should parse");
+        assert_eq!(params.modes, ModeSet::DEFOCUS);
+    }
+
+    /// Pre-gen-2 records render absent strength/hardness at the legacy
+    /// 100s, not the new-edit defaults of 50.
+    #[test]
+    fn test_parse_legacy_strength_hardness_defaults() {
+        let adjustments = serde_json::json!({
+            "rapidBlurType": "motion",
+            "rapidLength": 50.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("gen-1 record should parse");
+        assert!((params.strength - 1.0).abs() < 1e-6);
+        assert!((params.hardness - 1.0).abs() < 1e-6);
     }
 
     /// The before-view override and pre-revamp sidecars saved with the
@@ -5945,38 +6154,143 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_legacy_rapid_keys() {
-        // Explicit false: kernels zeroed, flag removed, other keys intact.
+    fn test_migrate_gen0_rapid_state() {
+        // Explicit false: kernels zeroed, toggles explicit false, flag
+        // removed, other keys intact, taste pins added.
         let mut off = serde_json::json!({
             "rapidEnabled": false, "rapidLength": 50.0, "exposure": 1.0,
         });
-        migrate_legacy_rapid_keys(&mut off);
+        migrate_legacy_recovery_state(&mut off);
         assert!(off.get("rapidEnabled").is_none());
         assert_eq!(off["rapidLength"], serde_json::json!(0.0));
         assert_eq!(off["rapidRadius"], serde_json::json!(0.0));
         assert_eq!(off["rapidSigma"], serde_json::json!(0.0));
+        assert_eq!(off["rapidMotionEnabled"], serde_json::json!(false));
+        assert_eq!(off["rapidDefocusEnabled"], serde_json::json!(false));
+        assert_eq!(off["rapidGaussianEnabled"], serde_json::json!(false));
+        assert_eq!(off["rapidStrength"], serde_json::json!(100.0));
+        assert_eq!(off["rapidHardness"], serde_json::json!(100.0));
         assert_eq!(off["exposure"], serde_json::json!(1.0));
 
         // Explicit true: absent kernels filled with the old defaults,
-        // present values kept verbatim.
+        // present values kept verbatim, saved mode toggled on.
         let mut on = serde_json::json!({ "rapidEnabled": true, "rapidLength": 120.0 });
-        migrate_legacy_rapid_keys(&mut on);
+        migrate_legacy_recovery_state(&mut on);
         assert!(on.get("rapidEnabled").is_none());
         assert_eq!(on["rapidLength"], serde_json::json!(120.0));
         assert_eq!(on["rapidRadius"], serde_json::json!(5.0));
         assert_eq!(on["rapidSigma"], serde_json::json!(2.0));
+        assert_eq!(on["rapidMotionEnabled"], serde_json::json!(true));
+        assert_eq!(on["rapidDefocusEnabled"], serde_json::json!(false));
+        assert_eq!(on["rapidGaussianEnabled"], serde_json::json!(false));
+    }
 
-        // No flag: the object is untouched.
-        let mut modern = serde_json::json!({ "rapidLength": 80.0 });
+    /// Gen-1 records (kernel-gated interim, no toggles): the saved mode's
+    /// activity is synthesized from its kernel, and the taste defaults that
+    /// era rendered for absent keys are pinned before the new INITIALs can
+    /// reinterpret them.
+    #[test]
+    fn test_migrate_gen1_synthesizes_toggles() {
+        let mut active = serde_json::json!({ "rapidBlurType": "defocus", "rapidRadius": 8.0 });
+        migrate_legacy_recovery_state(&mut active);
+        assert_eq!(active["rapidDefocusEnabled"], serde_json::json!(true));
+        assert_eq!(active["rapidMotionEnabled"], serde_json::json!(false));
+        assert_eq!(active["rapidGaussianEnabled"], serde_json::json!(false));
+        assert_eq!(active["rapidStrength"], serde_json::json!(100.0));
+        assert_eq!(active["rapidHardness"], serde_json::json!(100.0));
+
+        // A non-saved mode's kernel must not activate it (gen 1 was
+        // single-mode: only the saved blurType could run).
+        let mut cross = serde_json::json!({ "rapidBlurType": "motion", "rapidRadius": 8.0 });
+        migrate_legacy_recovery_state(&mut cross);
+        assert_eq!(cross["rapidMotionEnabled"], serde_json::json!(false));
+        assert_eq!(cross["rapidDefocusEnabled"], serde_json::json!(false));
+
+        // A clean gen-1 record comes out with everything off.
+        let mut clean = serde_json::json!({ "rapidBlurType": "motion", "rapidLength": 0.0 });
+        migrate_legacy_recovery_state(&mut clean);
+        assert_eq!(clean["rapidMotionEnabled"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn test_migrate_gen2_passthrough() {
+        // A current record is untouched (no pins, no toggle rewrites) —
+        // only a stray hand-edited rapidEnabled is cleaned up.
+        let mut modern = serde_json::json!({
+            "rapidMotionEnabled": true, "rapidLength": 80.0, "rapidStrength": 40.0,
+        });
         let before = modern.clone();
-        migrate_legacy_rapid_keys(&mut modern);
+        migrate_legacy_recovery_state(&mut modern);
         assert_eq!(modern, before);
+
+        let mut stray = serde_json::json!({
+            "rapidGaussianEnabled": false, "rapidEnabled": true, "rapidLength": 80.0,
+        });
+        migrate_legacy_recovery_state(&mut stray);
+        assert!(stray.get("rapidEnabled").is_none());
+        assert_eq!(stray["rapidLength"], serde_json::json!(80.0));
+        assert!(stray.get("rapidStrength").is_none(), "gen-2 records take no pins");
+    }
+
+    /// The presence guards: an object that never touched a subsystem gains
+    /// nothing from migration — a curves-only preset spread into live state
+    /// must not disable or retune recovery.
+    #[test]
+    fn test_migrate_skips_absent_subsystems() {
+        let mut unrelated = serde_json::json!({
+            "exposure": 1.0, "curves": { "luma": [] }, "contrast": 12.0,
+        });
+        let before = unrelated.clone();
+        migrate_legacy_recovery_state(&mut unrelated);
+        assert_eq!(unrelated, before);
+    }
+
+    #[test]
+    fn test_migrate_glare_state() {
+        // Legacy active glare: toggle synthesized on.
+        let mut active = serde_json::json!({ "glareAmount": 60.0, "glareVeilSize": 40.0 });
+        migrate_legacy_recovery_state(&mut active);
+        assert_eq!(active["glareEnabled"], serde_json::json!(true));
+
+        // Legacy inactive glare (touched but amount 0): explicit off. A
+        // stale glareShowVeil is deliberately NOT honored — it is a
+        // transient estimate-flash flag, not user intent.
+        let mut veil_only = serde_json::json!({ "glareAmount": 0.0, "glareShowVeil": true });
+        migrate_legacy_recovery_state(&mut veil_only);
+        assert_eq!(veil_only["glareEnabled"], serde_json::json!(false));
+
+        // An explicit toggle is passthrough.
+        let mut modern = serde_json::json!({ "glareEnabled": true, "glareAmount": 0.0 });
+        let before = modern.clone();
+        migrate_legacy_recovery_state(&mut modern);
+        assert_eq!(modern, before);
+    }
+
+    #[test]
+    fn test_migrate_lowlight_pins() {
+        // Enabled sections pin the old 50 defaults into absent value keys.
+        let mut enabled = serde_json::json!({ "hotPixelEnabled": true, "denoiseEnabled": true });
+        migrate_legacy_recovery_state(&mut enabled);
+        assert_eq!(enabled["hotPixelThreshold"], serde_json::json!(50.0));
+        assert_eq!(enabled["denoiseStrength"], serde_json::json!(50.0));
+        assert_eq!(enabled["denoiseDetail"], serde_json::json!(50.0));
+        assert_eq!(enabled["denoiseChroma"], serde_json::json!(50.0));
+
+        // Present values are kept; disabled sections take no pins.
+        let mut tuned = serde_json::json!({
+            "hotPixelEnabled": false, "denoiseEnabled": true, "denoiseStrength": 30.0,
+        });
+        migrate_legacy_recovery_state(&mut tuned);
+        assert_eq!(tuned["denoiseStrength"], serde_json::json!(30.0));
+        assert!(tuned.get("hotPixelThreshold").is_none());
     }
 
     /// Batch paste onto an unopened legacy-disabled sidecar: after the
     /// write-path migration + merge, the pasted recovery must be active and
     /// the legacy flag gone — it would otherwise veto the paste in
-    /// thumbnails/exports and zero it on the next open.
+    /// thumbnails/exports and zero it on the next open. The payload models
+    /// the current frontend, which sends recovery groups whole (toggles
+    /// included).
     #[test]
     fn test_paste_merge_activates_legacy_disabled_target() {
         let mut sidecar = serde_json::json!({
@@ -5984,11 +6298,14 @@ mod tests {
             "rapidLength": 50.0,
         });
         let pasted = serde_json::json!({
+            "rapidMotionEnabled": true,
+            "rapidDefocusEnabled": false,
+            "rapidGaussianEnabled": false,
             "rapidBlurType": "motion",
             "rapidLength": 80.0,
             "rapidStrength": 100.0,
         });
-        migrate_legacy_rapid_keys(&mut sidecar);
+        migrate_legacy_recovery_state(&mut sidecar);
         let target = sidecar.as_object_mut().unwrap();
         for (k, v) in pasted.as_object().unwrap() {
             target.insert(k.clone(), v.clone());
@@ -5996,6 +6313,7 @@ mod tests {
         assert!(sidecar.get("rapidEnabled").is_none());
         let params = parse_rapid_params(&sidecar).expect("pasted recovery must be active");
         assert!((params.motion_length - 80.0).abs() < 1e-6);
+        assert_eq!(params.modes, ModeSet::MOTION);
     }
 
     #[test]
