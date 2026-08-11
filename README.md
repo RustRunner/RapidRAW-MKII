@@ -4,7 +4,7 @@
 
 # RapidRAW Mark II
 
-**Recovery-first RAW editing for difficult captures.**
+**Recovery-driven RAW editing for adverse field conditions.**
 
 <sub>RECOVERY &nbsp;/&nbsp; INSPECTION &nbsp;/&nbsp; CONTEXT</sub>
 
@@ -26,24 +26,24 @@
 </p>
 
 > [!IMPORTANT]
-> **Upstream credit:** RapidRAW Mark II is an independent derivative of [RapidRAW](https://github.com/CyberTimon/RapidRAW), created by [Timon Käch (CyberTimon)](https://github.com/CyberTimon). RapidRAW provides the core editor, GPU pipeline, RAW workflow, library, masking system, and much more. Mark II is maintained separately by [RustRunner](https://github.com/RustRunner), is not an official RapidRAW release, and focuses on the changes documented below.
+> **Upstream credit:** RapidRAW Mark II is an independent fork of [RapidRAW](https://github.com/CyberTimon/RapidRAW) by [Timon Käch (CyberTimon)](https://github.com/CyberTimon). RapidRAW provides the core editor, GPU pipeline, and masking system. Mark II is maintained separately by [RustRunner](https://github.com/RustRunner) and focuses exclusively on the recovery and inspection features detailed below.
 
-## Operational focus
+## Operational Focus
 
-Mark II concentrates on source material where visibility and context matter: high-ISO or long-exposure frames, motion or focus blur, veiling glare, and exports that need notes or location data attached. It keeps RapidRAW's fast, non-destructive workflow, then adds a compact recovery stack and a quieter, inspection-oriented interface.
+Mark II is engineered for degraded source material where positive identification and contextual awareness are critical. It retains RapidRAW's fast, non-destructive workflow while introducing a disciplined, inspection-driven UI and a dedicated recovery stack tailored for challenging field conditions.
 
 <table>
   <tr>
     <td width="68%" valign="top">
-      <h3>Built for difficult frames</h3>
-      <p>The adjustment panel is organized as a true accordion, keeping the standard photographic controls familiar while placing specialized recovery tools in a clear sequence.</p>
+      <h3>Built for Difficult Captures</h3>
+      <p>Built around a true accordion UI, the adjustment panel preserves familiar photographic controls while introducing a dedicated recovery stack. These specialized tools are arranged in a methodical sequence, promoting a disciplined, step-by-step approach to image restoration.</p>
       <ul>
-        <li>Measure noise, suppress hot pixels, and clean high-ISO detail.</li>
-        <li>Recover motion, defocus, or Gaussian blur in the frequency domain.</li>
-        <li>Estimate and reduce the smooth veil caused by glare or shooting through glass.</li>
-        <li>Inspect changes with split comparison, then export with contextual callouts.</li>
+        <li><strong>Artifact Suppression:</strong> Suppress sensor noise and hot pixels to recover baseline detail from low-light, high-ISO environments.</li>
+        <li><strong>Blur Correction:</strong> Correct motion, defocus, or Gaussian blur in the frequency domain to stabilize dynamic or rushed captures.</li>
+        <li><strong>Environmental Mitigation:</strong> Estimate and reduce veiling glare caused by harsh lighting or shooting through glass barriers.</li>
+        <li><strong>Actionable Export:</strong> Validate changes using split-screen inspection, then export with embedded operational notes and precise location data.</li>
       </ul>
-      <p>Processing remains local-first. MKII removes account and hosted AI-provider integration; optional AI models are supplied by the user and loaded from the local models directory.</p>
+      <p><strong>Zero-Telemetry & Air-Gapped:</strong> Mark II is designed to operate completely off-grid. All account requirements and hosted AI telemetry have been stripped. Optional AI models must be supplied by the operator and loaded directly from a local directory for secure, offline processing.</p>
     </td>
     <td width="32%" align="center" valign="top">
       <img src=".github/assets/mkii-adjustments.png" alt="RapidRAW Mark II adjustment panel with recovery sections" width="270">
