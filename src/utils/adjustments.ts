@@ -82,7 +82,6 @@ export enum LowLightAdjustment {
 }
 
 export enum BlurRecoveryAdjustment {
-  RapidEnabled = 'rapidEnabled',
   RapidBlurType = 'rapidBlurType',
   RapidLength = 'rapidLength',
   RapidAngle = 'rapidAngle',
@@ -191,7 +190,6 @@ export interface Adjustments {
   denoiseStrength: number;
   denoiseDetail: number;
   denoiseChroma: number;
-  rapidEnabled: boolean;
   rapidBlurType: 'motion' | 'defocus' | 'gaussian';
   rapidLength: number;
   rapidAngle: number;
@@ -534,12 +532,11 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   denoiseStrength: 50,
   denoiseDetail: 50,
   denoiseChroma: 50,
-  rapidEnabled: false,
   rapidBlurType: 'motion',
-  rapidLength: 10,
+  rapidLength: 0,
   rapidAngle: 0,
-  rapidRadius: 5,
-  rapidSigma: 2,
+  rapidRadius: 0,
+  rapidSigma: 0,
   rapidLambda: 0.01,
   rapidHardness: 100,
   rapidStrength: 100,
@@ -665,6 +662,35 @@ const deepCloneParametric = (pCurve: any): ParametricCurve => ({
   blue: { ...DEFAULT_PARAMETRIC_CURVE_SETTINGS, ...(pCurve?.blue || {}) },
 });
 
+// Migrates pre-revamp rapid keys on a copy: an explicit rapidEnabled: false
+// zeroes the three kernel parameters (the stage was off; stored kernel
+// values are abandoned state), an explicit true pins the old kernel
+// defaults into keys the object never stored (so the render survives the
+// flag's removal), and the flag itself is always removed. Partial-safe:
+// objects without the flag pass through untouched, so a curves-only preset
+// cannot disturb blur state. Twin of migrate_legacy_rapid_keys in
+// src-tauri/src/rapid_processing.rs - change both or neither.
+export const migrateLegacyRapidKeys = <T extends Partial<Adjustments> & { rapidEnabled?: boolean }>(
+  adjustments: T,
+): T => {
+  const legacyEnabled = adjustments.rapidEnabled;
+  if (legacyEnabled === undefined) {
+    return adjustments;
+  }
+  const migrated: Partial<Adjustments> & { rapidEnabled?: boolean } = { ...adjustments };
+  if (legacyEnabled === false) {
+    migrated.rapidLength = 0;
+    migrated.rapidRadius = 0;
+    migrated.rapidSigma = 0;
+  } else {
+    migrated.rapidLength = migrated.rapidLength ?? 10;
+    migrated.rapidRadius = migrated.rapidRadius ?? 5;
+    migrated.rapidSigma = migrated.rapidSigma ?? 2;
+  }
+  delete migrated.rapidEnabled;
+  return migrated as T;
+};
+
 export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any => {
   if (!loadedAdjustments) {
     return INITIAL_ADJUSTMENTS;
@@ -717,9 +743,16 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     subMasks: normalizeSubMasks(patch.subMasks),
   }));
 
+  // The spread below must carry the migrated rapid keys, and the rapid
+  // ??-fills must read the migrated object too: an explicit-false legacy
+  // sidecar's stored kernels would otherwise ride back in through a fill
+  // reading the raw object, and its rapidEnabled would veto live edits on
+  // every render (the backend honors explicit false).
+  const migratedRapid = migrateLegacyRapidKeys(loadedAdjustments);
+
   return {
     ...INITIAL_ADJUSTMENTS,
-    ...loadedAdjustments,
+    ...migratedRapid,
     flareAmount: loadedAdjustments.flareAmount ?? INITIAL_ADJUSTMENTS.flareAmount,
     glowAmount: loadedAdjustments.glowAmount ?? INITIAL_ADJUSTMENTS.glowAmount,
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
@@ -729,15 +762,14 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     denoiseStrength: loadedAdjustments.denoiseStrength ?? INITIAL_ADJUSTMENTS.denoiseStrength,
     denoiseDetail: loadedAdjustments.denoiseDetail ?? INITIAL_ADJUSTMENTS.denoiseDetail,
     denoiseChroma: loadedAdjustments.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
-    rapidEnabled: loadedAdjustments.rapidEnabled ?? INITIAL_ADJUSTMENTS.rapidEnabled,
-    rapidBlurType: loadedAdjustments.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
-    rapidLength: loadedAdjustments.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
-    rapidAngle: loadedAdjustments.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
-    rapidRadius: loadedAdjustments.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
-    rapidSigma: loadedAdjustments.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
-    rapidLambda: loadedAdjustments.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
-    rapidHardness: loadedAdjustments.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
-    rapidStrength: loadedAdjustments.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
+    rapidBlurType: migratedRapid.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
+    rapidLength: migratedRapid.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
+    rapidAngle: migratedRapid.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
+    rapidRadius: migratedRapid.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
+    rapidSigma: migratedRapid.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
+    rapidLambda: migratedRapid.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
+    rapidHardness: migratedRapid.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
+    rapidStrength: migratedRapid.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,
     glareAmount: loadedAdjustments.glareAmount ?? INITIAL_ADJUSTMENTS.glareAmount,
     glareVeilSize: loadedAdjustments.glareVeilSize ?? INITIAL_ADJUSTMENTS.glareVeilSize,
     glareMaxBoost: loadedAdjustments.glareMaxBoost ?? INITIAL_ADJUSTMENTS.glareMaxBoost,

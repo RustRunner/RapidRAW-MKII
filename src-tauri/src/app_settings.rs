@@ -355,6 +355,9 @@ pub fn default_open_tree_sections() -> Vec<String> {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub last_root_path: Option<String>,
+    /// Last-used Blur Recovery mode tab; clean images open on it.
+    #[serde(default)]
+    pub last_blur_mode: Option<String>,
     #[serde(default)]
     pub root_folders: Vec<String>,
     #[serde(default)]
@@ -484,6 +487,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             last_root_path: None,
+            last_blur_mode: None,
             root_folders: Vec::new(),
             pinned_folders: Vec::new(),
             thumbnail_resolution: Some(720),
