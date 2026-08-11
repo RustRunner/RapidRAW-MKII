@@ -2783,6 +2783,12 @@ pub struct BlurEstimate {
 /// reaches ~4-5 sigma, so a real cepstral peak must clear that comfortably.
 const BLUR_CONFIDENCE_GATE: f32 = 6.0;
 
+/// Cap on observed log-depression depth (shared by the motion hardness fit
+/// and the defocus ring matcher): a true spectral zero has unbounded log
+/// depth while observed notches saturate at the noise floor, so one
+/// accidental plunge must not dominate a median.
+const DEPTH_CAP: f32 = 6.0;
+
 /// Fit the motion-OTF hardness from spectral notch depth. The captured
 /// ln(eps+|F|) plane is profiled along the blur direction (a wedge of
 /// near-axis bins bucketed by f_along), detrended with a boxcar one notch
@@ -2809,7 +2815,6 @@ fn fit_motion_hardness(
     angle_deg: f32,
 ) -> f32 {
     const PERP_MAX: f32 = 0.05;
-    const DEPTH_CAP: f32 = 6.0;
     let nb = pw / 2;
     let (cos_a, sin_a) = (angle_deg.to_radians().cos(), angle_deg.to_radians().sin());
 
@@ -2950,17 +2955,28 @@ fn fit_motion_hardness(
     1.0
 }
 
-/// Estimate linear motion blur via cepstral analysis.
-///
-/// The luma of a working copy (downscaled to <=1024 px, Hann-windowed so the
-/// frame boundary doesn't dominate) goes through 2D FFT -> log(1 + |F|) ->
-/// inverse 2D FFT. A linear motion blur multiplies the spectrum by a comb of
-/// near-zeros at 1/L spacing, which the log turns into an additive periodic
-/// component: the real cepstrum shows a negative peak pair at distance L
-/// along the blur direction. Search radius 3-250 working px; the detection
-/// floor is ~2-3 working px, so short blurs on large images come back
-/// low-confidence rather than wrong.
-pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
+/// Shared spectral prep for the blur estimators: luma of a working copy
+/// (downscaled to <=1024 px), mean-subtracted, Hann-windowed over the image
+/// extent (so the frame boundary doesn't dominate and the zero-pad stays
+/// continuous), zero-padded into a pow2 grid and forward-FFT'd.
+struct WorkingSpectrum {
+    /// The complex spectrum; the motion cepstrum consumes it in place.
+    data: Vec<cpu_fft::Complex>,
+    /// ln(eps + |F|) snapshot for the shape fits. The eps-log keeps the
+    /// decomposition ln|G| = ln|F_img| + ln|H| additive, so notch/ring
+    /// depth is the model's own, uncorrupted by image brightness — the
+    /// cepstrum's 1+|F| compresses depth scale-dependently and cannot be
+    /// reused for this.
+    spectrum_ln: Vec<f32>,
+    pw: usize,
+    ph: usize,
+    w: usize,
+    h: usize,
+    /// working / full-res
+    scale: f32,
+}
+
+fn working_spectrum(image: &image::DynamicImage) -> WorkingSpectrum {
     use image::GenericImageView;
 
     let (full_w, full_h) = image.dimensions();
@@ -2978,8 +2994,6 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
     let (w, h) = (rgb.width() as usize, rgb.height() as usize);
     let (pw, ph) = (w.next_power_of_two(), h.next_power_of_two());
 
-    // Luma, mean-subtracted and Hann-windowed over the image extent,
-    // zero-padded into the pow2 grid.
     let raw = rgb.as_raw();
     let mut mean = 0.0f64;
     let mut luma = vec![0.0f32; w * h];
@@ -3000,16 +3014,29 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
         }
     }
 
-    // Real cepstrum: FFT -> log magnitude -> inverse FFT.
     cpu_fft::fft_2d(&mut data, pw, ph, true);
-    // Snapshot ln(eps+|F|) for the hardness fit before the in-place cepstrum
-    // map destroys the spectrum. The eps-log keeps the decomposition
-    // ln|G| = ln|F_img| + ln|H| additive, so notch ripple depth is the
-    // model's own, uncorrupted by image brightness — the cepstrum's 1+|F|
-    // compresses depth scale-dependently and cannot be reused for this.
     let max_mag = data.iter().map(|v| v.magnitude()).fold(0.0f32, f32::max);
     let eps = (1e-6 * max_mag).max(f32::MIN_POSITIVE);
     let spectrum_ln: Vec<f32> = data.iter().map(|v| (eps + v.magnitude()).ln()).collect();
+
+    WorkingSpectrum { data, spectrum_ln, pw, ph, w, h, scale }
+}
+
+/// Estimate linear motion blur via cepstral analysis.
+///
+/// The luma of a working copy (downscaled to <=1024 px, Hann-windowed so the
+/// frame boundary doesn't dominate) goes through 2D FFT -> log(1 + |F|) ->
+/// inverse 2D FFT. A linear motion blur multiplies the spectrum by a comb of
+/// near-zeros at 1/L spacing, which the log turns into an additive periodic
+/// component: the real cepstrum shows a negative peak pair at distance L
+/// along the blur direction. Search radius 3-250 working px; the detection
+/// floor is ~2-3 working px, so short blurs on large images come back
+/// low-confidence rather than wrong.
+pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
+    let WorkingSpectrum { mut data, spectrum_ln, pw, ph, w, h, scale } = working_spectrum(image);
+
+    // Real cepstrum: log magnitude -> inverse FFT (the forward FFT already
+    // ran in working_spectrum).
     for v in data.iter_mut() {
         *v = cpu_fft::Complex::new((1.0 + v.magnitude()).ln(), 0.0);
     }
@@ -3212,6 +3239,548 @@ pub async fn estimate_blur_kernel(
         estimate.length,
         estimate.angle,
         estimate.hardness,
+        estimate.lambda,
+        estimate.confidence,
+        if estimate.confident { "" } else { "not " },
+        start.elapsed()
+    );
+    Ok(estimate)
+}
+
+// ============================================================================
+// Defocus and gaussian estimators
+// ============================================================================
+
+/// CPU port of common.wgsl's bessel_j1 (same rational approximation for
+/// |x| < 8, same asymptotic expansion beyond), so CPU-side OTF model
+/// evaluations match the spectra the shader divides by.
+fn bessel_j1(x: f32) -> f32 {
+    let ax = x.abs();
+    if ax < 8.0 {
+        let y = x * x;
+        let ans1 = x * (72362614232.0
+            + y * (-7895059235.0
+                + y * (242396853.1
+                    + y * (-2972611.439 + y * (15704.48260 + y * (-30.16036606))))));
+        let ans2 = 144725228442.0
+            + y * (2300535178.0
+                + y * (18583304.74 + y * (99447.43394 + y * (376.9991397 + y * 1.0))));
+        ans1 / ans2
+    } else {
+        let z = 8.0 / ax;
+        let y = z * z;
+        let xx = ax - 2.356194491; // ax - 3*pi/4
+        let ans1 = 1.0
+            + y * (0.183105e-2
+                + y * (-0.3516396496e-4 + y * (0.2457520174e-5 + y * (-0.240337019e-6))));
+        let ans2 = 0.04687499995
+            + y * (-0.2002690873e-3
+                + y * (0.8449199096e-5 + y * (-0.88228987e-6 + y * 0.105787412e-6)));
+        let ans = (0.636619772 / ax).sqrt() * (xx.cos() * ans1 - z * xx.sin() * ans2);
+        if x < 0.0 { -ans } else { ans }
+    }
+}
+
+/// jinc(x) = 2·J1(x)/x with jinc(0) = 1 — the disc OTF's radial profile
+/// (defocus_blur_spectrum in psf_generate.wgsl).
+fn jinc(x: f32) -> f32 {
+    if x.abs() < 1e-6 {
+        return 1.0;
+    }
+    2.0 * bessel_j1(x) / x
+}
+
+/// Radial frequency ρ = √(u² + v²) in cycles/pixel for a bin of the pow2
+/// spectrum, with per-axis normalized frequencies (the psf_generate.wgsl
+/// convention shared by fit_motion_hardness).
+fn bin_rho(x: usize, y: usize, pw: usize, ph: usize) -> f32 {
+    let mut u = x as f32 / pw as f32;
+    if u > 0.5 {
+        u -= 1.0;
+    }
+    let mut v = y as f32 / ph as f32;
+    if v > 0.5 {
+        v -= 1.0;
+    }
+    (u * u + v * v).sqrt()
+}
+
+/// Mean ln|F| bucketed by ρ over [0, 0.5), nb = pw/2 buckets; empty buckets
+/// are None (the fit_motion_hardness wedge-profile shape, radialized).
+fn radial_profile_mean(spectrum_ln: &[f32], pw: usize, ph: usize) -> Vec<Option<f32>> {
+    let nb = pw / 2;
+    let mut sums = vec![0.0f64; nb];
+    let mut counts = vec![0u32; nb];
+    for y in 0..ph {
+        for x in 0..pw {
+            let rho = bin_rho(x, y, pw, ph);
+            if rho >= 0.5 {
+                continue;
+            }
+            let b = ((rho * 2.0 * nb as f32) as usize).min(nb - 1);
+            sums[b] += spectrum_ln[y * pw + x] as f64;
+            counts[b] += 1;
+        }
+    }
+    sums.iter()
+        .zip(&counts)
+        .map(|(&s, &c)| (c > 0).then(|| (s / c as f64) as f32))
+        .collect()
+}
+
+/// Median ln|F| bucketed by ρ — robust to the scene's bright spectral lines,
+/// which matters for the gaussian falloff fit where a single streaky edge
+/// would drag a mean profile.
+fn radial_profile_median(spectrum_ln: &[f32], pw: usize, ph: usize) -> Vec<Option<f32>> {
+    let nb = pw / 2;
+    let mut buckets: Vec<Vec<f32>> = vec![Vec::new(); nb];
+    for y in 0..ph {
+        for x in 0..pw {
+            let rho = bin_rho(x, y, pw, ph);
+            if rho >= 0.5 {
+                continue;
+            }
+            let b = ((rho * 2.0 * nb as f32) as usize).min(nb - 1);
+            buckets[b].push(spectrum_ln[y * pw + x]);
+        }
+    }
+    buckets
+        .into_iter()
+        .map(|mut v| {
+            if v.is_empty() {
+                None
+            } else {
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                Some(v[v.len() / 2])
+            }
+        })
+        .collect()
+}
+
+/// Radial analog of suggest_lambda for isotropic blurs: the unblurred
+/// perpendicular axis does not exist, so the signal band is the low-ρ
+/// annulus compensated by the fitted model's own ln-attenuation at the band
+/// center — capped at 3 nats, because near a jinc zero the correction
+/// explodes, and over-suppression is the preferred failure (see
+/// suggest_lambda's comment). Same 4x bias, clamp and sparse-band bail as
+/// the motion version.
+fn suggest_lambda_radial(
+    spectrum_ln: &[f32],
+    pw: usize,
+    ph: usize,
+    otf_ln_at: impl Fn(f32) -> f32,
+) -> f32 {
+    let mut noise_ln = Vec::new();
+    let mut signal_ln = Vec::new();
+    for y in 0..ph {
+        for x in 0..pw {
+            let rho = bin_rho(x, y, pw, ph);
+            if rho > 0.35 {
+                noise_ln.push(spectrum_ln[y * pw + x]);
+            } else if (0.05..=0.15).contains(&rho) {
+                signal_ln.push(spectrum_ln[y * pw + x]);
+            }
+        }
+    }
+    if noise_ln.len() < 64 || signal_ln.len() < 64 {
+        return 0.01;
+    }
+    let median = |v: &mut Vec<f32>| -> f32 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[v.len() / 2]
+    };
+    // The observed signal band is post-blur; add back the model's own
+    // attenuation at the band center to compare pre-blur signal power
+    // against the (unattenuated, sensor-side) noise floor.
+    let comp = (-otf_ln_at(0.10)).clamp(0.0, 3.0);
+    let nsr = (2.0 * (median(&mut noise_ln) - median(&mut signal_ln) - comp)).exp();
+    (4.0 * nsr).clamp(0.01, 0.1)
+}
+
+/// Estimates below this score are reported as not confident. The score is a
+/// z-score of the best candidate's matched-ring contrast against the rest of
+/// the radius grid, so it shares BLUR_CONFIDENCE_GATE's shape but competes
+/// against structured scene spectra rather than cepstral noise; the sharp
+/// and gaussian-blurred synthetic negatives calibrate the value.
+const DEFOCUS_CONFIDENCE_GATE: f32 = 5.0;
+
+/// Absolute ring-contrast floor (nats) accompanying the z-score gate. The
+/// z-score alone is fragile when the whole grid scores near zero with tiny
+/// variance — a gaussian blur's smooth knee then z-spikes at a small radius
+/// despite carrying no ring comb. Synthetic calibration: real discs score
+/// 0.51 (R=14) to 1.59 (R=4); the gaussian false lock 0.26; sharp 0.11.
+const DEFOCUS_MIN_RING_CONTRAST: f32 = 0.35;
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct DefocusEstimate {
+    pub radius: f32,
+    pub confidence: f32,
+    pub confident: bool,
+    pub lambda: f32,
+}
+
+/// Canonical not-confident result: every field finite (serde_json rejects
+/// NaN/inf), lambda at the slider midpoint like the motion bail.
+const DEFOCUS_NOT_CONFIDENT: DefocusEstimate = DefocusEstimate {
+    radius: 0.0,
+    confidence: 0.0,
+    confident: false,
+    lambda: 0.01,
+};
+
+/// Estimate defocus (disc) blur radius by matched analysis of the jinc
+/// OTF's zero rings.
+///
+/// A disc of radius R multiplies the spectrum by jinc(2πRρ), whose zeros
+/// sit at the J1 roots — anharmonically spaced (first gap 0.61/R vs the
+/// asymptotic 0.5/R), which smears a cepstral ring impulse at exactly the
+/// small radii the UI covers. So instead each candidate R is scored
+/// directly: median capped depression of the boxcar-detrended radial
+/// profile at its predicted zero radii, minus the same measurement at
+/// inter-zero midpoint controls (a real ring comb is deep at the zeros and
+/// flat between them; broadband scene texture scores both alike).
+/// R_work ∈ [2.5, 25]: the floor is where the second J1 zero leaves the
+/// ρ ≤ 0.45 band (two zeros minimum for a comb), so small blurs on large
+/// frames come back low-confidence rather than wrong — the motion
+/// estimator's documented limitation, shared.
+pub fn estimate_defocus(image: &image::DynamicImage) -> DefocusEstimate {
+    const R_MIN: f32 = 2.5;
+    const R_MAX: f32 = 25.0;
+    const R_STEP: f32 = 0.1;
+    const RHO_MAX: f32 = 0.45;
+
+    let ws = working_spectrum(image);
+    let profile = radial_profile_mean(&ws.spectrum_ln, ws.pw, ws.ph);
+    let nb = ws.pw / 2;
+
+    // J1 roots via McMahon, x_k ≈ β − 3/(8β), β = (k + 1/4)π: absolute
+    // error < 4e-4 for k ≥ 1, far below a profile bucket in ρ. Generated
+    // out to the band edge at the largest candidate (R = 25 consumes 22).
+    let max_roots = (2.0 * std::f32::consts::PI * R_MAX * RHO_MAX / std::f32::consts::PI).ceil()
+        as usize
+        + 2;
+    let j1_roots: Vec<f32> = (1..=max_roots)
+        .map(|k| {
+            let beta = (k as f32 + 0.25) * std::f32::consts::PI;
+            beta - 3.0 / (8.0 * beta)
+        })
+        .collect();
+
+    let median = |mut v: Vec<f32>| -> Option<f32> {
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = v.len() / 2;
+        Some(if v.len() % 2 == 1 { v[mid] } else { (v[mid - 1] + v[mid]) / 2.0 })
+    };
+
+    // Score every candidate radius on the shared profile.
+    let mut scores: Vec<(f32, f32)> = Vec::new();
+    let steps = ((R_MAX - R_MIN) / R_STEP).round() as usize;
+    for i in 0..=steps {
+        let r = R_MIN + i as f32 * R_STEP;
+        // Boxcar detrend one ring period (≈ 0.5/R in ρ) wide, exactly the
+        // fit_motion_hardness treatment.
+        let half_period = ((ws.pw as f32 / (2.0 * r)).round() as usize).max(3) / 2;
+        let residual_at = |i: usize| -> Option<f32> {
+            let p = profile[i]?;
+            let lo = i.saturating_sub(half_period);
+            let hi = (i + half_period).min(nb - 1);
+            let vals: Vec<f32> = (lo..=hi).filter_map(|j| profile[j]).collect();
+            if vals.len() < (hi - lo) / 2 + 1 {
+                return None;
+            }
+            Some(p - vals.iter().sum::<f32>() / vals.len() as f32)
+        };
+        // Depression at a radius: deepest residual of the bucket ± spread,
+        // negated and capped. Zeros get spread 1 (they may straddle a
+        // bucket boundary); controls get spread 0 so they don't pick up
+        // zero flanks once the ring period shrinks.
+        let depression_at = |rho: f32, spread: usize| -> Option<f32> {
+            let b = (rho * 2.0 * nb as f32) as usize;
+            if b < spread.max(1) || b + spread.max(1) >= nb {
+                return None;
+            }
+            let d = (b - spread..=b + spread)
+                .filter_map(residual_at)
+                .fold(f32::INFINITY, f32::min);
+            d.is_finite().then(|| (-d).min(DEPTH_CAP))
+        };
+
+        let two_pi_r = 2.0 * std::f32::consts::PI * r;
+        let mut zero_depths = Vec::new();
+        let mut ctl_depths = Vec::new();
+        for pair in j1_roots.windows(2) {
+            let rho_zero = pair[0] / two_pi_r;
+            if rho_zero > RHO_MAX {
+                break;
+            }
+            if let Some(d) = depression_at(rho_zero, 1) {
+                zero_depths.push(d);
+            }
+            let rho_mid = (pair[0] + pair[1]) / 2.0 / two_pi_r;
+            if rho_mid <= RHO_MAX
+                && let Some(d) = depression_at(rho_mid, 0)
+            {
+                ctl_depths.push(d);
+            }
+        }
+        if zero_depths.len() < 2 {
+            continue;
+        }
+        let (Some(z), Some(c)) = (median(zero_depths), median(ctl_depths)) else {
+            continue;
+        };
+        scores.push((r, z - c));
+    }
+
+    let Some(&(best_r_grid, best_score)) = scores
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    else {
+        return DEFOCUS_NOT_CONFIDENT;
+    };
+
+    // Confidence: z-score of the best score against the rest of the grid,
+    // excluding ±0.5 px around the peak (the annulus-statistics analog of
+    // the cepstral confidence).
+    let pool: Vec<f32> = scores
+        .iter()
+        .filter(|(r, _)| (r - best_r_grid).abs() > 0.5)
+        .map(|&(_, s)| s)
+        .collect();
+    if pool.len() < 16 {
+        return DEFOCUS_NOT_CONFIDENT;
+    }
+    let n = pool.len() as f64;
+    let mean = pool.iter().map(|&s| s as f64).sum::<f64>() / n;
+    let var = pool.iter().map(|&s| (s as f64 - mean).powi(2)).sum::<f64>() / n;
+    let std = var.max(1e-20).sqrt();
+    let confidence = ((best_score as f64 - mean) / std) as f32;
+
+    // 3-point parabolic refine over grid neighbors, only when the peak is
+    // interior to a contiguous stretch of the grid; a boundary best keeps
+    // its raw value.
+    let mut r_best = best_r_grid;
+    if let Some(i) = scores.iter().position(|&(r, _)| r == best_r_grid)
+        && i > 0
+        && i + 1 < scores.len()
+        && (scores[i + 1].0 - scores[i - 1].0 - 2.0 * R_STEP).abs() < 1e-4
+    {
+        let (s_m, s_0, s_p) = (scores[i - 1].1, scores[i].1, scores[i + 1].1);
+        let curvature = s_m - 2.0 * s_0 + s_p;
+        if curvature < -1e-12 {
+            r_best += (0.5 * (s_m - s_p) / curvature).clamp(-0.5, 0.5) * R_STEP;
+        }
+    }
+
+    let radius = r_best / ws.scale;
+    let confident = confidence.is_finite()
+        && confidence >= DEFOCUS_CONFIDENCE_GATE
+        && best_score >= DEFOCUS_MIN_RING_CONTRAST;
+    if !confident {
+        return DefocusEstimate {
+            radius: if radius.is_finite() { radius } else { 0.0 },
+            confidence: if confidence.is_finite() { confidence } else { 0.0 },
+            confident: false,
+            lambda: 0.01,
+        };
+    }
+    let lambda = suggest_lambda_radial(&ws.spectrum_ln, ws.pw, ws.ph, |rho| {
+        jinc(2.0 * std::f32::consts::PI * r_best * rho).abs().max(1e-6).ln()
+    });
+    if !radius.is_finite() || !lambda.is_finite() {
+        return DEFOCUS_NOT_CONFIDENT;
+    }
+    DefocusEstimate { radius, confidence, confident: true, lambda }
+}
+
+/// The t-statistic of the fitted spectral curvature must clear this before
+/// a gaussian estimate is reported confident. Deliberately strict: an
+/// over-strict gate degrades to "set manually" (the pre-revamp UX for this
+/// tab), a lax one writes wrong sigmas.
+const GAUSSIAN_CONFIDENCE_GATE: f32 = 8.0;
+
+/// Below this working-scale sigma a "fit" is AA-filter/demosaic rolloff,
+/// not photographic blur.
+const GAUSSIAN_SIGMA_WORK_FLOOR: f32 = 0.5;
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct GaussianEstimate {
+    pub sigma: f32,
+    pub confidence: f32,
+    pub confident: bool,
+    pub lambda: f32,
+}
+
+/// Canonical not-confident result — every field finite.
+const GAUSSIAN_NOT_CONFIDENT: GaussianEstimate = GaussianEstimate {
+    sigma: 0.0,
+    confidence: 0.0,
+    confident: false,
+    lambda: 0.01,
+};
+
+/// Estimate isotropic gaussian blur sigma from the spectrum's radial
+/// falloff.
+///
+/// The gaussian OTF is exp(−2π²σ²ρ²) (gaussian_blur_spectrum), so
+/// ln|G(ρ)| = ln|F_scene(ρ)| − 2π²σ²ρ², and natural scenes are
+/// approximately power-law in ρ. A 3-parameter least squares of
+/// y = c + a·lnρ − s·ρ² over the usable band separates the scene slope
+/// (a, free — it absorbs the power law) from the blur curvature s;
+/// σ_work = √(s/2π²). Fit in f64 on centered predictors; confidence is
+/// the t-statistic of s.
+pub fn estimate_gaussian(image: &image::DynamicImage) -> GaussianEstimate {
+    let ws = working_spectrum(image);
+    let profile = radial_profile_median(&ws.spectrum_ln, ws.pw, ws.ph);
+    let nb = ws.pw / 2;
+    let rho_of = |b: usize| (b as f32 + 0.5) / (2.0 * nb as f32);
+
+    // Noise floor from the outermost annulus; the usable band keeps only
+    // buckets clearly above it, so the flat floor cannot bias sigma low.
+    let floor_samples: Vec<f32> = (0..nb)
+        .filter(|&b| rho_of(b) >= 0.46)
+        .filter_map(|b| profile[b])
+        .collect();
+    if floor_samples.is_empty() {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+    let mut floor_sorted = floor_samples;
+    floor_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let noise_floor = floor_sorted[floor_sorted.len() / 2];
+
+    // Band start 0.02: well past the Hann main lobe (~2 bins), and at the
+    // large-σ end the attenuation knee crosses the noise floor early enough
+    // that the extra low-ρ buckets are what keep the fit determined
+    // (σ_work = 6 has ~21 usable buckets above 0.04, ~31 above 0.02).
+    let pts: Vec<(f64, f64, f64)> = (0..nb)
+        .filter(|&b| {
+            let rho = rho_of(b);
+            (0.02..=0.42).contains(&rho)
+        })
+        .filter_map(|b| {
+            let y = profile[b]?;
+            (y >= noise_floor + 0.5).then(|| {
+                let rho = rho_of(b) as f64;
+                (rho.ln(), rho * rho, y as f64)
+            })
+        })
+        .collect();
+    if pts.len() < 24 {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+
+    // Centered 3×3 normal equations (intercept eliminated by centering).
+    let n = pts.len() as f64;
+    let m1 = pts.iter().map(|p| p.0).sum::<f64>() / n;
+    let m2 = pts.iter().map(|p| p.1).sum::<f64>() / n;
+    let my = pts.iter().map(|p| p.2).sum::<f64>() / n;
+    let (mut s11, mut s12, mut s22, mut s1y, mut s2y, mut syy) =
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for &(t1, t2, y) in &pts {
+        let (d1, d2, dy) = (t1 - m1, t2 - m2, y - my);
+        s11 += d1 * d1;
+        s12 += d1 * d2;
+        s22 += d2 * d2;
+        s1y += d1 * dy;
+        s2y += d2 * dy;
+        syy += dy * dy;
+    }
+    let det = s11 * s22 - s12 * s12;
+    // Scale-invariant rank check: over a short band lnρ and ρ² are nearly
+    // collinear and the system degenerates.
+    if s11 <= 0.0 || s22 <= 0.0 || det <= 1e-12 * s11 * s22 {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+    let a = (s22 * s1y - s12 * s2y) / det;
+    let b2 = (s11 * s2y - s12 * s1y) / det; // coefficient on ρ²; s = −b2
+    let s_curv = -b2;
+    if s_curv <= 0.0 {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+
+    // OLS covariance: t = s / stderr(s), stderr² = σ̂²·S11/det with
+    // σ̂² = RSS/(n − 3).
+    let rss = (syy - a * s1y - b2 * s2y).max(0.0);
+    let sigma2 = rss / (n - 3.0);
+    let var_s = sigma2 * s11 / det;
+    if !var_s.is_finite() || var_s <= 0.0 {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+    let t = (s_curv / var_s.sqrt()) as f32;
+
+    let sigma_work = (s_curv / (2.0 * std::f64::consts::PI * std::f64::consts::PI)).sqrt() as f32;
+    let sigma = sigma_work / ws.scale;
+    if !t.is_finite() || !sigma.is_finite() {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+    let confident = t >= GAUSSIAN_CONFIDENCE_GATE && sigma_work >= GAUSSIAN_SIGMA_WORK_FLOOR;
+    let lambda = if confident {
+        let two_pi_sq = 2.0 * std::f32::consts::PI * std::f32::consts::PI;
+        suggest_lambda_radial(&ws.spectrum_ln, ws.pw, ws.ph, |rho| {
+            -two_pi_sq * sigma_work * sigma_work * rho * rho
+        })
+    } else {
+        0.01
+    };
+    if !lambda.is_finite() {
+        return GAUSSIAN_NOT_CONFIDENT;
+    }
+    GaussianEstimate { sigma, confidence: t, confident, lambda }
+}
+
+/// Tauri command: estimate the defocus-blur radius of the currently loaded
+/// image from its spectrum's jinc zero rings. Full-resolution radius; the
+/// frontend leaves the sliders untouched when `confident` is false.
+#[tauri::command]
+pub async fn estimate_defocus_kernel(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<DefocusEstimate, String> {
+    let image = {
+        let guard = state.original_image.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|loaded| loaded.image.clone())
+            .ok_or("No image loaded")?
+    };
+    let start = std::time::Instant::now();
+    let estimate = tokio::task::spawn_blocking(move || estimate_defocus(&image))
+        .await
+        .map_err(|e| format!("Defocus estimation task failed: {e}"))?;
+    log::info!(
+        "RAPID: defocus estimate R={:.1}px λ={:.4} confidence={:.1} ({}confident) in {:?}",
+        estimate.radius,
+        estimate.lambda,
+        estimate.confidence,
+        if estimate.confident { "" } else { "not " },
+        start.elapsed()
+    );
+    Ok(estimate)
+}
+
+/// Tauri command: estimate the gaussian blur sigma of the currently loaded
+/// image from its spectral falloff. Full-resolution sigma; the frontend
+/// leaves the sliders untouched when `confident` is false.
+#[tauri::command]
+pub async fn estimate_gaussian_kernel(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<GaussianEstimate, String> {
+    let image = {
+        let guard = state.original_image.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|loaded| loaded.image.clone())
+            .ok_or("No image loaded")?
+    };
+    let start = std::time::Instant::now();
+    let estimate = tokio::task::spawn_blocking(move || estimate_gaussian(&image))
+        .await
+        .map_err(|e| format!("Gaussian estimation task failed: {e}"))?;
+    log::info!(
+        "RAPID: gaussian estimate σ={:.2}px λ={:.4} confidence={:.1} ({}confident) in {:?}",
+        estimate.sigma,
         estimate.lambda,
         estimate.confidence,
         if estimate.confident { "" } else { "not " },
@@ -4413,29 +4982,99 @@ mod tests {
     /// Convolve a grayscale f32 field with a true pillbox PSF (uniform disk)
     /// — the real-world defocus blur whose jinc spectrum the deconvolution
     /// divides by. Border taps average over the in-frame subset, like
-    /// motion_blur_line.
+    /// motion_blur_line. Row prefix sums make each disc row an O(1) span
+    /// (the naive tap loop makes the 2048² scale-mapping test cost ~3.3 G
+    /// visits); disc membership is the same √(dx²+dy²) ≤ radius rule.
     fn disc_blur_field(field: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
         let ri = radius.ceil() as i32;
-        let taps: Vec<(i32, i32)> = (-ri..=ri)
-            .flat_map(|dy| (-ri..=ri).map(move |dx| (dx, dy)))
-            .filter(|&(dx, dy)| ((dx * dx + dy * dy) as f32).sqrt() <= radius)
+        let half_widths: Vec<i32> = (-ri..=ri)
+            .map(|dy| {
+                let mut wdy = -1;
+                for dx in 0..=ri {
+                    if ((dx * dx + dy * dy) as f32).sqrt() <= radius {
+                        wdy = dx;
+                    } else {
+                        break;
+                    }
+                }
+                wdy
+            })
             .collect();
+        let mut prefix = vec![0.0f64; (w + 1) * h];
+        for y in 0..h {
+            let row = y * (w + 1);
+            for x in 0..w {
+                prefix[row + x + 1] = prefix[row + x] + field[y * w + x] as f64;
+            }
+        }
         let mut out = vec![0.0f32; w * h];
         for y in 0..h as i32 {
             for x in 0..w as i32 {
-                let mut acc = 0.0f32;
-                let mut count = 0.0f32;
-                for &(dx, dy) in &taps {
-                    let (sx, sy) = (x + dx, y + dy);
-                    if sx >= 0 && sx < w as i32 && sy >= 0 && sy < h as i32 {
-                        acc += field[(sy * w as i32 + sx) as usize];
-                        count += 1.0;
+                let mut acc = 0.0f64;
+                let mut count = 0i64;
+                for dy in -ri..=ri {
+                    let wdy = half_widths[(dy + ri) as usize];
+                    let sy = y + dy;
+                    if wdy < 0 || sy < 0 || sy >= h as i32 {
+                        continue;
                     }
+                    let x0 = (x - wdy).max(0);
+                    let x1 = (x + wdy).min(w as i32 - 1);
+                    if x0 > x1 {
+                        continue;
+                    }
+                    let row = sy as usize * (w + 1);
+                    acc += prefix[row + x1 as usize + 1] - prefix[row + x0 as usize];
+                    count += (x1 - x0 + 1) as i64;
                 }
-                out[(y * w as i32 + x) as usize] = acc / count;
+                out[(y * w as i32 + x) as usize] = (acc / count as f64) as f32;
             }
         }
         out
+    }
+
+    /// Disc-blur an RGBA test image via its luma field. The estimators read
+    /// luma only, so the gray result loses nothing.
+    fn disc_blur(img: &image::RgbaImage, radius: f32) -> image::DynamicImage {
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let field: Vec<f32> = img.pixels().map(|p| p[0] as f32 / 255.0).collect();
+        let blurred = disc_blur_field(&field, w, h, radius);
+        gray_image(&blurred, w as u32, h as u32)
+    }
+
+    /// Isotropic gaussian blur, separable with clamped borders — the
+    /// real-world blur whose spectrum estimate_gaussian fits.
+    fn gaussian_blur_iso(img: &image::RgbaImage, sigma: f32) -> image::DynamicImage {
+        let (w, h) = (img.width() as i32, img.height() as i32);
+        let radius = (3.0 * sigma).ceil() as i32;
+        let weights: Vec<f32> = (-radius..=radius)
+            .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+            .collect();
+        let wsum: f32 = weights.iter().sum();
+        let field: Vec<f32> = img.pixels().map(|p| p[0] as f32 / 255.0).collect();
+        let mut tmp = vec![0.0f32; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0.0f32;
+                for (j, wt) in weights.iter().enumerate() {
+                    let sx = (x + j as i32 - radius).clamp(0, w - 1);
+                    acc += wt * field[(y * w + sx) as usize];
+                }
+                tmp[(y * w + x) as usize] = acc / wsum;
+            }
+        }
+        let mut out = vec![0.0f32; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0.0f32;
+                for (j, wt) in weights.iter().enumerate() {
+                    let sy = (y + j as i32 - radius).clamp(0, h - 1);
+                    acc += wt * tmp[(sy * w + x) as usize];
+                }
+                out[(y * w + x) as usize] = acc / wsum;
+            }
+        }
+        gray_image(&out, w as u32, h as u32)
     }
 
     /// Quantize a grayscale f32 field to an sRGB-range u8 image, clamping to
@@ -4611,6 +5250,231 @@ mod tests {
             "hard-line blur fitted too soft: hardness {:.2}",
             est.hardness
         );
+    }
+
+    /// The ported CPU jinc must agree with the shader model: zero at the
+    /// J1 roots, sign flip between them, unity at the origin.
+    #[test]
+    fn test_cpu_jinc_matches_zeros() {
+        assert!((jinc(0.0) - 1.0).abs() < 1e-6);
+        for root in [3.8317f32, 7.0156] {
+            assert!(
+                jinc(root).abs() < 5e-3,
+                "jinc({root}) = {} should be ~0",
+                jinc(root)
+            );
+        }
+        assert!(jinc(5.4) < 0.0, "jinc must be negative between the first two zeros");
+    }
+
+    /// Disc blurs across the UI's radius range must come back confident and
+    /// within a pixel; a sharp scene must fail the gate rather than invent
+    /// a defocus.
+    #[test]
+    fn test_estimate_defocus_radii() {
+        let scene = synthetic_scene(512, 512);
+        for &radius in &[4.0f32, 8.0, 14.0] {
+            let blurred = disc_blur(&scene, radius);
+            let est = estimate_defocus(&blurred);
+            eprintln!(
+                "defocus estimate at R={radius}: R={:.2} confidence={:.1} λ={:.4} ({}confident)",
+                est.radius,
+                est.confidence,
+                est.lambda,
+                if est.confident { "" } else { "not " }
+            );
+            assert!(
+                est.confident,
+                "estimator not confident at R={radius} (confidence {:.1})",
+                est.confidence
+            );
+            assert!(
+                (est.radius - radius).abs() <= 1.0,
+                "radius off at R={radius}: got {:.2}",
+                est.radius
+            );
+        }
+
+        let sharp = estimate_defocus(&image::DynamicImage::ImageRgba8(scene));
+        eprintln!(
+            "sharp-image defocus: R={:.2} confidence={:.1}",
+            sharp.radius, sharp.confidence
+        );
+        assert!(
+            !sharp.confident,
+            "estimator hallucinated a defocus on a sharp image (confidence {:.1})",
+            sharp.confidence
+        );
+    }
+
+    /// A 2048² frame runs the estimator at working scale 0.5: the reported
+    /// radius must map back to full resolution.
+    #[test]
+    fn test_estimate_defocus_scale_mapping() {
+        let scene = synthetic_scene(2048, 2048);
+        let blurred = disc_blur(&scene, 16.0);
+        let est = estimate_defocus(&blurred);
+        eprintln!(
+            "defocus scale mapping: R={:.2} confidence={:.1} ({}confident)",
+            est.radius,
+            est.confidence,
+            if est.confident { "" } else { "not " }
+        );
+        assert!(est.confident, "not confident (confidence {:.1})", est.confidence);
+        assert!(
+            (est.radius - 16.0).abs() <= 2.0,
+            "full-res radius off: got {:.2}, expected 16",
+            est.radius
+        );
+    }
+
+    /// A gaussian blur has no spectral zeros, so the matched ring comb has
+    /// nothing to lock onto — the physically adjacent cross-mode negative
+    /// that calibrates the defocus gate.
+    #[test]
+    fn test_estimate_defocus_rejects_gaussian() {
+        let scene = synthetic_scene(512, 512);
+        let blurred = gaussian_blur_iso(&scene, 3.0);
+        let est = estimate_defocus(&blurred);
+        eprintln!(
+            "defocus-on-gaussian: R={:.2} confidence={:.1}",
+            est.radius, est.confidence
+        );
+        assert!(
+            !est.confident,
+            "defocus estimator locked onto a gaussian blur (confidence {:.1})",
+            est.confidence
+        );
+    }
+
+    /// Gaussian sigmas across the UI range must fit within 25% relative
+    /// error with an in-range suggested lambda; a sharp scene must fail
+    /// the gate.
+    #[test]
+    fn test_estimate_gaussian_sigmas() {
+        let scene = synthetic_scene(512, 512);
+        for &sigma in &[1.5f32, 3.0, 6.0] {
+            let blurred = gaussian_blur_iso(&scene, sigma);
+            let est = estimate_gaussian(&blurred);
+            eprintln!(
+                "gaussian estimate at σ={sigma}: σ={:.2} t={:.1} λ={:.4} ({}confident)",
+                est.sigma,
+                est.confidence,
+                est.lambda,
+                if est.confident { "" } else { "not " }
+            );
+            assert!(
+                est.confident,
+                "estimator not confident at σ={sigma} (t={:.1})",
+                est.confidence
+            );
+            assert!(
+                (est.sigma - sigma).abs() / sigma <= 0.25,
+                "sigma off at σ={sigma}: got {:.2}",
+                est.sigma
+            );
+            assert!(
+                (0.01..=0.1).contains(&est.lambda),
+                "suggested lambda out of slider range: {:.4}",
+                est.lambda
+            );
+        }
+
+        let sharp = estimate_gaussian(&image::DynamicImage::ImageRgba8(scene));
+        eprintln!(
+            "sharp-image gaussian: σ={:.2} t={:.1}",
+            sharp.sigma, sharp.confidence
+        );
+        assert!(
+            !sharp.confident,
+            "estimator hallucinated a gaussian blur on a sharp image (t={:.1})",
+            sharp.confidence
+        );
+    }
+
+    /// A 2048² frame runs at working scale 0.5: the reported sigma must map
+    /// back to full resolution.
+    #[test]
+    fn test_estimate_gaussian_scale_mapping() {
+        let scene = synthetic_scene(2048, 2048);
+        let blurred = gaussian_blur_iso(&scene, 4.0);
+        let est = estimate_gaussian(&blurred);
+        eprintln!(
+            "gaussian scale mapping: σ={:.2} t={:.1} ({}confident)",
+            est.sigma,
+            est.confidence,
+            if est.confident { "" } else { "not " }
+        );
+        assert!(est.confident, "not confident (t={:.1})", est.confidence);
+        assert!(
+            (est.sigma - 4.0).abs() <= 1.0,
+            "full-res sigma off: got {:.2}, expected 4",
+            est.sigma
+        );
+    }
+
+    /// The jinc ring dips of a disc blur must not least-squares-fit as
+    /// spurious positive gaussian curvature past the t-gate — the symmetric
+    /// cross-mode negative to test_estimate_defocus_rejects_gaussian.
+    #[test]
+    fn test_estimate_gaussian_rejects_defocus() {
+        let scene = synthetic_scene(512, 512);
+        let blurred = disc_blur(&scene, 8.0);
+        let est = estimate_gaussian(&blurred);
+        eprintln!(
+            "gaussian-on-defocus: σ={:.2} t={:.1}",
+            est.sigma, est.confidence
+        );
+        assert!(
+            !est.confident,
+            "gaussian estimator locked onto a disc blur (t={:.1})",
+            est.confidence
+        );
+    }
+
+    /// A linear motion blur attenuates one axis only; the radial median
+    /// profile must suppress its single-axis sinc dips rather than fit
+    /// them as isotropic curvature.
+    #[test]
+    fn test_estimate_gaussian_rejects_motion() {
+        let scene = synthetic_scene(512, 512);
+        let blurred = image::DynamicImage::ImageRgba8(motion_blur_line(&scene, 25.0, 0.0));
+        let est = estimate_gaussian(&blurred);
+        eprintln!(
+            "gaussian-on-motion: σ={:.2} t={:.1}",
+            est.sigma, est.confidence
+        );
+        assert!(
+            !est.confident,
+            "gaussian estimator locked onto a motion blur (t={:.1})",
+            est.confidence
+        );
+    }
+
+    /// Degenerate inputs must produce finite, honest results — no panic,
+    /// no NaN reaching the serialized structs, no invented blur.
+    #[test]
+    fn test_estimator_degenerate_inputs() {
+        let flat = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            64,
+            64,
+            image::Rgba([128, 128, 128, 255]),
+        ));
+        let tiny = image::DynamicImage::ImageRgba8(synthetic_scene(8, 8));
+        let strip = image::DynamicImage::ImageRgba8(synthetic_scene(1024, 128));
+        for (name, img) in [("flat", &flat), ("tiny", &tiny), ("strip", &strip)] {
+            let d = estimate_defocus(img);
+            let g = estimate_gaussian(img);
+            eprintln!(
+                "degenerate {name}: defocus R={:.2} c={:.1}, gaussian σ={:.2} t={:.1}",
+                d.radius, d.confidence, g.sigma, g.confidence
+            );
+            for v in [d.radius, d.confidence, d.lambda, g.sigma, g.confidence, g.lambda] {
+                assert!(v.is_finite(), "{name}: non-finite field {v}");
+            }
+            assert!(!d.confident, "{name}: defocus estimator invented a blur");
+            assert!(!g.confident, "{name}: gaussian estimator invented a blur");
+        }
     }
 
     #[test]
