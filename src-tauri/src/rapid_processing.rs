@@ -3271,27 +3271,41 @@ struct WorkingSpectrum {
     ph: usize,
     w: usize,
     h: usize,
-    /// working / full-res
+    /// working / analyzed source-region pixels
     scale: f32,
 }
 
-fn working_spectrum(image: &image::DynamicImage, source_linear: bool) -> WorkingSpectrum {
+fn working_spectrum(
+    image: &image::DynamicImage,
+    source_linear: bool,
+    rect: Option<image::math::Rect>,
+    scale_override: Option<f32>,
+) -> WorkingSpectrum {
     use image::GenericImageView;
 
-    let (full_w, full_h) = image.dimensions();
+    let cropped;
+    let source_ref = if let Some(rect) = rect {
+        cropped = image.crop_imm(rect.x, rect.y, rect.width, rect.height);
+        &cropped
+    } else {
+        image
+    };
+
+    let (source_w, source_h) = source_ref.dimensions();
     // Convert and decode before interpolation: estimators must inspect
     // luma-of-linear, never a resized encoded buffer.
-    let linear = image::DynamicImage::ImageRgb32F(image.to_rgb32f());
+    let linear = image::DynamicImage::ImageRgb32F(source_ref.to_rgb32f());
     let linear = if source_linear {
         linear
     } else {
         crate::image_processing::apply_srgb_to_linear(linear)
     };
-    let scale = (1024.0 / full_w.max(full_h).max(1) as f32).min(1.0);
+    let scale = scale_override
+        .unwrap_or_else(|| (1024.0 / source_w.max(source_h).max(1) as f32).min(1.0));
     let working;
     let working_ref = if scale < 1.0 {
-        let w = ((full_w as f32 * scale).round() as u32).max(1);
-        let h = ((full_h as f32 * scale).round() as u32).max(1);
+        let w = ((source_w as f32 * scale).round() as u32).max(1);
+        let h = ((source_h as f32 * scale).round() as u32).max(1);
         working = linear.resize_exact(w, h, image::imageops::FilterType::Triangle);
         &working
     } else {
@@ -3434,7 +3448,7 @@ where
 /// low-confidence rather than wrong.
 pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEstimate {
     let WorkingSpectrum { mut data, spectrum_ln, pw, ph, w, h, scale } =
-        working_spectrum(image, source_linear);
+        working_spectrum(image, source_linear, None, None);
 
     // Real cepstrum: log magnitude -> inverse FFT (the forward FFT already
     // ran in working_spectrum).
@@ -3841,7 +3855,7 @@ pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> Def
     const R_STEP: f32 = 0.1;
     const RHO_MAX: f32 = 0.45;
 
-    let ws = working_spectrum(image, source_linear);
+    let ws = working_spectrum(image, source_linear, None, None);
     let profile = radial_profile_mean(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
 
@@ -4025,7 +4039,7 @@ const GAUSSIAN_NOT_CONFIDENT: GaussianEstimate = GaussianEstimate {
 /// σ_work = √(s/2π²). Fit in f64 on centered predictors; confidence is
 /// the t-statistic of s.
 pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> GaussianEstimate {
-    let ws = working_spectrum(image, source_linear);
+    let ws = working_spectrum(image, source_linear, None, None);
     let profile = radial_profile_median(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
     let rho_of = |b: usize| (b as f32 + 0.5) / (2.0 * nb as f32);
@@ -7057,6 +7071,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_working_spectrum_full_rect_parity() {
+        const WIDTH: u32 = 1030;
+        const HEIGHT: u32 = 515;
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
+            WIDTH,
+            HEIGHT,
+            |x, y| {
+                let r = ((17 * x + 31 * y) % 251) as u8;
+                let g = ((47 * x + 13 * y + 29) % 253) as u8;
+                let b = ((7 * x + 61 * y + 83) % 255) as u8;
+                image::Rgb([r, g, b])
+            },
+        ));
+
+        let baseline = working_spectrum(&image, false, None, None);
+        let full_rect = image::math::Rect { x: 0, y: 0, width: WIDTH, height: HEIGHT };
+        let explicit =
+            working_spectrum(&image, false, Some(full_rect), Some(baseline.scale));
+
+        assert_eq!(
+            (baseline.w, baseline.h, baseline.pw, baseline.ph),
+            (explicit.w, explicit.h, explicit.pw, explicit.ph)
+        );
+        assert_eq!(baseline.scale.to_bits(), explicit.scale.to_bits());
+        assert_eq!(baseline.data.len(), explicit.data.len());
+        for (index, (a, b)) in baseline.data.iter().zip(&explicit.data).enumerate() {
+            assert_eq!(
+                (a.re.to_bits(), a.im.to_bits()),
+                (b.re.to_bits(), b.im.to_bits()),
+                "complex spectrum differs at bin {index}"
+            );
+        }
+        assert_eq!(baseline.spectrum_ln.len(), explicit.spectrum_ln.len());
+        for (index, (a, b)) in baseline.spectrum_ln.iter().zip(&explicit.spectrum_ln).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "log spectrum differs at bin {index}");
+        }
+    }
+
     /// A 1152px source forces the estimator resize branch. Decode-before-resize
     /// measured RMS 7.96e-5 on the reference host; the intentionally wrong
     /// encoded-as-linear flag measured 3.72e-1 (about 4,670x worse).
@@ -7090,9 +7143,9 @@ mod tests {
         ));
         let encoded = crate::image_processing::apply_linear_to_srgb(linear.clone());
 
-        let linear_ws = working_spectrum(&linear, true);
-        let encoded_ws = working_spectrum(&encoded, false);
-        let wrong_ws = working_spectrum(&encoded, true);
+        let linear_ws = working_spectrum(&linear, true, None, None);
+        let encoded_ws = working_spectrum(&encoded, false, None, None);
+        let wrong_ws = working_spectrum(&encoded, true, None, None);
         assert_eq!(
             (linear_ws.w, linear_ws.h, linear_ws.pw, linear_ws.ph),
             (encoded_ws.w, encoded_ws.h, encoded_ws.pw, encoded_ws.ph)
