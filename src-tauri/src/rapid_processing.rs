@@ -2198,7 +2198,7 @@ impl RapidDeconvolver {
         image: &image::DynamicImage,
         params: &RapidParams,
     ) -> Result<image::DynamicImage, String> {
-        use image::{GenericImageView, Rgba, RgbaImage};
+        use image::{GenericImageView, Rgba};
 
         if !params.enabled {
             return Ok(image.clone());
@@ -2435,7 +2435,7 @@ impl RapidDeconvolver {
         } else {
             None
         };
-        let mut output = RgbaImage::new(width, height);
+        let mut output = image::Rgba32FImage::new(width, height);
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * padded_w + x) as usize;
@@ -2447,17 +2447,17 @@ impl RapidDeconvolver {
                     let t = w[(y * width + x) as usize];
                     gain = gain * (1.0 - t) + t;
                 }
-                let r = ((src[0] * gain).clamp(0.0, 1.0) * 255.0) as u8;
-                let g = ((src[1] * gain).clamp(0.0, 1.0) * 255.0) as u8;
-                let b = ((src[2] * gain).clamp(0.0, 1.0) * 255.0) as u8;
-                output.put_pixel(x, y, Rgba([r, g, b, 255]));
+                let r = (src[0] * gain).clamp(0.0, 1.0);
+                let g = (src[1] * gain).clamp(0.0, 1.0);
+                let b = (src[2] * gain).clamp(0.0, 1.0);
+                output.put_pixel(x, y, Rgba([r, g, b, src[3]]));
             }
         }
 
         let elapsed = start_time.elapsed();
         log::info!("RAPID deconvolution completed in {:.2?}", elapsed);
 
-        Ok(image::DynamicImage::ImageRgba8(output))
+        Ok(image::DynamicImage::ImageRgba32F(output))
     }
 
     /// Check if GPU supports RAPID without needing device (simpler check)
@@ -4529,6 +4529,61 @@ mod tests {
         .expect("failed to create device");
         let deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
         Some((device, queue, deconv))
+    }
+
+    /// The blur-recovery pre-pass must not collapse its linear f32 result to
+    /// 8-bit, and recombination must preserve source alpha exactly.
+    #[test]
+    fn test_deconvolve_output_is_f32_unquantized() {
+        let Some((device, queue, mut deconv)) = gpu_test_context("f32 output GPU test") else {
+            return;
+        };
+
+        const WIDTH: u32 = 1024;
+        const HEIGHT: u32 = 64;
+        let source = image::Rgba32FImage::from_fn(WIDTH, HEIGHT, |x, y| {
+            let t = x as f32 / (WIDTH - 1) as f32;
+            let value = 0.02 + 0.23 * t;
+            let alpha_step = ((x + 3 * y) % 37) as f32 / 36.0;
+            image::Rgba([value, value, value, 0.1 + 0.8 * alpha_step])
+        });
+        let input = image::DynamicImage::ImageRgba32F(source.clone());
+        let params = RapidParams {
+            enabled: true,
+            modes: ModeSet::DEFOCUS,
+            defocus_radius: 3.0,
+            lambda: 0.01,
+            strength: 1.0,
+            adaptive: true,
+            clip_guard: true,
+            ..Default::default()
+        };
+
+        let out = deconv
+            .deconvolve_image(&device, &queue, &input, &params)
+            .expect("deconvolve_image failed");
+        let output = match out {
+            image::DynamicImage::ImageRgba32F(output) => output,
+            other => panic!("expected ImageRgba32F, got {:?}", other.color()),
+        };
+
+        let scan_y = HEIGHT / 2;
+        let values: std::collections::BTreeSet<u32> = (0..WIDTH)
+            .map(|x| {
+                let value = output.get_pixel(x, scan_y)[0];
+                assert!(value.is_finite(), "non-finite ramp value at x={x}");
+                value.to_bits()
+            })
+            .collect();
+        assert!(
+            values.len() > 512,
+            "f32 ramp retained only {} distinct values",
+            values.len()
+        );
+
+        for (src, dst) in source.pixels().zip(output.pixels()) {
+            assert_eq!(src[3].to_bits(), dst[3].to_bits(), "alpha changed during recombination");
+        }
     }
 
     /// Square-on-gray fixture shared by the compound-mode GPU tests.
