@@ -3438,22 +3438,13 @@ pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
 
     // Sub-bin refinement: the cepstral minimum is quantized to integer
     // working pixels, and length rescales by full/working resolution — on
-    // a large frame that is several full-res pixels of length error,
-    // enough to misalign the far notches the hard inverse depends on. A
-    // 3-point parabolic fit through the minimum recovers the fractional
-    // peak position per axis.
-    let refine = |c_m: f32, c_0: f32, c_p: f32| -> f32 {
-        let curvature = c_m - 2.0 * c_0 + c_p;
-        if curvature <= 1e-12 {
-            0.0
-        } else {
-            (0.5 * (c_m - c_p) / curvature).clamp(-0.5, 0.5)
-        }
-    };
-    let dxf = peak_dx as f32
-        + refine(sample(peak_dx - 1, peak_dy), peak_val, sample(peak_dx + 1, peak_dy));
-    let dyf = peak_dy as f32
-        + refine(sample(peak_dx, peak_dy - 1), peak_val, sample(peak_dx, peak_dy + 1));
+    // a large frame that is several full-res pixels of length error, enough
+    // to misalign the far notches the hard inverse depends on. Fit the full
+    // 3x3 neighborhood so diagonal curvature is represented; guarded fits
+    // fall back exactly to the prior separable parabolas.
+    let (offset_x, offset_y) = refine_cepstral_peak(peak_dx, peak_dy, &sample);
+    let dxf = peak_dx as f32 + offset_x;
+    let dyf = peak_dy as f32 + offset_y;
 
     let r_refined = (dxf * dxf + dyf * dyf).sqrt();
     let length = r_refined / scale;
@@ -5761,15 +5752,15 @@ mod tests {
         assert_eq!(got.1.to_bits(), expected.1.to_bits());
     }
 
-    /// Convention gate for the estimator: synthetic line blurs at four angles
+    /// Convention gate for the estimator: synthetic line blurs at five angles
     /// must come back with the right length and angle in psf_generate.wgsl's
     /// motion_angle convention (degrees, 0-180, image-space Y-down), and a
     /// sharp image must fail the confidence gate rather than invent a blur.
     #[test]
-    fn test_estimate_blur_four_angles() {
+    fn test_estimate_blur_five_angles() {
         let scene = synthetic_scene(512, 512);
         let blur_len = 25.0f32;
-        for &angle in &[0.0f32, 30.0, 90.0, 135.0] {
+        for &angle in &[0.0f32, 30.0, 45.0, 90.0, 135.0] {
             let blurred =
                 image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, angle));
             let est = estimate_blur(&blurred);
@@ -5783,14 +5774,14 @@ mod tests {
                 est.confidence
             );
             assert!(
-                (est.length - blur_len).abs() <= 3.0,
+                (est.length - blur_len).abs() <= 2.0,
                 "length off at {angle}°: got {:.1}, expected {blur_len}",
                 est.length
             );
             let diff = (est.angle - angle).abs();
             let angular_error = diff.min(180.0 - diff);
             assert!(
-                angular_error <= 4.0,
+                angular_error <= 2.0,
                 "angle off at {angle}°: got {:.1}",
                 est.angle
             );
