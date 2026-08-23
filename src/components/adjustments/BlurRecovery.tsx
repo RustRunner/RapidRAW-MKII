@@ -408,7 +408,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                   {estimateButton(handleEstimateGaussian)}
                   <Slider
                     label={t('editor.adjustments.blurRecovery.sigma')}
-                    max={10}
+                    max={8}
                     min={0}
                     onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidSigma, e)}
                     step={0.1}
