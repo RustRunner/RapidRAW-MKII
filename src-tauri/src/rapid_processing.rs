@@ -3369,6 +3369,8 @@ struct WorkingSpectrum {
     /// cepstrum's 1+|F| compresses depth scale-dependently and cannot be
     /// reused for this.
     spectrum_ln: Vec<f32>,
+    /// Unwindowed luma in linear light, retained for probe scheduling.
+    luma: Vec<f32>,
     pw: usize,
     ph: usize,
     w: usize,
@@ -3442,7 +3444,7 @@ fn working_spectrum(
     let eps = (1e-6 * max_mag).max(f32::MIN_POSITIVE);
     let spectrum_ln: Vec<f32> = data.iter().map(|v| (eps + v.magnitude()).ln()).collect();
 
-    WorkingSpectrum { data, spectrum_ln, pw, ph, w, h, scale }
+    WorkingSpectrum { data, spectrum_ln, luma, pw, ph, w, h, scale }
 }
 
 /// Fit a coupled quadratic surface to a 3x3 cepstral neighborhood and
@@ -3549,7 +3551,7 @@ where
 /// floor is ~2-3 working px, so short blurs on large images come back
 /// low-confidence rather than wrong.
 pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEstimate {
-    let WorkingSpectrum { mut data, spectrum_ln, pw, ph, w, h, scale } =
+    let WorkingSpectrum { mut data, spectrum_ln, luma: _, pw, ph, w, h, scale } =
         working_spectrum(image, source_linear, None, None);
 
     // Real cepstrum: log magnitude -> inverse FFT (the forward FFT already
@@ -3916,10 +3918,18 @@ const DEFOCUS_CONFIDENCE_GATE: f32 = 5.0;
 /// z-score alone is fragile when the whole grid scores near zero with tiny
 /// variance — a gaussian blur's smooth knee then z-spikes at a small radius
 /// despite carrying no ring comb. Synthetic calibration: real discs score
-/// 0.51 (R=14) to 1.59 (R=4); the gaussian false lock 0.26; sharp 0.11.
-const DEFOCUS_MIN_RING_CONTRAST: f32 = 0.35;
+/// 0.51 (R=14) to 1.83 (native R=4); gaussian false locks reach 0.37
+/// on native broadband tiles; sharp reaches 0.11.
+const DEFOCUS_MIN_RING_CONTRAST: f32 = 0.4;
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+const DEFOCUS_R_MIN: f32 = 2.5;
+const DEFOCUS_R_MAX: f32 = 25.0;
+const DEFOCUS_R_STEP: f32 = 0.1;
+const DEFOCUS_RHO_MAX: f32 = 0.45;
+#[cfg(test)]
+const INTERACTIVE_ESTIMATE_BUDGET_MS: u128 = 3000;
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct DefocusEstimate {
     pub radius: f32,
     pub confidence: f32,
@@ -3936,6 +3946,105 @@ const DEFOCUS_NOT_CONFIDENT: DefocusEstimate = DefocusEstimate {
     lambda: 0.01,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeKind {
+    Whole,
+    Roi,
+    Center,
+    Detail,
+}
+
+#[derive(Debug, Clone)]
+struct ProbeEvaluation {
+    kind: ProbeKind,
+    estimate: DefocusEstimate,
+    best_idx: Option<usize>,
+    r_grid: Option<f32>,
+    ring_contrast: Option<f32>,
+    boundary: bool,
+    scale: f32,
+}
+
+impl ProbeEvaluation {
+    fn empty(kind: ProbeKind, scale: f32) -> Self {
+        Self {
+            kind,
+            estimate: DEFOCUS_NOT_CONFIDENT,
+            best_idx: None,
+            r_grid: None,
+            ring_contrast: None,
+            boundary: false,
+            scale,
+        }
+    }
+
+    fn passes(&self) -> bool {
+        self.best_idx.is_some()
+            && self.r_grid.is_some()
+            && self.ring_contrast.is_some()
+            && !self.boundary
+            && self.estimate.confident
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DefocusProbeOutcome {
+    result: DefocusEstimate,
+    winner: Option<ProbeKind>,
+    probes: Vec<ProbeEvaluation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DefocusPeak {
+    best_idx: usize,
+    r_grid: f32,
+    r_refined: f32,
+    ring_contrast: f32,
+    boundary: bool,
+}
+
+fn classify_defocus_peak(scores: &[(f32, f32)]) -> Option<DefocusPeak> {
+    let best_idx = scores
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.0.is_finite() && candidate.1.is_finite())
+        .max_by(|(_, a), (_, b)| {
+            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(index, _)| index)?;
+    let (r_grid, ring_contrast) = scores[best_idx];
+
+    let contiguous = best_idx > 0
+        && best_idx + 1 < scores.len()
+        && scores[best_idx - 1].0.is_finite()
+        && scores[best_idx - 1].1.is_finite()
+        && scores[best_idx + 1].0.is_finite()
+        && scores[best_idx + 1].1.is_finite()
+        && (r_grid - scores[best_idx - 1].0 - DEFOCUS_R_STEP).abs() < 1e-4
+        && (scores[best_idx + 1].0 - r_grid - DEFOCUS_R_STEP).abs() < 1e-4;
+    let mut r_refined = r_grid;
+    if contiguous {
+        let (s_m, s_0, s_p) = (
+            scores[best_idx - 1].1,
+            scores[best_idx].1,
+            scores[best_idx + 1].1,
+        );
+        let curvature = s_m - 2.0 * s_0 + s_p;
+        if curvature < -1e-12 {
+            r_refined +=
+                (0.5 * (s_m - s_p) / curvature).clamp(-0.5, 0.5) * DEFOCUS_R_STEP;
+        }
+    }
+
+    Some(DefocusPeak {
+        best_idx,
+        r_grid,
+        r_refined,
+        ring_contrast,
+        boundary: !contiguous,
+    })
+}
+
 /// Estimate defocus (disc) blur radius by matched analysis of the jinc
 /// OTF's zero rings.
 ///
@@ -3951,20 +4060,19 @@ const DEFOCUS_NOT_CONFIDENT: DefocusEstimate = DefocusEstimate {
 /// ρ ≤ 0.45 band (two zeros minimum for a comb), so small blurs on large
 /// frames come back low-confidence rather than wrong — the motion
 /// estimator's documented limitation, shared.
-pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> DefocusEstimate {
-    const R_MIN: f32 = 2.5;
-    const R_MAX: f32 = 25.0;
-    const R_STEP: f32 = 0.1;
-    const RHO_MAX: f32 = 0.45;
-
-    let ws = working_spectrum(image, source_linear, None, None);
+fn evaluate_defocus_spectrum(ws: &WorkingSpectrum, kind: ProbeKind) -> ProbeEvaluation {
     let profile = radial_profile_mean(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
 
     // J1 roots via McMahon, x_k ≈ β − 3/(8β), β = (k + 1/4)π: absolute
     // error < 4e-4 for k ≥ 1, far below a profile bucket in ρ. Generated
     // out to the band edge at the largest candidate (R = 25 consumes 22).
-    let max_roots = (2.0 * std::f32::consts::PI * R_MAX * RHO_MAX / std::f32::consts::PI).ceil()
+    let max_roots = (2.0
+        * std::f32::consts::PI
+        * DEFOCUS_R_MAX
+        * DEFOCUS_RHO_MAX
+        / std::f32::consts::PI)
+        .ceil()
         as usize
         + 2;
     let j1_roots: Vec<f32> = (1..=max_roots)
@@ -3985,9 +4093,9 @@ pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> Def
 
     // Score every candidate radius on the shared profile.
     let mut scores: Vec<(f32, f32)> = Vec::new();
-    let steps = ((R_MAX - R_MIN) / R_STEP).round() as usize;
+    let steps = ((DEFOCUS_R_MAX - DEFOCUS_R_MIN) / DEFOCUS_R_STEP).round() as usize;
     for i in 0..=steps {
-        let r = R_MIN + i as f32 * R_STEP;
+        let r = DEFOCUS_R_MIN + i as f32 * DEFOCUS_R_STEP;
         // Boxcar detrend one ring period (≈ 0.5/R in ρ) wide, exactly the
         // fit_motion_hardness treatment.
         let half_period = ((ws.pw as f32 / (2.0 * r)).round() as usize).max(3) / 2;
@@ -4021,14 +4129,14 @@ pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> Def
         let mut ctl_depths = Vec::new();
         for pair in j1_roots.windows(2) {
             let rho_zero = pair[0] / two_pi_r;
-            if rho_zero > RHO_MAX {
+            if rho_zero > DEFOCUS_RHO_MAX {
                 break;
             }
             if let Some(d) = depression_at(rho_zero, 1) {
                 zero_depths.push(d);
             }
             let rho_mid = (pair[0] + pair[1]) / 2.0 / two_pi_r;
-            if rho_mid <= RHO_MAX
+            if rho_mid <= DEFOCUS_RHO_MAX
                 && let Some(d) = depression_at(rho_mid, 0)
             {
                 ctl_depths.push(d);
@@ -4043,11 +4151,17 @@ pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> Def
         scores.push((r, z - c));
     }
 
-    let Some(&(best_r_grid, best_score)) = scores
-        .iter()
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-    else {
-        return DEFOCUS_NOT_CONFIDENT;
+    let Some(peak) = classify_defocus_peak(&scores) else {
+        return ProbeEvaluation::empty(kind, ws.scale);
+    };
+    let mut evaluation = ProbeEvaluation {
+        kind,
+        estimate: DEFOCUS_NOT_CONFIDENT,
+        best_idx: Some(peak.best_idx),
+        r_grid: Some(peak.r_grid),
+        ring_contrast: Some(peak.ring_contrast),
+        boundary: peak.boundary,
+        scale: ws.scale,
     };
 
     // Confidence: z-score of the best score against the rest of the grid,
@@ -4055,53 +4169,289 @@ pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> Def
     // the cepstral confidence).
     let pool: Vec<f32> = scores
         .iter()
-        .filter(|(r, _)| (r - best_r_grid).abs() > 0.5)
+        .filter(|(r, s)| s.is_finite() && (r - peak.r_grid).abs() > 0.5)
         .map(|&(_, s)| s)
         .collect();
     if pool.len() < 16 {
-        return DEFOCUS_NOT_CONFIDENT;
+        return evaluation;
     }
     let n = pool.len() as f64;
     let mean = pool.iter().map(|&s| s as f64).sum::<f64>() / n;
     let var = pool.iter().map(|&s| (s as f64 - mean).powi(2)).sum::<f64>() / n;
     let std = var.max(1e-20).sqrt();
-    let confidence = ((best_score as f64 - mean) / std) as f32;
+    let confidence = ((peak.ring_contrast as f64 - mean) / std) as f32;
+    let radius = peak.r_refined / ws.scale;
+    let confident = confidence.is_finite()
+        && confidence >= DEFOCUS_CONFIDENCE_GATE
+        && peak.ring_contrast >= DEFOCUS_MIN_RING_CONTRAST;
+    let lambda = if confident && !peak.boundary {
+        suggest_lambda_radial(&ws.spectrum_ln, ws.pw, ws.ph, |rho| {
+            jinc(2.0 * std::f32::consts::PI * peak.r_refined * rho)
+                .abs()
+                .max(1e-6)
+                .ln()
+        })
+    } else {
+        0.01
+    };
+    evaluation.estimate = if radius.is_finite() && confidence.is_finite() && lambda.is_finite() {
+        DefocusEstimate { radius, confidence, confident, lambda }
+    } else {
+        DEFOCUS_NOT_CONFIDENT
+    };
+    evaluation
+}
 
-    // 3-point parabolic refine over grid neighbors, only when the peak is
-    // interior to a contiguous stretch of the grid; a boundary best keeps
-    // its raw value.
-    let mut r_best = best_r_grid;
-    if let Some(i) = scores.iter().position(|&(r, _)| r == best_r_grid)
-        && i > 0
-        && i + 1 < scores.len()
-        && (scores[i + 1].0 - scores[i - 1].0 - 2.0 * R_STEP).abs() < 1e-4
-    {
-        let (s_m, s_0, s_p) = (scores[i - 1].1, scores[i].1, scores[i + 1].1);
-        let curvature = s_m - 2.0 * s_0 + s_p;
-        if curvature < -1e-12 {
-            r_best += (0.5 * (s_m - s_p) / curvature).clamp(-0.5, 0.5) * R_STEP;
+#[derive(Debug)]
+struct WorkingLuma {
+    values: Vec<f32>,
+    width: usize,
+    height: usize,
+    source_dims: (u32, u32),
+}
+
+fn log_defocus_probe(probe: &ProbeEvaluation) {
+    log::info!(
+        "RAPID: defocus probe={:?} scale={:.4} grid={:?} contrast={:?} boundary={} R={:.2}px confidence={:.2} confident={}",
+        probe.kind,
+        probe.scale,
+        probe.r_grid,
+        probe.ring_contrast,
+        probe.boundary,
+        probe.estimate.radius,
+        probe.estimate.confidence,
+        probe.estimate.confident,
+    );
+}
+
+fn evaluate_defocus_probe(
+    image: &image::DynamicImage,
+    source_linear: bool,
+    kind: ProbeKind,
+    rect: crate::image_processing::PixelRect,
+) -> ProbeEvaluation {
+    let ws = working_spectrum(image, source_linear, Some(rect), Some(1.0));
+    let evaluation = evaluate_defocus_spectrum(&ws, kind);
+    log_defocus_probe(&evaluation);
+    evaluation
+}
+
+fn centered_axis_start(extent: u32, tile_extent: u32, fraction: f64) -> u32 {
+    let high = extent.saturating_sub(tile_extent);
+    (fraction * extent as f64 - tile_extent as f64 / 2.0)
+        .round()
+        .clamp(0.0, high as f64) as u32
+}
+
+fn defocus_tile_rect(
+    source_dims: (u32, u32),
+    tile_dims: (u32, u32),
+    center: (f64, f64),
+) -> crate::image_processing::PixelRect {
+    crate::image_processing::PixelRect {
+        x: centered_axis_start(source_dims.0, tile_dims.0, center.0),
+        y: centered_axis_start(source_dims.1, tile_dims.1, center.1),
+        width: tile_dims.0,
+        height: tile_dims.1,
+    }
+}
+
+fn size_defocus_roi(
+    mapped: crate::image_processing::PixelRect,
+    source_dims: (u32, u32),
+) -> Option<crate::image_processing::PixelRect> {
+    use crate::image_processing::PixelRect;
+
+    if source_dims.0 < 256 || source_dims.1 < 256 {
+        return None;
+    }
+    let x0 = mapped.x.min(source_dims.0);
+    let y0 = mapped.y.min(source_dims.1);
+    let x1 = mapped.x.saturating_add(mapped.width).min(source_dims.0);
+    let y1 = mapped.y.saturating_add(mapped.height).min(source_dims.1);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+
+    let target_w = (x1 - x0).clamp(256, 2048).min(source_dims.0);
+    let target_h = (y1 - y0).clamp(256, 2048).min(source_dims.1);
+    let center_x = (x0 as f64 + x1 as f64) / 2.0;
+    let center_y = (y0 as f64 + y1 as f64) / 2.0;
+    let x = (center_x - target_w as f64 / 2.0)
+        .round()
+        .clamp(0.0, source_dims.0.saturating_sub(target_w) as f64) as u32;
+    let y = (center_y - target_h as f64 / 2.0)
+        .round()
+        .clamp(0.0, source_dims.1.saturating_sub(target_h) as f64) as u32;
+    Some(PixelRect { x, y, width: target_w, height: target_h })
+}
+
+fn laplacian_variance(
+    working: &WorkingLuma,
+    rect: crate::image_processing::PixelRect,
+) -> f64 {
+    let (source_w, source_h) = working.source_dims;
+    let ratio_x = working.width as f64 / source_w.max(1) as f64;
+    let ratio_y = working.height as f64 / source_h.max(1) as f64;
+    let x0 = (rect.x as f64 * ratio_x)
+        .floor()
+        .clamp(0.0, working.width as f64) as usize;
+    let y0 = (rect.y as f64 * ratio_y)
+        .floor()
+        .clamp(0.0, working.height as f64) as usize;
+    let x1 = (rect.x.saturating_add(rect.width) as f64 * ratio_x)
+        .ceil()
+        .clamp(0.0, working.width as f64) as usize;
+    let y1 = (rect.y.saturating_add(rect.height) as f64 * ratio_y)
+        .ceil()
+        .clamp(0.0, working.height as f64) as usize;
+    if x1.saturating_sub(x0) < 3 || y1.saturating_sub(y0) < 3 {
+        return f64::NEG_INFINITY;
+    }
+
+    let mut count = 0u64;
+    let mut mean = 0.0f64;
+    let mut m2 = 0.0f64;
+    for y in y0 + 1..y1 - 1 {
+        for x in x0 + 1..x1 - 1 {
+            let i = y * working.width + x;
+            let value = working.values[i - working.width] as f64
+                + working.values[i - 1] as f64
+                - 4.0 * working.values[i] as f64
+                + working.values[i + 1] as f64
+                + working.values[i + working.width] as f64;
+            count += 1;
+            let delta = value - mean;
+            mean += delta / count as f64;
+            m2 += delta * (value - mean);
+        }
+    }
+    if count < 9 {
+        f64::NEG_INFINITY
+    } else {
+        m2 / count as f64
+    }
+}
+
+fn choose_detail_tile(working: &WorkingLuma) -> Option<crate::image_processing::PixelRect> {
+    let tile_dims = (working.source_dims.0.min(1024), working.source_dims.1.min(1024));
+    let center = defocus_tile_rect(working.source_dims, tile_dims, (0.5, 0.5));
+    let fractions = [0.25, 0.5, 0.75];
+    let mut seen = vec![center];
+    let mut best: Option<(crate::image_processing::PixelRect, f64)> = None;
+
+    for &fy in &fractions {
+        for &fx in &fractions {
+            if fx == 0.5 && fy == 0.5 {
+                continue;
+            }
+            let rect = defocus_tile_rect(working.source_dims, tile_dims, (fx, fy));
+            if seen.contains(&rect) {
+                continue;
+            }
+            seen.push(rect);
+            let score = laplacian_variance(working, rect);
+            if best.as_ref().is_none_or(|(_, best_score)| score > *best_score) {
+                best = Some((rect, score));
+            }
+        }
+    }
+    best.map(|(rect, _)| rect)
+}
+
+fn select_defocus_probes(probes: Vec<ProbeEvaluation>) -> DefocusProbeOutcome {
+    let roi = probes
+        .iter()
+        .position(|probe| probe.kind == ProbeKind::Roi && probe.passes());
+
+    let mut native = None;
+    for (index, probe) in probes.iter().enumerate() {
+        if !matches!(probe.kind, ProbeKind::Center | ProbeKind::Detail) || !probe.passes() {
+            continue;
+        }
+        if native.is_none_or(|best_index: usize| {
+            probe.ring_contrast.unwrap() > probes[best_index].ring_contrast.unwrap()
+        }) {
+            native = Some(index);
         }
     }
 
-    let radius = r_best / ws.scale;
-    let confident = confidence.is_finite()
-        && confidence >= DEFOCUS_CONFIDENCE_GATE
-        && best_score >= DEFOCUS_MIN_RING_CONTRAST;
-    if !confident {
-        return DefocusEstimate {
-            radius: if radius.is_finite() { radius } else { 0.0 },
-            confidence: if confidence.is_finite() { confidence } else { 0.0 },
-            confident: false,
-            lambda: 0.01,
-        };
+    let whole = probes
+        .iter()
+        .position(|probe| probe.kind == ProbeKind::Whole && probe.passes());
+    let selected = roi.or(native).or(whole);
+    let (result, winner) = selected
+        .map(|index| (probes[index].estimate, Some(probes[index].kind)))
+        .unwrap_or((DEFOCUS_NOT_CONFIDENT, None));
+    DefocusProbeOutcome { result, winner, probes }
+}
+
+fn estimate_defocus_outcome(
+    image: &image::DynamicImage,
+    source_linear: bool,
+    roi: Option<&serde_json::Value>,
+) -> DefocusProbeOutcome {
+    use image::GenericImageView;
+
+    let source_dims = image.dimensions();
+    let mut whole_spectrum = working_spectrum(image, source_linear, None, None);
+    let whole = evaluate_defocus_spectrum(&whole_spectrum, ProbeKind::Whole);
+    log_defocus_probe(&whole);
+    let working = WorkingLuma {
+        values: std::mem::take(&mut whole_spectrum.luma),
+        width: whole_spectrum.w,
+        height: whole_spectrum.h,
+        source_dims,
+    };
+    drop(whole_spectrum);
+
+    let mut probes = vec![whole];
+    let mapped_roi = roi.and_then(|snapshot| map_estimate_roi_to_source(snapshot, source_dims));
+    let probe_roi = mapped_roi.and_then(|rect| size_defocus_roi(rect, source_dims));
+    if mapped_roi.is_some() && probe_roi.is_none() {
+        log::info!("RAPID: defocus ROI skipped: source or clamped ROI is too small");
     }
-    let lambda = suggest_lambda_radial(&ws.spectrum_ln, ws.pw, ws.ph, |rho| {
-        jinc(2.0 * std::f32::consts::PI * r_best * rho).abs().max(1e-6).ln()
-    });
-    if !radius.is_finite() || !lambda.is_finite() {
-        return DEFOCUS_NOT_CONFIDENT;
+    if let Some(rect) = probe_roi {
+        let evaluation = evaluate_defocus_probe(image, source_linear, ProbeKind::Roi, rect);
+        let passes = evaluation.passes();
+        probes.push(evaluation);
+        if passes {
+            drop(working);
+            return select_defocus_probes(probes);
+        }
     }
-    DefocusEstimate { radius, confidence, confident: true, lambda }
+
+    if source_dims.0.max(source_dims.1) > 1024 {
+        let tile_dims = (source_dims.0.min(1024), source_dims.1.min(1024));
+        let center = defocus_tile_rect(source_dims, tile_dims, (0.5, 0.5));
+        let detail = choose_detail_tile(&working);
+        drop(working);
+        probes.push(evaluate_defocus_probe(
+            image,
+            source_linear,
+            ProbeKind::Center,
+            center,
+        ));
+        if let Some(rect) = detail {
+            probes.push(evaluate_defocus_probe(
+                image,
+                source_linear,
+                ProbeKind::Detail,
+                rect,
+            ));
+        }
+    } else {
+        drop(working);
+    }
+
+    select_defocus_probes(probes)
+}
+
+/// Estimate a defocus (disc) radius using the whole frame plus adaptive
+/// native-resolution tiles when the frame is larger than the FFT work cap.
+#[allow(dead_code)] // Public compatibility/test wrapper; the command also needs probe diagnostics.
+pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> DefocusEstimate {
+    estimate_defocus_outcome(image, source_linear, None).result
 }
 
 /// The t-statistic of the fitted spectral curvature must clear this before
@@ -4245,6 +4595,7 @@ pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> Ga
 #[tauri::command]
 pub async fn estimate_defocus_kernel(
     state: tauri::State<'_, crate::app_state::AppState>,
+    roi: Option<serde_json::Value>,
 ) -> Result<DefocusEstimate, String> {
     let (image, source_linear) = {
         let guard = state.original_image.lock().unwrap();
@@ -4254,15 +4605,20 @@ pub async fn estimate_defocus_kernel(
             .ok_or("No image loaded")?
     };
     let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_defocus(&image, source_linear))
-        .await
-        .map_err(|e| format!("Defocus estimation task failed: {e}"))?;
+    let outcome = tokio::task::spawn_blocking(move || {
+        estimate_defocus_outcome(&image, source_linear, roi.as_ref())
+    })
+    .await
+    .map_err(|e| format!("Defocus estimation task failed: {e}"))?;
+    let estimate = outcome.result;
     log::info!(
-        "RAPID: defocus estimate R={:.1}px λ={:.4} confidence={:.1} ({}confident) in {:?}",
+        "RAPID: defocus estimate R={:.1}px λ={:.4} confidence={:.1} ({}confident) winner={:?} probes={} in {:?}",
         estimate.radius,
         estimate.lambda,
         estimate.confidence,
         if estimate.confident { "" } else { "not " },
+        outcome.winner,
+        outcome.probes.len(),
         start.elapsed()
     );
     Ok(estimate)
@@ -6023,6 +6379,24 @@ mod tests {
         })
     }
 
+    fn synthetic_probe_scene(w: u32, h: u32) -> image::RgbaImage {
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            let mut hash = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+            hash ^= hash >> 16;
+            hash = hash.wrapping_mul(0x7FEB_352D);
+            hash ^= hash >> 15;
+            hash = hash.wrapping_mul(0x846C_A68B);
+            hash ^= hash >> 16;
+            let noise = (hash & 0xff) as f32 / 255.0 - 0.5;
+            // Make the top-left candidate deterministically more detailed
+            // than center without introducing a periodic spectral pattern.
+            let gain = if x < w / 2 && y < h / 2 { 0.9 } else { 0.55 };
+            let value = (0.5 + gain * noise).clamp(0.0, 1.0);
+            let byte = (255.0 * value).round() as u8;
+            image::Rgba([byte, byte, byte, 255])
+        })
+    }
+
     /// Convolve with a true line PSF (uniform box along the given direction,
     /// image-space Y-down) — the real-world blur the estimator must detect,
     /// as opposed to the engine's Gaussian-envelope deconvolution model.
@@ -6534,6 +6908,338 @@ mod tests {
             (est.radius - 16.0).abs() <= 2.0,
             "full-res radius off: got {:.2}, expected 16",
             est.radius
+        );
+    }
+
+    /// At 2048x1536 the whole probe runs at scale 0.5, so R=4 falls
+    /// below its R_MIN/scale=5 full-resolution floor. Native tiles recover
+    /// that blind spot; at a typical 24 MP scale the same floor is about 15 px.
+    #[test]
+    fn test_estimate_defocus_probes_small_radius_on_large_frame() {
+        let scene = synthetic_probe_scene(2048, 1536);
+        for &radius in &[4.0f32, 6.0, 8.0] {
+            let blurred = disc_blur(&scene, radius);
+            let outcome = estimate_defocus_outcome(&blurred, true, None);
+            let kinds: Vec<_> = outcome.probes.iter().map(|probe| probe.kind).collect();
+            eprintln!(
+                "multi-probe R={radius}: winner={:?} result={:.2}, probes={:?}",
+                outcome.winner, outcome.result.radius, outcome.probes
+            );
+            assert_eq!(kinds, vec![ProbeKind::Whole, ProbeKind::Center, ProbeKind::Detail]);
+            assert!(
+                matches!(outcome.winner, Some(ProbeKind::Center | ProbeKind::Detail)),
+                "R={radius}: a native probe must win, got {:?}",
+                outcome.winner
+            );
+            assert!(outcome.result.confident);
+            assert!(
+                (outcome.result.radius - radius).abs() <= 0.5,
+                "R={radius}: got {:.2}",
+                outcome.result.radius
+            );
+            if radius == 4.0 {
+                assert!(
+                    !outcome.probes[0].passes(),
+                    "R=4 whole probe must fail closed below the detectable floor"
+                );
+            }
+        }
+
+        let sharp = image::DynamicImage::ImageRgba8(scene.clone());
+        let gaussian = gaussian_blur_iso(&scene, 3.0);
+        for (name, image) in [("sharp", sharp), ("gaussian", gaussian)] {
+            let outcome = estimate_defocus_outcome(&image, true, None);
+            eprintln!("{name} multi-probe negative: {:?}", outcome);
+            assert_eq!(outcome.winner, None, "{name}: selected {:?}", outcome.winner);
+            assert!(
+                outcome.probes.iter().all(|probe| !probe.passes()),
+                "{name}: a probe passed: {:?}",
+                outcome.probes
+            );
+        }
+    }
+
+    #[test]
+    fn test_estimate_defocus_large_radius_prefers_whole_frame() {
+        let scene = synthetic_probe_scene(2048, 1536);
+        let blurred = disc_blur(&scene, 30.0);
+        let outcome = estimate_defocus_outcome(&blurred, true, None);
+        let kinds: Vec<_> = outcome.probes.iter().map(|probe| probe.kind).collect();
+        eprintln!("large-radius outcome: {:?}", outcome);
+        assert_eq!(kinds, vec![ProbeKind::Whole, ProbeKind::Center, ProbeKind::Detail]);
+        assert_eq!(outcome.winner, Some(ProbeKind::Whole));
+        assert!(outcome.result.confident);
+        assert!(
+            (outcome.result.radius - 30.0).abs() <= 1.0,
+            "large radius got {:.2}",
+            outcome.result.radius
+        );
+        assert!(
+            outcome
+                .probes
+                .iter()
+                .filter(|probe| matches!(probe.kind, ProbeKind::Center | ProbeKind::Detail))
+                .all(|probe| !probe.passes()),
+            "native probes must fail closed above their search range: {:?}",
+            outcome.probes
+        );
+    }
+
+    #[test]
+    fn test_estimate_defocus_boundary_lock_rejected() {
+        let scores_with_peak = |peak_index: usize| {
+            (0..5)
+                .map(|index| {
+                    (
+                        DEFOCUS_R_MIN + index as f32 * DEFOCUS_R_STEP,
+                        if index == peak_index { 1.0 } else { 0.0 },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let evaluation_from_scores = |scores: &[(f32, f32)]| {
+            classify_defocus_peak(scores)
+                .map(|peak| ProbeEvaluation {
+                    kind: ProbeKind::Whole,
+                    estimate: DefocusEstimate {
+                        radius: peak.r_refined,
+                        confidence: DEFOCUS_CONFIDENCE_GATE + 1.0,
+                        confident: true,
+                        lambda: 0.01,
+                    },
+                    best_idx: Some(peak.best_idx),
+                    r_grid: Some(peak.r_grid),
+                    ring_contrast: Some(peak.ring_contrast),
+                    boundary: peak.boundary,
+                    scale: 1.0,
+                })
+                .unwrap_or_else(|| ProbeEvaluation::empty(ProbeKind::Whole, 1.0))
+        };
+
+        for peak_index in [0, 4] {
+            let evaluation = evaluation_from_scores(&scores_with_peak(peak_index));
+            assert!(evaluation.boundary);
+            assert!(!evaluation.passes());
+            let outcome = select_defocus_probes(vec![evaluation]);
+            assert_eq!(outcome.winner, None);
+            assert_eq!(outcome.result, DEFOCUS_NOT_CONFIDENT);
+        }
+        for peak_index in [1, 3] {
+            let evaluation = evaluation_from_scores(&scores_with_peak(peak_index));
+            assert!(!evaluation.boundary, "index {peak_index} is a valid interior peak");
+            assert!(evaluation.passes());
+            let outcome = select_defocus_probes(vec![evaluation]);
+            assert_eq!(outcome.winner, Some(ProbeKind::Whole));
+        }
+
+        let invalid_sets = [
+            Vec::<(f32, f32)>::new(),
+            vec![
+                (DEFOCUS_R_MIN, f32::NAN),
+                (DEFOCUS_R_MIN + DEFOCUS_R_STEP, f32::INFINITY),
+            ],
+        ];
+        for scores in invalid_sets {
+            let evaluation = evaluation_from_scores(&scores);
+            assert!(evaluation.best_idx.is_none());
+            assert!(evaluation.r_grid.is_none());
+            assert!(evaluation.ring_contrast.is_none());
+            let outcome = select_defocus_probes(vec![evaluation]);
+            assert_eq!(outcome.winner, None);
+            assert_eq!(outcome.result, DEFOCUS_NOT_CONFIDENT);
+        }
+    }
+
+    #[test]
+    fn test_estimate_defocus_roi_targets_plate() {
+        use crate::image_processing::PixelRect;
+
+        const WIDTH: u32 = 2048;
+        const HEIGHT: u32 = 2048;
+        const BAND_HEIGHT: u32 = 400;
+        const CROP: PixelRect = PixelRect { x: 100, y: 140, width: 600, height: 120 };
+        const EXPECTED_ROI: PixelRect = PixelRect { x: 100, y: 72, width: 600, height: 256 };
+
+        // A blurred textured top band supplies a plate-like target while the
+        // native center tile sees only the flat field below it.
+        let band = synthetic_scene(WIDTH, BAND_HEIGHT);
+        let blurred_band = disc_blur(&band, 5.0).to_rgba8();
+        let mut frame =
+            image::RgbaImage::from_pixel(WIDTH, HEIGHT, image::Rgba([128, 128, 128, 255]));
+        for y in 0..BAND_HEIGHT {
+            for x in 0..WIDTH {
+                frame.put_pixel(x, y, *blurred_band.get_pixel(x, y));
+            }
+        }
+        let image = image::DynamicImage::ImageRgba8(frame);
+        assert_eq!(size_defocus_roi(CROP, (WIDTH, HEIGHT)), Some(EXPECTED_ROI));
+
+        let snapshot = serde_json::json!({
+            "crop": {
+                "x": CROP.x,
+                "y": CROP.y,
+                "width": CROP.width,
+                "height": CROP.height,
+            }
+        });
+        let targeted = estimate_defocus_outcome(&image, true, Some(&snapshot));
+        let targeted_kinds: Vec<_> = targeted.probes.iter().map(|probe| probe.kind).collect();
+        eprintln!("targeted ROI outcome: {:?}", targeted);
+        assert_eq!(targeted_kinds, vec![ProbeKind::Whole, ProbeKind::Roi]);
+        assert_eq!(targeted.winner, Some(ProbeKind::Roi));
+        assert!(
+            (targeted.result.radius - 5.0).abs() <= 0.5,
+            "ROI radius got {:.2}",
+            targeted.result.radius
+        );
+
+        let fallback = estimate_defocus_outcome(&image, true, None);
+        let fallback_kinds: Vec<_> = fallback.probes.iter().map(|probe| probe.kind).collect();
+        eprintln!("untargeted plate outcome: {:?}", fallback);
+        assert_eq!(fallback_kinds, vec![ProbeKind::Whole, ProbeKind::Center, ProbeKind::Detail]);
+        let center = fallback
+            .probes
+            .iter()
+            .find(|probe| probe.kind == ProbeKind::Center)
+            .unwrap();
+        assert!(!center.passes(), "center unexpectedly saw the top-band target");
+        assert_eq!(fallback.winner, Some(ProbeKind::Detail));
+        assert!((fallback.result.radius - 5.0).abs() <= 0.5);
+    }
+
+    #[test]
+    #[ignore = "release-only 24 MP latency/RSS acceptance benchmark"]
+    fn benchmark_estimate_defocus_four_probe_budget() {
+        use std::time::{Duration, Instant};
+
+        assert!(!cfg!(debug_assertions), "run this benchmark with cargo test --release");
+
+        const WIDTH: u32 = 6000;
+        const HEIGHT: u32 = 4000;
+        const FLAT_SIZE: u32 = 2048;
+        const PLATE_X: u32 = 5200;
+        const PLATE_Y: u32 = 3400;
+        const PLATE_W: u32 = 600;
+        const PLATE_H: u32 = 256;
+        const PLATE_RADIUS: i32 = 5;
+
+        let noise_byte = |x: u32, y: u32| -> u8 {
+            let mut hash = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+            hash ^= hash >> 16;
+            hash = hash.wrapping_mul(0x7FEB_352D);
+            hash ^= hash >> 15;
+            hash = hash.wrapping_mul(0x846C_A68B);
+            hash ^= hash >> 16;
+            (hash & 0xff) as u8
+        };
+        let encode = |linear: f32| {
+            if linear <= 0.003_130_8 {
+                12.92 * linear
+            } else {
+                1.055 * linear.powf(1.0 / 2.4) - 0.055
+            }
+        };
+        let encoded_noise: [f32; 256] = std::array::from_fn(|index| {
+            encode(0.1 + 0.8 * index as f32 / 255.0)
+        });
+        let encoded_flat = encode(0.5);
+
+        // Build the encoded f32 loader fixture directly. The small plate
+        // region evaluates its procedural linear source through a disc
+        // average on demand, so no full-size linear copy is retained.
+        let fixture = image::DynamicImage::ImageRgb32F(image::Rgb32FImage::from_fn(
+            WIDTH,
+            HEIGHT,
+            |x, y| {
+                let encoded = if x < FLAT_SIZE && y < FLAT_SIZE {
+                    encoded_flat
+                } else if (PLATE_X..PLATE_X + PLATE_W).contains(&x)
+                    && (PLATE_Y..PLATE_Y + PLATE_H).contains(&y)
+                {
+                    let mut sum = 0u32;
+                    let mut count = 0u32;
+                    for dy in -PLATE_RADIUS..=PLATE_RADIUS {
+                        for dx in -PLATE_RADIUS..=PLATE_RADIUS {
+                            if dx * dx + dy * dy > PLATE_RADIUS * PLATE_RADIUS {
+                                continue;
+                            }
+                            let sx = (x as i32 + dx)
+                                .clamp(PLATE_X as i32, (PLATE_X + PLATE_W - 1) as i32)
+                                as u32;
+                            let sy = (y as i32 + dy)
+                                .clamp(PLATE_Y as i32, (PLATE_Y + PLATE_H - 1) as i32)
+                                as u32;
+                            sum += noise_byte(sx, sy) as u32;
+                            count += 1;
+                        }
+                    }
+                    encode(0.1 + 0.8 * (sum as f32 / count as f32) / 255.0)
+                } else {
+                    encoded_noise[noise_byte(x, y) as usize]
+                };
+                image::Rgb([encoded, encoded, encoded])
+            },
+        ));
+
+        let flat_roi = serde_json::json!({
+            "crop": { "x": 0, "y": 0, "width": FLAT_SIZE, "height": FLAT_SIZE }
+        });
+        let passing_roi = serde_json::json!({
+            "crop": {
+                "x": PLATE_X,
+                "y": PLATE_Y + 68,
+                "width": PLATE_W,
+                "height": 120,
+            }
+        });
+        let timed = |roi: Option<&serde_json::Value>| {
+            let start = Instant::now();
+            let command_handoff = fixture.clone();
+            let outcome = estimate_defocus_outcome(&command_handoff, false, roi);
+            (start.elapsed(), outcome)
+        };
+        let kinds = |outcome: &DefocusProbeOutcome| {
+            outcome.probes.iter().map(|probe| probe.kind).collect::<Vec<_>>()
+        };
+
+        let (_, warmup) = timed(Some(&flat_roi));
+        assert_eq!(
+            kinds(&warmup),
+            vec![ProbeKind::Whole, ProbeKind::Roi, ProbeKind::Center, ProbeKind::Detail]
+        );
+
+        let mut measured: Vec<Duration> = Vec::with_capacity(3);
+        for run in 1..=3 {
+            let (elapsed, outcome) = timed(Some(&flat_roi));
+            assert_eq!(
+                kinds(&outcome),
+                vec![ProbeKind::Whole, ProbeKind::Roi, ProbeKind::Center, ProbeKind::Detail]
+            );
+            eprintln!("forced four-probe run {run}: {:.1} ms", elapsed.as_secs_f64() * 1000.0);
+            measured.push(elapsed);
+        }
+        measured.sort();
+        let median = measured[1];
+        eprintln!("forced four-probe median: {:.1} ms", median.as_secs_f64() * 1000.0);
+        assert!(
+            median.as_millis() <= INTERACTIVE_ESTIMATE_BUDGET_MS,
+            "four-probe median {:.1} ms exceeds {} ms",
+            median.as_secs_f64() * 1000.0,
+            INTERACTIVE_ESTIMATE_BUDGET_MS
+        );
+
+        let (passing_elapsed, passing) = timed(Some(&passing_roi));
+        assert_eq!(kinds(&passing), vec![ProbeKind::Whole, ProbeKind::Roi]);
+        assert_eq!(passing.winner, Some(ProbeKind::Roi));
+        let (no_roi_elapsed, no_roi) = timed(None);
+        assert_eq!(
+            kinds(&no_roi),
+            vec![ProbeKind::Whole, ProbeKind::Center, ProbeKind::Detail]
+        );
+        eprintln!(
+            "normal timings: passing ROI {:.1} ms; no ROI {:.1} ms",
+            passing_elapsed.as_secs_f64() * 1000.0,
+            no_roi_elapsed.as_secs_f64() * 1000.0
         );
     }
 

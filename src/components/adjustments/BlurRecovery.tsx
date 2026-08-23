@@ -58,6 +58,66 @@ const lambdaToSuppression = (lambda: number) => {
   return (100 * Math.log10(clamped / LAMBDA_MIN)) / Math.log10(LAMBDA_MAX / LAMBDA_MIN);
 };
 
+const finiteOr = (value: unknown, fallback: number) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+const booleanOr = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback);
+
+const canonicalGeometrySnapshot = (value: Adjustments) => {
+  const cropValues = value.crop && [value.crop.x, value.crop.y, value.crop.width, value.crop.height];
+  const crop =
+    cropValues && cropValues.every((part) => typeof part === 'number' && Number.isFinite(part))
+      ? {
+          x: value.crop!.x,
+          y: value.crop!.y,
+          width: value.crop!.width,
+          height: value.crop!.height,
+        }
+      : null;
+  const lens = value.lensDistortionParams;
+  return {
+    crop,
+    orientationSteps: finiteOr(value.orientationSteps, 0),
+    flipHorizontal: booleanOr(value.flipHorizontal, false),
+    flipVertical: booleanOr(value.flipVertical, false),
+    rotation: finiteOr(value.rotation, 0),
+    transformDistortion: finiteOr(value.transformDistortion, 0),
+    transformVertical: finiteOr(value.transformVertical, 0),
+    transformHorizontal: finiteOr(value.transformHorizontal, 0),
+    transformRotate: finiteOr(value.transformRotate, 0),
+    transformAspect: finiteOr(value.transformAspect, 0),
+    transformScale: finiteOr(value.transformScale, 100),
+    transformXOffset: finiteOr(value.transformXOffset, 0),
+    transformYOffset: finiteOr(value.transformYOffset, 0),
+    lensDistortionAmount: finiteOr(value.lensDistortionAmount, 100),
+    lensVignetteAmount: finiteOr(value.lensVignetteAmount, 100),
+    lensTcaAmount: finiteOr(value.lensTcaAmount, 100),
+    lensDistortionEnabled: booleanOr(value.lensDistortionEnabled, true),
+    lensTcaEnabled: booleanOr(value.lensTcaEnabled, true),
+    lensVignetteEnabled: booleanOr(value.lensVignetteEnabled, true),
+    lensDistortionParams: lens
+      ? {
+          k1: finiteOr(lens.k1, 0),
+          k2: finiteOr(lens.k2, 0),
+          k3: finiteOr(lens.k3, 0),
+          model: finiteOr(lens.model, 0),
+          tca_vr: finiteOr(lens.tca_vr, 1),
+          tca_vb: finiteOr(lens.tca_vb, 1),
+          vig_k1: finiteOr(lens.vig_k1, 0),
+          vig_k2: finiteOr(lens.vig_k2, 0),
+          vig_k3: finiteOr(lens.vig_k3, 0),
+        }
+      : null,
+  };
+};
+
+const geometryFingerprint = (value: Adjustments) => JSON.stringify(canonicalGeometrySnapshot(value));
+
+interface DefocusEstimateRequest {
+  requestId: number;
+  path: string | undefined;
+  geometryFingerprint: string;
+}
+
 const MODE_TOGGLE_KEYS = {
   motion: BlurRecoveryAdjustment.RapidMotionEnabled,
   defocus: BlurRecoveryAdjustment.RapidDefocusEnabled,
@@ -82,6 +142,8 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
   );
   const [isEstimating, setIsEstimating] = useState(false);
   const flashTimeoutRef = useRef<number | null>(null);
+  const defocusRequestSequenceRef = useRef(0);
+  const defocusRequestRef = useRef<DefocusEstimateRequest | null>(null);
 
   useEffect(
     () => () => {
@@ -129,6 +191,15 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
   // store-routed setAdjustments follows navigation.
   const imagePath = () => useEditorStore.getState().selectedImage?.path;
 
+  const defocusRequestMatches = (requestId: number, liveState: ReturnType<typeof useEditorStore.getState>) => {
+    const request = defocusRequestRef.current;
+    return (
+      request?.requestId === requestId &&
+      request.path === liveState.selectedImage?.path &&
+      request.geometryFingerprint === geometryFingerprint(liveState.adjustments)
+    );
+  };
+
   const handleEstimateMotion = async () => {
     if (isEstimating) {
       return;
@@ -174,11 +245,22 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
     if (isEstimating) {
       return;
     }
+
+    const startingState = useEditorStore.getState();
+    const snapshot = canonicalGeometrySnapshot(startingState.adjustments);
+    const requestId = ++defocusRequestSequenceRef.current;
+    defocusRequestRef.current = {
+      requestId,
+      path: startingState.selectedImage?.path,
+      geometryFingerprint: JSON.stringify(snapshot),
+    };
     setIsEstimating(true);
-    const pathAtStart = imagePath();
+
     try {
-      const estimate = await invoke<DefocusEstimate>(Invokes.EstimateDefocusKernel);
-      if (imagePath() !== pathAtStart) {
+      const invokeArgs = snapshot.crop === null ? {} : { roi: snapshot };
+      const estimate = await invoke<DefocusEstimate>(Invokes.EstimateDefocusKernel, invokeArgs);
+      const liveState = useEditorStore.getState();
+      if (!defocusRequestMatches(requestId, liveState)) {
         return;
       }
       if (!estimate?.confident) {
@@ -195,9 +277,9 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         );
         return;
       }
-      // The floor of 1 keeps a confident
-      // estimate from writing 0 and leaving the mode inert. No hardness
-      // write - the shader pins the raw jinc for the defocus component.
+      // The floor of 1 keeps a confident estimate from writing 0 and
+      // leaving the mode inert. No hardness write - the shader pins the
+      // raw jinc for the defocus component.
       const radius = Math.max(1, roundedRadius);
       const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
@@ -206,13 +288,17 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidDefocusEnabled]: true,
       }));
-      toast.success(
-        t('editor.adjustments.blurRecovery.estimateSuccessDefocus', { radius: radius.toFixed(1) }),
-      );
+      toast.success(t('editor.adjustments.blurRecovery.estimateSuccessDefocus', { radius: radius.toFixed(1) }));
     } catch (err) {
+      const liveState = useEditorStore.getState();
+      if (!defocusRequestMatches(requestId, liveState)) {
+        return;
+      }
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedDefocus')} (${err})`);
     } finally {
-      setIsEstimating(false);
+      if (defocusRequestRef.current?.requestId === requestId) {
+        setIsEstimating(false);
+      }
     }
   };
 
@@ -241,9 +327,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidGaussianEnabled]: true,
       }));
-      toast.success(
-        t('editor.adjustments.blurRecovery.estimateSuccessGaussian', { sigma: sigma.toFixed(1) }),
-      );
+      toast.success(t('editor.adjustments.blurRecovery.estimateSuccessGaussian', { sigma: sigma.toFixed(1) }));
     } catch (err) {
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedGaussian')} (${err})`);
     } finally {
@@ -267,9 +351,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
 
   const estimateButton = (onClick: () => void) => (
     <button className={estimateButtonClass(isEstimating)} onClick={onClick} disabled={isEstimating}>
-      {isEstimating
-        ? t('editor.adjustments.blurRecovery.estimating')
-        : t('editor.adjustments.blurRecovery.estimate')}
+      {isEstimating ? t('editor.adjustments.blurRecovery.estimating') : t('editor.adjustments.blurRecovery.estimate')}
     </button>
   );
 
@@ -444,9 +526,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
           {adjustments[MODE_TOGGLE_KEYS[displayedMode]] && (
             <>
               <div className="pt-2 border-t border-bg-secondary">
-                <p className="text-xs font-medium text-text-secondary">
-                  {t('editor.adjustments.blurRecovery.shared')}
-                </p>
+                <p className="text-xs font-medium text-text-secondary">{t('editor.adjustments.blurRecovery.shared')}</p>
               </div>
               <Slider
                 label={t('editor.adjustments.blurRecovery.lambda')}
