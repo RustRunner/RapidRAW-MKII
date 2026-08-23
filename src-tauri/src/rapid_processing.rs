@@ -153,11 +153,12 @@ impl RapidParams {
     /// Rescale the spatial kernel parameters for a working image that has been
     /// downscaled by `scale`. Lambda and strength describe frequency-domain
     /// behavior and blending, not pixel extents, so they stay unchanged. The
-    /// floors keep degenerate scales from collapsing the PSF to a no-op.
+    /// Motion and Gaussian retain their existing floors at degenerate scales;
+    /// defocus preserves the requested sub-pixel radius.
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             motion_length: (self.motion_length * scale).max(1.0),
-            defocus_radius: (self.defocus_radius * scale).max(0.5),
+            defocus_radius: self.defocus_radius * scale,
             gaussian_sigma: (self.gaussian_sigma * scale).max(0.3),
             ..*self
         }
@@ -5495,11 +5496,14 @@ mod tests {
         assert_eq!(s.strength, p.strength);
         assert_eq!(s.motion_angle, p.motion_angle);
 
-        // Degenerate scales hit the kernel floors instead of collapsing.
+        // Motion and Gaussian retain their kernel floors at degenerate scales.
         let tiny = p.scaled(0.001);
         assert!(tiny.motion_length >= 1.0);
-        assert!(tiny.defocus_radius >= 0.5);
         assert!(tiny.gaussian_sigma >= 0.3);
+
+        // Defocus preserves an honest sub-pixel working radius.
+        let subpixel = RapidParams { defocus_radius: 2.0, ..p }.scaled(0.17);
+        assert!((subpixel.defocus_radius - 0.34).abs() < 1e-6);
 
         let unit = p.scaled(1.0);
         assert!((unit.motion_length - p.motion_length).abs() < 1e-6);
