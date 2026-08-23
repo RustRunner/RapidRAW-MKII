@@ -79,6 +79,16 @@ pub struct Crop {
     pub height: f64,
 }
 
+/// Integer half-open pixel rectangle: `[x, x + width) × [y, y + height)`.
+/// Bounds checks use subtraction so hand-edited sidecars cannot overflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PixelRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct GeometryParams {
     pub distortion: f32,
@@ -1261,34 +1271,48 @@ pub fn apply_rotation<'a>(
     Cow::Owned(DynamicImage::ImageRgba32F(rotated))
 }
 
+pub(crate) fn normalize_crop_rect(
+    crop_value: &Value,
+    image_dims: (u32, u32),
+) -> Option<PixelRect> {
+    if crop_value.is_null() {
+        return None;
+    }
+
+    let crop = serde_json::from_value::<Crop>(crop_value.clone()).ok()?;
+    let x = crop.x.round() as u32;
+    let y = crop.y.round() as u32;
+    let width = crop.width.round() as u32;
+    let height = crop.height.round() as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let (img_w, img_h) = image_dims;
+    if x >= img_w || y >= img_h {
+        return None;
+    }
+    let width = img_w.checked_sub(x)?.min(width);
+    let height = img_h.checked_sub(y)?.min(height);
+    (width > 0 && height > 0).then_some(PixelRect { x, y, width, height })
+}
+
 pub fn apply_crop<'a>(image: impl IntoCowImage<'a>, crop_value: &Value) -> Cow<'a, DynamicImage> {
     let image = image.into_cow();
-    if crop_value.is_null() {
+    let image_dims = image.dimensions();
+    let Some(rect) = normalize_crop_rect(crop_value, image_dims) else {
+        return image;
+    };
+    let full = PixelRect {
+        x: 0,
+        y: 0,
+        width: image_dims.0,
+        height: image_dims.1,
+    };
+    if rect == full {
         return image;
     }
-
-    if let Ok(crop) = serde_json::from_value::<Crop>(crop_value.clone()) {
-        let x = crop.x.round() as u32;
-        let y = crop.y.round() as u32;
-        let width = crop.width.round() as u32;
-        let height = crop.height.round() as u32;
-
-        if width > 0 && height > 0 {
-            let (img_w, img_h) = image.dimensions();
-            if x < img_w && y < img_h {
-                let new_width = (img_w - x).min(width);
-                let new_height = (img_h - y).min(height);
-
-                if new_width > 0 && new_height > 0 {
-                    if x == 0 && y == 0 && new_width == img_w && new_height == img_h {
-                        return image;
-                    }
-                    return Cow::Owned(image.crop_imm(x, y, new_width, new_height));
-                }
-            }
-        }
-    }
-    image
+    Cow::Owned(image.crop_imm(rect.x, rect.y, rect.width, rect.height))
 }
 
 pub fn apply_flip<'a>(

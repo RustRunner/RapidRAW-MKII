@@ -3254,6 +3254,108 @@ fn fit_motion_hardness(
     1.0
 }
 
+fn pixel_rect_within(
+    rect: crate::image_processing::PixelRect,
+    image_dims: (u32, u32),
+) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && image_dims
+            .0
+            .checked_sub(rect.width)
+            .is_some_and(|max_x| rect.x <= max_x)
+        && image_dims
+            .1
+            .checked_sub(rect.height)
+            .is_some_and(|max_y| rect.y <= max_y)
+}
+
+/// Map the rendered crop back into the loaded image's pixel space.
+/// Resampling transforms are deliberately rejected: an approximate
+/// plate-sized rectangle is worse than falling back to deterministic tiles.
+pub(crate) fn map_estimate_roi_to_source(
+    adjustments: &serde_json::Value,
+    source_dims: (u32, u32),
+) -> Option<crate::image_processing::PixelRect> {
+    use crate::image_processing::{
+        PixelRect, get_geometry_params_from_json, is_geometry_identity, normalize_crop_rect,
+    };
+
+    if !is_geometry_identity(&get_geometry_params_from_json(adjustments)) {
+        log::info!("RAPID: defocus ROI skipped: geometry warp is non-identity");
+        return None;
+    }
+
+    let fine_rotation = adjustments["rotation"].as_f64().unwrap_or(0.0) as f32;
+    if fine_rotation % 360.0 != 0.0 {
+        log::info!("RAPID: defocus ROI skipped: fine rotation resamples the crop");
+        return None;
+    }
+
+    // Match apply_coarse_rotation exactly: only 1/2/3 rotate after the
+    // JSON value is narrowed to u8; every other value is identity.
+    let orientation_steps = adjustments["orientationSteps"].as_u64().unwrap_or(0) as u8;
+    let transformed_dims = match orientation_steps {
+        1 | 3 => (source_dims.1, source_dims.0),
+        _ => source_dims,
+    };
+    let Some(mut rect) = normalize_crop_rect(&adjustments["crop"], transformed_dims) else {
+        log::info!("RAPID: defocus ROI skipped: crop is absent or invalid");
+        return None;
+    };
+    let full = PixelRect {
+        x: 0,
+        y: 0,
+        width: transformed_dims.0,
+        height: transformed_dims.1,
+    };
+    if rect == full {
+        log::info!("RAPID: defocus ROI skipped: crop covers the full transformed frame");
+        return None;
+    }
+
+    let flip_horizontal = adjustments["flipHorizontal"].as_bool().unwrap_or(false);
+    let flip_vertical = adjustments["flipVertical"].as_bool().unwrap_or(false);
+    let mapped = (|| -> Option<PixelRect> {
+        // Flips are self-inverse and operate in post-coarse-rotation space.
+        if flip_horizontal {
+            rect.x = transformed_dims.0.checked_sub(rect.width)?.checked_sub(rect.x)?;
+        }
+        if flip_vertical {
+            rect.y = transformed_dims.1.checked_sub(rect.height)?.checked_sub(rect.y)?;
+        }
+
+        Some(match orientation_steps {
+            // Inverses of image::rotate90/180/270 on half-open rectangles.
+            1 => PixelRect {
+                x: rect.y,
+                y: source_dims.1.checked_sub(rect.width)?.checked_sub(rect.x)?,
+                width: rect.height,
+                height: rect.width,
+            },
+            2 => PixelRect {
+                x: source_dims.0.checked_sub(rect.width)?.checked_sub(rect.x)?,
+                y: source_dims.1.checked_sub(rect.height)?.checked_sub(rect.y)?,
+                width: rect.width,
+                height: rect.height,
+            },
+            3 => PixelRect {
+                x: source_dims.0.checked_sub(rect.height)?.checked_sub(rect.y)?,
+                y: rect.x,
+                width: rect.height,
+                height: rect.width,
+            },
+            _ => rect,
+        })
+    })();
+
+    let Some(mapped) = mapped.filter(|rect| pixel_rect_within(*rect, source_dims)) else {
+        log::info!("RAPID: defocus ROI skipped: exact inverse left loaded-source bounds");
+        return None;
+    };
+    Some(mapped)
+}
+
 /// Shared spectral prep for the blur estimators: luma of a working copy
 /// (downscaled to <=1024 px), mean-subtracted, Hann-windowed over the image
 /// extent (so the frame boundary doesn't dominate and the zero-pad stays
@@ -3278,7 +3380,7 @@ struct WorkingSpectrum {
 fn working_spectrum(
     image: &image::DynamicImage,
     source_linear: bool,
-    rect: Option<image::math::Rect>,
+    rect: Option<crate::image_processing::PixelRect>,
     scale_override: Option<f32>,
 ) -> WorkingSpectrum {
     use image::GenericImageView;
@@ -7072,6 +7174,190 @@ mod tests {
     }
 
     #[test]
+    fn test_estimate_defocus_roi_mapping() {
+        use crate::image_processing::{
+            PixelRect, apply_coarse_rotation, apply_crop, apply_flip, normalize_crop_rect,
+        };
+
+        const SOURCE_DIMS: (u32, u32) = (101, 67);
+        const SOURCE_ROI: PixelRect = PixelRect { x: 17, y: 11, width: 23, height: 19 };
+
+        fn forward_rect(
+            rect: PixelRect,
+            source_dims: (u32, u32),
+            orientation_steps: u8,
+            flip_horizontal: bool,
+            flip_vertical: bool,
+        ) -> (PixelRect, (u32, u32)) {
+            let (mut mapped, transformed_dims) = match orientation_steps {
+                1 => (
+                    PixelRect {
+                        x: source_dims.1 - rect.y - rect.height,
+                        y: rect.x,
+                        width: rect.height,
+                        height: rect.width,
+                    },
+                    (source_dims.1, source_dims.0),
+                ),
+                2 => (
+                    PixelRect {
+                        x: source_dims.0 - rect.x - rect.width,
+                        y: source_dims.1 - rect.y - rect.height,
+                        ..rect
+                    },
+                    source_dims,
+                ),
+                3 => (
+                    PixelRect {
+                        x: rect.y,
+                        y: source_dims.0 - rect.x - rect.width,
+                        width: rect.height,
+                        height: rect.width,
+                    },
+                    (source_dims.1, source_dims.0),
+                ),
+                _ => (rect, source_dims),
+            };
+            if flip_horizontal {
+                mapped.x = transformed_dims.0 - mapped.x - mapped.width;
+            }
+            if flip_vertical {
+                mapped.y = transformed_dims.1 - mapped.y - mapped.height;
+            }
+            (mapped, transformed_dims)
+        }
+
+        let crop_json = |rect: PixelRect| {
+            serde_json::json!({
+                "x": rect.x,
+                "y": rect.y,
+                "width": rect.width,
+                "height": rect.height,
+            })
+        };
+        let source = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
+            SOURCE_DIMS.0,
+            SOURCE_DIMS.1,
+            |x, y| image::Rgb([x as u8, y as u8, (x + 3 * y) as u8]),
+        ));
+
+        // Every exact coarse-orientation/flip permutation maps the rendered
+        // crop back to the same asymmetric loaded-source rectangle.
+        for orientation_steps in 0u8..=3 {
+            for &flip_horizontal in &[false, true] {
+                for &flip_vertical in &[false, true] {
+                    let (display_rect, _) = forward_rect(
+                        SOURCE_ROI,
+                        SOURCE_DIMS,
+                        orientation_steps,
+                        flip_horizontal,
+                        flip_vertical,
+                    );
+                    let crop = crop_json(display_rect);
+                    let adjustments = serde_json::json!({
+                        "orientationSteps": orientation_steps,
+                        "flipHorizontal": flip_horizontal,
+                        "flipVertical": flip_vertical,
+                        "rotation": 0.0,
+                        "crop": crop.clone(),
+                    });
+                    assert_eq!(
+                        map_estimate_roi_to_source(&adjustments, SOURCE_DIMS),
+                        Some(SOURCE_ROI),
+                        "round-trip failed for steps={orientation_steps}, h={flip_horizontal}, v={flip_vertical}"
+                    );
+
+                    // Pin the formulas to the actual renderer permutations,
+                    // not merely to a second set of rectangle equations.
+                    let transformed =
+                        apply_coarse_rotation(&source, orientation_steps).into_owned();
+                    let transformed =
+                        apply_flip(transformed, flip_horizontal, flip_vertical).into_owned();
+                    let actual = apply_crop(transformed, &crop).into_owned();
+                    let expected = source.crop_imm(
+                        SOURCE_ROI.x,
+                        SOURCE_ROI.y,
+                        SOURCE_ROI.width,
+                        SOURCE_ROI.height,
+                    );
+                    let expected =
+                        apply_coarse_rotation(expected, orientation_steps).into_owned();
+                    let expected =
+                        apply_flip(expected, flip_horizontal, flip_vertical).into_owned();
+                    assert_eq!(actual.to_rgb8(), expected.to_rgb8());
+                }
+            }
+        }
+
+        // Values outside the renderer's 1/2/3 cases are identity, not `% 4`.
+        let mut identity = serde_json::json!({ "crop": crop_json(SOURCE_ROI) });
+        identity["orientationSteps"] = serde_json::json!(4);
+        assert_eq!(map_estimate_roi_to_source(&identity, SOURCE_DIMS), Some(SOURCE_ROI));
+
+        // Null, malformed, empty, and wholly outside crops remain no-ops;
+        // a normalized full-frame crop is represented explicitly for render.
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({ "x": "bad", "y": 0, "width": 10, "height": 10 }),
+            serde_json::json!({ "x": 0, "y": 0, "width": 0, "height": 10 }),
+            serde_json::json!({ "x": SOURCE_DIMS.0, "y": 0, "width": 10, "height": 10 }),
+        ] {
+            assert_eq!(normalize_crop_rect(&invalid, SOURCE_DIMS), None);
+        }
+        let full = PixelRect { x: 0, y: 0, width: SOURCE_DIMS.0, height: SOURCE_DIMS.1 };
+        let full_crop = crop_json(full);
+        assert_eq!(normalize_crop_rect(&full_crop, SOURCE_DIMS), Some(full));
+        assert_eq!(
+            map_estimate_roi_to_source(
+                &serde_json::json!({ "crop": full_crop }),
+                SOURCE_DIMS,
+            ),
+            None
+        );
+
+        // Fractional rounding and edge clipping are shared with apply_crop,
+        // including exact pixels rather than dimensions alone.
+        for crop in [
+            serde_json::json!({ "x": 3.6, "y": 4.4, "width": 10.6, "height": 8.5 }),
+            serde_json::json!({ "x": 96.4, "y": 62.4, "width": 50.0, "height": 50.0 }),
+        ] {
+            let normalized = normalize_crop_rect(&crop, SOURCE_DIMS).unwrap();
+            let adjustments = serde_json::json!({ "crop": crop.clone() });
+            assert_eq!(
+                map_estimate_roi_to_source(&adjustments, SOURCE_DIMS),
+                Some(normalized)
+            );
+            let actual = apply_crop(&source, &crop).into_owned();
+            let expected = source.crop_imm(
+                normalized.x,
+                normalized.y,
+                normalized.width,
+                normalized.height,
+            );
+            assert_eq!(actual.to_rgb8(), expected.to_rgb8());
+        }
+
+        let base = serde_json::json!({ "crop": crop_json(SOURCE_ROI) });
+        let mut fine = base.clone();
+        fine["rotation"] = serde_json::json!(1.0);
+        assert_eq!(map_estimate_roi_to_source(&fine, SOURCE_DIMS), None);
+        for angle in [360.0, -360.0] {
+            fine["rotation"] = serde_json::json!(angle);
+            assert_eq!(map_estimate_roi_to_source(&fine, SOURCE_DIMS), Some(SOURCE_ROI));
+        }
+
+        let mut lens = base.clone();
+        lens["lensDistortionParams"] = serde_json::json!({ "k1": 0.01 });
+        assert_eq!(map_estimate_roi_to_source(&lens, SOURCE_DIMS), None);
+        let mut geometry_rotation = base.clone();
+        geometry_rotation["transformRotate"] = serde_json::json!(1.0);
+        assert_eq!(map_estimate_roi_to_source(&geometry_rotation, SOURCE_DIMS), None);
+        let mut perspective = base;
+        perspective["transformVertical"] = serde_json::json!(1.0);
+        assert_eq!(map_estimate_roi_to_source(&perspective, SOURCE_DIMS), None);
+    }
+
+    #[test]
     fn test_working_spectrum_full_rect_parity() {
         const WIDTH: u32 = 1030;
         const HEIGHT: u32 = 515;
@@ -7087,7 +7373,12 @@ mod tests {
         ));
 
         let baseline = working_spectrum(&image, false, None, None);
-        let full_rect = image::math::Rect { x: 0, y: 0, width: WIDTH, height: HEIGHT };
+        let full_rect = crate::image_processing::PixelRect {
+            x: 0,
+            y: 0,
+            width: WIDTH,
+            height: HEIGHT,
+        };
         let explicit =
             working_spectrum(&image, false, Some(full_rect), Some(baseline.scale));
 
