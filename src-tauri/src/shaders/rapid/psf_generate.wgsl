@@ -69,15 +69,6 @@ fn sinc(x: f32) -> f32 {
     return sin(px) / px;
 }
 
-/// Safe sinc with magnitude floor to prevent Wiener instability
-fn sinc_safe(x: f32) -> f32 {
-    let s = sinc(x);
-    if (abs(s) < MAGNITUDE_FLOOR) {
-        return select(-MAGNITUDE_FLOOR, MAGNITUDE_FLOOR, s >= 0.0);
-    }
-    return s;
-}
-
 /// Bessel function J1 approximation
 /// Uses rational approximation for |x| < 8 and asymptotic expansion for |x| >= 8
 fn bessel_j1(x: f32) -> f32 {
@@ -275,83 +266,4 @@ fn generate_psf_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     textureStore(output_tex, coord, vec4<f32>(H, 0.0, 1.0));
-}
-
-// ============================================================================
-// Alternative: Generate PSF in spatial domain (for debugging/comparison)
-// ============================================================================
-
-struct SpatialPSFParams {
-    width: u32,
-    height: u32,
-    blur_type: u32,
-    motion_length: f32,
-    motion_angle: f32,
-    defocus_radius: f32,
-    gaussian_sigma: f32,
-    _pad: f32,
-}
-
-@group(0) @binding(0) var spatial_output_tex: texture_storage_2d<rg32float, write>;
-@group(0) @binding(1) var<uniform> spatial_params: SpatialPSFParams;
-
-/// Generate spatial domain PSF (for debugging/visualization)
-@compute @workgroup_size(16, 16, 1)
-fn generate_psf_spatial(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let coord = vec2<u32>(gid.xy);
-
-    if (coord.x >= spatial_params.width || coord.y >= spatial_params.height) {
-        return;
-    }
-
-    // Center coordinates
-    let cx = f32(spatial_params.width) / 2.0;
-    let cy = f32(spatial_params.height) / 2.0;
-    let x = f32(coord.x) - cx;
-    let y = f32(coord.y) - cy;
-
-    var value: f32 = 0.0;
-
-    switch (spatial_params.blur_type) {
-        case 0u: {
-            // Motion blur - line segment
-            let angle_rad = spatial_params.motion_angle * PI / 180.0;
-            let cos_a = cos(angle_rad);
-            let sin_a = sin(angle_rad);
-            let half_len = spatial_params.motion_length / 2.0;
-
-            // Distance from point to line through origin at angle
-            let perp_dist = abs(-x * sin_a + y * cos_a);
-            let along_dist = x * cos_a + y * sin_a;
-
-            // Point is on the blur line if perpendicular distance is small
-            // and along distance is within half length
-            if (perp_dist < 0.5 && abs(along_dist) <= half_len) {
-                value = 1.0 / spatial_params.motion_length;
-            }
-        }
-        case 1u: {
-            // Defocus - disk/pillbox
-            let r = sqrt(x * x + y * y);
-            if (r <= spatial_params.defocus_radius) {
-                let area = PI * spatial_params.defocus_radius * spatial_params.defocus_radius;
-                value = 1.0 / area;
-            }
-        }
-        case 2u: {
-            // Gaussian
-            let sigma = spatial_params.gaussian_sigma;
-            let r_sq = x * x + y * y;
-            value = exp(-r_sq / (2.0 * sigma * sigma)) / (TWO_PI * sigma * sigma);
-        }
-        default: {
-            // Delta function (identity)
-            if (coord.x == u32(cx) && coord.y == u32(cy)) {
-                value = 1.0;
-            }
-        }
-    }
-
-    // Store as complex (real, 0)
-    textureStore(spatial_output_tex, coord, vec4<f32>(value, 0.0, 0.0, 1.0));
 }

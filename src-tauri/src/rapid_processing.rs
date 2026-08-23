@@ -3473,7 +3473,7 @@ pub async fn estimate_blur_kernel(
 // Defocus and gaussian estimators
 // ============================================================================
 
-/// CPU port of common.wgsl's bessel_j1 (same rational approximation for
+/// CPU port of psf_generate.wgsl's bessel_j1 (same rational approximation for
 /// |x| < 8, same asymptotic expansion beyond), so CPU-side OTF model
 /// evaluations match the spectra the shader divides by.
 fn bessel_j1(x: f32) -> f32 {

@@ -28,7 +28,7 @@ const PI: f32 = 3.14159265358979323846;
 const TWO_PI: f32 = 6.28318530717958647692;
 
 // ============================================================================
-// Complex Number Operations (duplicated from common.wgsl for standalone use)
+// Local complex-number operations used by this standalone shader module
 // ============================================================================
 
 /// Complex multiplication: (a + bi)(c + di) = (ac - bd) + (ad + bc)i
