@@ -334,7 +334,7 @@
         "estimateFailedDefocus": "Nie wykryto promienia rozogniskowania - ustaw promień ręcznie.",
         "estimateFailedGaussian": "Nie udało się zmierzyć poziomu rozmycia gaussowskiego - ustaw sigmę ręcznie.",
         "estimateFailedMotion": "Nie wykryto kierunku rozmycia ruchu - ustaw długość i kąt ręcznie.",
-        "estimateOutOfRangeDefocus": "Szacowany promień rozogniskowania {{radius}} px przekracza limit edytora 50 px. Nie zastosowano żadnej zmiany.",
+        "estimateOutOfRangeDefocus": "Szacowany promień rozogniskowania {{radius}} px przekracza limit edytora 20 px. Nie zastosowano żadnej zmiany.",
         "estimateSuccessDefocus": "Szacowany promień rozogniskowania: {{radius}} px",
         "estimateSuccessGaussian": "Szacowana sigma Gaussa: {{sigma}}",
         "estimating": "Szacowanie...",

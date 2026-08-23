@@ -269,7 +269,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       }
       // Round to the slider's 0.1 step before checking its upper rail.
       const roundedRadius = Math.round(estimate.radius * 10) / 10;
-      if (roundedRadius > 50) {
+      if (roundedRadius > 20) {
         toast.error(
           t('editor.adjustments.blurRecovery.estimateOutOfRangeDefocus', {
             radius: estimate.radius.toFixed(1),
@@ -486,7 +486,7 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                   </div>
                   <Slider
                     label={t('editor.adjustments.blurRecovery.radius')}
-                    max={50}
+                    max={20}
                     min={0}
                     onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
                     step={0.1}

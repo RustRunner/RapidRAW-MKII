@@ -302,7 +302,7 @@
         "estimateFailedDefocus": "Kein Defokus-Radius erkannt - Radius manuell einstellen.",
         "estimateFailedGaussian": "Gaußsche Unschärfe nicht messbar - Sigma manuell einstellen.",
         "estimateFailedMotion": "Keine Bewegungsunschärfe-Richtung erkannt - Länge und Winkel manuell einstellen.",
-        "estimateOutOfRangeDefocus": "Der geschätzte Defokus-Radius von {{radius}} px überschreitet das Editor-Limit von 50 px. Es wurde keine Änderung angewendet.",
+        "estimateOutOfRangeDefocus": "Der geschätzte Defokus-Radius von {{radius}} px überschreitet das Editor-Limit von 20 px. Es wurde keine Änderung angewendet.",
         "estimateSuccessDefocus": "Geschätzter Defokus-Radius: {{radius}} px",
         "estimateSuccessGaussian": "Geschätztes Gauß-Sigma: {{sigma}}",
         "estimating": "Schätzung läuft...",

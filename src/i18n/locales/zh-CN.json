@@ -302,7 +302,7 @@
         "estimateFailedDefocus": "未能检测到散焦半径，请手动设置半径。",
         "estimateFailedGaussian": "未能测量高斯模糊程度，请手动设置 Sigma。",
         "estimateFailedMotion": "未能检测到运动模糊方向，请手动设置长度和角度。",
-        "estimateOutOfRangeDefocus": "估算的散焦半径 {{radius}} 像素超出编辑器的 50 像素上限。未应用任何更改。",
+        "estimateOutOfRangeDefocus": "估算的散焦半径 {{radius}} 像素超出编辑器的 20 像素上限。未应用任何更改。",
         "estimateSuccessDefocus": "估算的散焦半径：{{radius}} 像素",
         "estimateSuccessGaussian": "估算的高斯 σ：{{sigma}}",
         "estimating": "估算中...",

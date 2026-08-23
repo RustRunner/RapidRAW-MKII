@@ -318,7 +318,7 @@
         "estimateFailedDefocus": "Rayon de défocalisation non détecté - réglez le rayon manuellement.",
         "estimateFailedGaussian": "Niveau de flou gaussien non mesurable - réglez le sigma manuellement.",
         "estimateFailedMotion": "Direction du flou de bougé non détectée - réglez la longueur et l'angle manuellement.",
-        "estimateOutOfRangeDefocus": "Le rayon de défocalisation estimé de {{radius}} px dépasse la limite de 50 px de l’éditeur. Aucune modification n’a été appliquée.",
+        "estimateOutOfRangeDefocus": "Le rayon de défocalisation estimé de {{radius}} px dépasse la limite de 20 px de l’éditeur. Aucune modification n’a été appliquée.",
         "estimateSuccessDefocus": "Rayon de défocalisation estimé : {{radius}} px",
         "estimateSuccessGaussian": "Sigma gaussien estimé : {{sigma}}",
         "estimating": "Estimation...",

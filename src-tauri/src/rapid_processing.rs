@@ -2678,7 +2678,7 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
     let defocus_radius = (adjustments["rapidRadius"]
         .as_f64()
         .unwrap_or(if legacy_on { 5.0 } else { 0.0 }) as f32)
-        .min(50.0);
+        .min(20.0);
     let gaussian_sigma = (adjustments["rapidSigma"]
         .as_f64()
         .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32)
@@ -3926,6 +3926,14 @@ const DEFOCUS_R_MIN: f32 = 2.5;
 const DEFOCUS_R_MAX: f32 = 25.0;
 const DEFOCUS_R_STEP: f32 = 0.1;
 const DEFOCUS_RHO_MAX: f32 = 0.45;
+
+// Soft optical defocus can fill ideal jinc zeros. Permit a variance-based
+// fallback only when an independent, non-boundary ring candidate agrees.
+// The paired gates reject the calibrated sharp/Gaussian false locks.
+const DEFOCUS_SOFT_MIN_RING_CONTRAST: f32 = 0.08;
+const DEFOCUS_SOFT_MIN_RING_CONFIDENCE: f32 = 3.0;
+const DEFOCUS_SOFT_MAX_RADIUS_DELTA: f32 = 0.25;
+const DEFOCUS_EQUIVALENT_DISC_SCALE: f32 = 2.0;
 #[cfg(test)]
 const INTERACTIVE_ESTIMATE_BUDGET_MS: u128 = 3000;
 
@@ -3952,6 +3960,7 @@ enum ProbeKind {
     Roi,
     Center,
     Detail,
+    SoftOptical,
 }
 
 #[derive(Debug, Clone)]
@@ -4386,6 +4395,64 @@ fn select_defocus_probes(probes: Vec<ProbeEvaluation>) -> DefocusProbeOutcome {
     DefocusProbeOutcome { result, winner, probes }
 }
 
+fn soft_optical_defocus_estimate(
+    probes: &[ProbeEvaluation],
+    gaussian: GaussianEstimate,
+) -> Option<(DefocusEstimate, ProbeKind, f32, f32, f32)> {
+    if !gaussian.confident || !gaussian.sigma.is_finite() || !gaussian.lambda.is_finite() {
+        return None;
+    }
+
+    // A uniform disc has per-axis variance R²/4, so matching the fitted
+    // Gaussian variance gives the full-resolution equivalent R = 2σ.
+    let radius = DEFOCUS_EQUIVALENT_DISC_SCALE * gaussian.sigma;
+    if !radius.is_finite() || radius < 1.0 {
+        return None;
+    }
+
+    let (relative_delta, kind, ring_radius, ring_confidence, ring_contrast) = probes
+        .iter()
+        .filter(|probe| !probe.boundary)
+        .filter_map(|probe| {
+            if probe.best_idx.is_none() || probe.r_grid.is_none() {
+                return None;
+            }
+            let ring_radius = probe.estimate.radius;
+            let ring_confidence = probe.estimate.confidence;
+            let ring_contrast = probe.ring_contrast?;
+            if !ring_radius.is_finite()
+                || !ring_confidence.is_finite()
+                || !ring_contrast.is_finite()
+                || ring_confidence < DEFOCUS_SOFT_MIN_RING_CONFIDENCE
+                || ring_contrast < DEFOCUS_SOFT_MIN_RING_CONTRAST
+            {
+                return None;
+            }
+            let relative_delta = (ring_radius - radius).abs() / radius;
+            (relative_delta <= DEFOCUS_SOFT_MAX_RADIUS_DELTA).then_some((
+                relative_delta,
+                probe.kind,
+                ring_radius,
+                ring_confidence,
+                ring_contrast,
+            ))
+        })
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
+
+    Some((
+        DefocusEstimate {
+            radius,
+            confidence: ring_confidence,
+            confident: true,
+            lambda: gaussian.lambda,
+        },
+        kind,
+        ring_radius,
+        ring_contrast,
+        relative_delta,
+    ))
+}
+
 fn estimate_defocus_outcome(
     image: &image::DynamicImage,
     source_linear: bool,
@@ -4403,7 +4470,6 @@ fn estimate_defocus_outcome(
         height: whole_spectrum.h,
         source_dims,
     };
-    drop(whole_spectrum);
 
     let mut probes = vec![whole];
     let mapped_roi = roi.and_then(|snapshot| map_estimate_roi_to_source(snapshot, source_dims));
@@ -4444,11 +4510,32 @@ fn estimate_defocus_outcome(
         drop(working);
     }
 
-    select_defocus_probes(probes)
+    let mut outcome = select_defocus_probes(probes);
+    if outcome.winner.is_none() {
+        let gaussian = estimate_gaussian_spectrum(&whole_spectrum);
+        if let Some((estimate, corroborating_kind, ring_radius, ring_contrast, relative_delta)) =
+            soft_optical_defocus_estimate(&outcome.probes, gaussian)
+        {
+            log::info!(
+                "RAPID: defocus soft-optical fallback R={:.2}px from σ={:.2}px (t={:.1}), corroborated by {:?} R={:.2}px contrast={:.3} delta={:.1}%",
+                estimate.radius,
+                gaussian.sigma,
+                gaussian.confidence,
+                corroborating_kind,
+                ring_radius,
+                ring_contrast,
+                100.0 * relative_delta,
+            );
+            outcome.result = estimate;
+            outcome.winner = Some(ProbeKind::SoftOptical);
+        }
+    }
+    outcome
 }
 
-/// Estimate a defocus (disc) radius using the whole frame plus adaptive
-/// native-resolution tiles when the frame is larger than the FFT work cap.
+/// Estimate a defocus (disc) radius using strict whole/ROI/native jinc probes
+/// first, then the independently corroborated soft-optical fallback when the
+/// aperture-ring signature is attenuated.
 #[allow(dead_code)] // Public compatibility/test wrapper; the command also needs probe diagnostics.
 pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> DefocusEstimate {
     estimate_defocus_outcome(image, source_linear, None).result
@@ -4490,8 +4577,7 @@ const GAUSSIAN_NOT_CONFIDENT: GaussianEstimate = GaussianEstimate {
 /// (a, free — it absorbs the power law) from the blur curvature s;
 /// σ_work = √(s/2π²). Fit in f64 on centered predictors; confidence is
 /// the t-statistic of s.
-pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> GaussianEstimate {
-    let ws = working_spectrum(image, source_linear, None, None);
+fn estimate_gaussian_spectrum(ws: &WorkingSpectrum) -> GaussianEstimate {
     let profile = radial_profile_median(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
     let rho_of = |b: usize| (b as f32 + 0.5) / (2.0 * nb as f32);
@@ -4589,9 +4675,16 @@ pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> Ga
     GaussianEstimate { sigma, confidence: t, confident, lambda }
 }
 
+/// Estimate isotropic gaussian blur sigma from an image.
+pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> GaussianEstimate {
+    let ws = working_spectrum(image, source_linear, None, None);
+    estimate_gaussian_spectrum(&ws)
+}
+
 /// Tauri command: estimate the defocus-blur radius of the currently loaded
-/// image from its spectrum's jinc zero rings. Full-resolution radius; the
-/// frontend leaves the sliders untouched when `confident` is false.
+/// image with strict jinc-ring probes and a guarded soft-optical fallback.
+/// The radius is full-resolution; the frontend leaves the sliders untouched
+/// when `confident` is false.
 #[tauri::command]
 pub async fn estimate_defocus_kernel(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -7051,6 +7144,70 @@ mod tests {
     }
 
     #[test]
+    fn test_soft_optical_defocus_fallback_requires_corroboration() {
+        let probe = |radius: f32, confidence: f32, contrast: f32, boundary: bool| {
+            ProbeEvaluation {
+                kind: ProbeKind::Detail,
+                estimate: DefocusEstimate {
+                    radius,
+                    confidence,
+                    confident: false,
+                    lambda: 0.01,
+                },
+                best_idx: Some(1),
+                r_grid: Some(radius),
+                ring_contrast: Some(contrast),
+                boundary,
+                scale: 1.0,
+            }
+        };
+        let gaussian = GaussianEstimate {
+            sigma: 4.478_71,
+            confidence: 75.84,
+            confident: true,
+            lambda: 0.01,
+        };
+
+        let accepted =
+            soft_optical_defocus_estimate(&[probe(7.0075, 3.7535, 0.1139, false)], gaussian)
+                .expect("independent falloff and ring evidence should agree");
+        assert_eq!(accepted.1, ProbeKind::Detail);
+        assert!((accepted.0.radius - 8.957_42).abs() < 1e-4);
+        assert!(accepted.0.confident);
+
+        let gaussian_mismatch = GaussianEstimate { sigma: 2.926, ..gaussian };
+        assert!(
+            soft_optical_defocus_estimate(
+                &[probe(3.467, 11.239, 0.264, false)],
+                gaussian_mismatch,
+            )
+            .is_none(),
+            "a strong Gaussian false lock must fail radius agreement"
+        );
+        let gaussian_low_confidence = GaussianEstimate { sigma: 1.4696, ..gaussian };
+        assert!(
+            soft_optical_defocus_estimate(
+                &[probe(3.371, 2.266, 0.142, false)],
+                gaussian_low_confidence,
+            )
+            .is_none(),
+            "radius agreement alone must not pass weak ring evidence"
+        );
+        assert!(
+            soft_optical_defocus_estimate(&[probe(7.0, 8.0, 0.2, true)], gaussian).is_none(),
+            "a search-boundary lock must remain rejected"
+        );
+        assert!(
+            soft_optical_defocus_estimate(
+                &[probe(7.0, 8.0, 0.2, false)],
+                GaussianEstimate { confident: false, ..gaussian },
+            )
+            .is_none(),
+            "the falloff fit must be independently confident"
+        );
+    }
+
+    #[test]
     fn test_estimate_defocus_roi_targets_plate() {
         use crate::image_processing::PixelRect;
 
@@ -7249,17 +7406,20 @@ mod tests {
     #[test]
     fn test_estimate_defocus_rejects_gaussian() {
         let scene = synthetic_scene(512, 512);
-        let blurred = gaussian_blur_iso(&scene, 3.0);
-        let est = estimate_defocus(&blurred, true);
-        eprintln!(
-            "defocus-on-gaussian: R={:.2} confidence={:.1}",
-            est.radius, est.confidence
-        );
-        assert!(
-            !est.confident,
-            "defocus estimator locked onto a gaussian blur (confidence {:.1})",
-            est.confidence
-        );
+        for &sigma in &[1.0f32, 1.5, 2.0, 3.0, 4.0, 6.0] {
+            let blurred = gaussian_blur_iso(&scene, sigma);
+            let est = estimate_defocus(&blurred, true);
+            eprintln!(
+                "defocus-on-gaussian σ={sigma}: R={:.2} confidence={:.1}",
+                est.radius, est.confidence
+            );
+            assert!(
+                !est.confident,
+                "defocus estimator locked onto gaussian σ={sigma} (R={:.2}, confidence {:.1})",
+                est.radius,
+                est.confidence
+            );
+        }
     }
 
     /// Gaussian sigmas across the UI range must fit within 25% relative
@@ -7452,7 +7612,7 @@ mod tests {
         });
         let params = parse_rapid_params(&adjustments).expect("params should parse");
         assert_eq!(params.motion_length, 200.0);
-        assert_eq!(params.defocus_radius, 50.0);
+        assert_eq!(params.defocus_radius, 20.0);
         assert_eq!(params.gaussian_sigma, 8.0);
         assert_eq!(params.lambda, 0.1);
         assert_eq!(params.motion_angle, 721.0);
@@ -7467,7 +7627,7 @@ mod tests {
         assert!(!params.modes.motion);
         assert!(params.modes.defocus);
         assert!(!params.modes.gaussian);
-        assert_eq!(kernel_extent(&params), 100);
+        assert_eq!(kernel_extent(&params), 40);
     }
 
     /// The hardness slider passes through parse unchanged for every mode:
