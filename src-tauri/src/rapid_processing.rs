@@ -2668,15 +2668,23 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
     }
     let legacy_on = legacy_enabled == Some(true);
     let legacy_mode = adjustments["rapidBlurType"].as_str().unwrap_or("motion");
-    let motion_length = adjustments["rapidLength"]
+    // Persisted sidecars are untrusted numeric input. Resolve legacy
+    // defaults first, then cap only values above the reachable UI rails;
+    // negative kernels remain inert under the existing positive-mode gate.
+    let motion_length = (adjustments["rapidLength"]
         .as_f64()
-        .unwrap_or(if legacy_on { 10.0 } else { 0.0 }) as f32;
-    let defocus_radius = adjustments["rapidRadius"]
+        .unwrap_or(if legacy_on { 10.0 } else { 0.0 }) as f32)
+        .min(200.0);
+    let defocus_radius = (adjustments["rapidRadius"]
         .as_f64()
-        .unwrap_or(if legacy_on { 5.0 } else { 0.0 }) as f32;
-    let gaussian_sigma = adjustments["rapidSigma"]
+        .unwrap_or(if legacy_on { 5.0 } else { 0.0 }) as f32)
+        .min(50.0);
+    let gaussian_sigma = (adjustments["rapidSigma"]
         .as_f64()
-        .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32;
+        .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32)
+        .min(8.0);
+    let lambda = (adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32)
+        .clamp(0.001, 0.1);
     let strength = (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
         .clamp(0.0, 1.0);
     let gen2 = ["rapidMotionEnabled", "rapidDefocusEnabled", "rapidGaussianEnabled"]
@@ -2708,7 +2716,7 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
         defocus_radius,
         gaussian_sigma,
-        lambda: adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32,
+        lambda,
         strength,
         // Always on in production since the toggle was demoted; stale
         // rapidAdaptive keys in old sidecars are ignored.
@@ -6605,6 +6613,39 @@ mod tests {
         let params = parse_rapid_params(&adjustments).expect("params should parse");
         assert!(params.adaptive, "adaptive must be always-on regardless of stale sidecar keys");
         assert!((params.lambda - 0.076).abs() < 1e-6, "lambda must stay raw");
+    }
+
+    #[test]
+    fn test_parse_rapid_params_clamps_pathological_sidecar() {
+        let mut adjustments = serde_json::json!({
+            "rapidMotionEnabled": true,
+            "rapidDefocusEnabled": true,
+            "rapidGaussianEnabled": true,
+            "rapidLength": 5000.0,
+            "rapidAngle": 721.0,
+            "rapidRadius": 500.0,
+            "rapidSigma": 40.0,
+            "rapidLambda": 5.0,
+            "rapidStrength": 100.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("params should parse");
+        assert_eq!(params.motion_length, 200.0);
+        assert_eq!(params.defocus_radius, 50.0);
+        assert_eq!(params.gaussian_sigma, 8.0);
+        assert_eq!(params.lambda, 0.1);
+        assert_eq!(params.motion_angle, 721.0);
+
+        adjustments["rapidLambda"] = serde_json::json!(1e-9);
+        let params = parse_rapid_params(&adjustments).expect("params should parse");
+        assert_eq!(params.lambda, 0.001);
+
+        adjustments["rapidMotionEnabled"] = serde_json::json!(false);
+        adjustments["rapidGaussianEnabled"] = serde_json::json!(false);
+        let params = parse_rapid_params(&adjustments).expect("defocus should parse");
+        assert!(!params.modes.motion);
+        assert!(params.modes.defocus);
+        assert!(!params.modes.gaussian);
+        assert_eq!(kernel_extent(&params), 100);
     }
 
     /// The hardness slider passes through parse unchanged for every mode:
