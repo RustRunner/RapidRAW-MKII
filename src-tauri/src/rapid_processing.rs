@@ -3244,6 +3244,99 @@ fn working_spectrum(image: &image::DynamicImage) -> WorkingSpectrum {
     WorkingSpectrum { data, spectrum_ln, pw, ph, w, h, scale }
 }
 
+/// Fit a coupled quadratic surface to a 3x3 cepstral neighborhood and
+/// return its stationary point when it is a trustworthy, bounded minimum.
+/// Rows are y and columns are x: `s[j][i]` is offset `(i - 1, j - 1)`.
+fn refine_peak_2d(s: [[f32; 3]; 3]) -> Option<(f32, f32)> {
+    let center = s[1][1] as f64;
+    if !center.is_finite() {
+        return None;
+    }
+
+    let (mut sum, mut sum_x, mut sum_y) = (0.0f64, 0.0f64, 0.0f64);
+    let (mut sum_xx, mut sum_yy, mut sum_xy) = (0.0f64, 0.0f64, 0.0f64);
+    for (j, row) in s.iter().enumerate() {
+        let y = j as f64 - 1.0;
+        for (i, &raw) in row.iter().enumerate() {
+            if !raw.is_finite() {
+                return None;
+            }
+            let x = i as f64 - 1.0;
+            let value = raw as f64 - center;
+            sum += value;
+            sum_x += x * value;
+            sum_y += y * value;
+            sum_xx += x * x * value;
+            sum_yy += y * y * value;
+            sum_xy += x * y * value;
+        }
+    }
+
+    let b = sum_x / 6.0;
+    let c = sum_y / 6.0;
+    let d = sum_xx / 2.0 - sum / 3.0;
+    let e = sum_xy / 4.0;
+    let g = sum_yy / 2.0 - sum / 3.0;
+    if ![b, c, d, e, g].into_iter().all(f64::is_finite) {
+        return None;
+    }
+
+    // Eigenvalues of the Hessian [[2d, e], [e, 2g]]. The relative guard
+    // is scale-independent and rejects flat/ridge-like noisy fits.
+    let root = ((d - g) * (d - g) + e * e).sqrt();
+    let lambda_plus = d + g + root;
+    let lambda_minus = d + g - root;
+    if !lambda_plus.is_finite()
+        || !lambda_minus.is_finite()
+        || lambda_plus <= 0.0
+        || lambda_minus <= 0.0
+        || lambda_minus / lambda_plus < 1e-3
+    {
+        return None;
+    }
+
+    let determinant = 4.0 * d * g - e * e;
+    if !determinant.is_finite() || determinant <= 0.0 {
+        return None;
+    }
+    let dx = (e * c - 2.0 * g * b) / determinant;
+    let dy = (e * b - 2.0 * d * c) / determinant;
+    if !dx.is_finite() || !dy.is_finite() || dx.abs() > 0.5 || dy.abs() > 0.5 {
+        return None;
+    }
+
+    Some((dx as f32, dy as f32))
+}
+
+/// Gather the production 3x3 neighborhood and retain the legacy separable
+/// parabola as the exact fallback when the coupled fit is not trustworthy.
+fn refine_cepstral_peak<F>(peak_dx: i32, peak_dy: i32, sample: &F) -> (f32, f32)
+where
+    F: Fn(i32, i32) -> f32,
+{
+    let mut s = [[0.0f32; 3]; 3];
+    for (j, dy) in (-1..=1).enumerate() {
+        for (i, dx) in (-1..=1).enumerate() {
+            s[j][i] = sample(peak_dx + dx, peak_dy + dy);
+        }
+    }
+
+    refine_peak_2d(s).unwrap_or_else(|| {
+        let refine_axis = |c_m: f32, c_0: f32, c_p: f32| -> f32 {
+            let curvature = c_m - 2.0 * c_0 + c_p;
+            if curvature <= 1e-12 {
+                0.0
+            } else {
+                (0.5 * (c_m - c_p) / curvature).clamp(-0.5, 0.5)
+            }
+        };
+        (
+            refine_axis(s[1][0], s[1][1], s[1][2]),
+            refine_axis(s[0][1], s[1][1], s[2][1]),
+        )
+    })
+}
+
 /// Estimate linear motion blur via cepstral analysis.
 ///
 /// The luma of a working copy (downscaled to <=1024 px, Hann-windowed so the
@@ -5549,6 +5642,123 @@ mod tests {
             let v = (field[(y * w + x) as usize].clamp(0.0, 1.0) * 255.0).round() as u8;
             image::Rgba([v, v, v, 255])
         }))
+    }
+
+    #[test]
+    fn test_refine_peak_2d_recovers_rotated_minimum() {
+        let (peak_x, peak_y) = (7i32, -11i32);
+        let mut worst_legacy_error = 0.0f32;
+        for ix in -4..=4 {
+            for iy in -4..=4 {
+                let expected_x = ix as f32 * 0.1;
+                let expected_y = iy as f32 * 0.1;
+                let target_x = peak_x as f32 + expected_x;
+                let target_y = peak_y as f32 + expected_y;
+                let sample = |x: i32, y: i32| -> f32 {
+                    let rx = x as f32 - target_x;
+                    let ry = y as f32 - target_y;
+                    37.0 + rx * rx + 1.5 * rx * ry + 2.0 * ry * ry
+                };
+
+                let (got_x, got_y) = refine_cepstral_peak(peak_x, peak_y, &sample);
+                assert!(
+                    (got_x - expected_x).abs() <= 0.02
+                        && (got_y - expected_y).abs() <= 0.02,
+                    "2D fit recovered ({got_x:.4}, {got_y:.4}), expected \
+                     ({expected_x:.4}, {expected_y:.4})"
+                );
+
+                let refine_axis = |c_m: f32, c_0: f32, c_p: f32| -> f32 {
+                    let curvature = c_m - 2.0 * c_0 + c_p;
+                    if curvature <= 1e-12 {
+                        0.0
+                    } else {
+                        (0.5 * (c_m - c_p) / curvature).clamp(-0.5, 0.5)
+                    }
+                };
+                let center = sample(peak_x, peak_y);
+                let legacy_x = refine_axis(
+                    sample(peak_x - 1, peak_y),
+                    center,
+                    sample(peak_x + 1, peak_y),
+                );
+                let legacy_y = refine_axis(
+                    sample(peak_x, peak_y - 1),
+                    center,
+                    sample(peak_x, peak_y + 1),
+                );
+                worst_legacy_error = worst_legacy_error
+                    .max((legacy_x - expected_x).abs())
+                    .max((legacy_y - expected_y).abs());
+            }
+        }
+        assert!(
+            worst_legacy_error > 0.1,
+            "legacy separable fit's worst error was only {worst_legacy_error:.4}"
+        );
+    }
+
+    #[test]
+    fn test_refine_peak_2d_degenerate_falls_back() {
+        assert_eq!(refine_peak_2d([[1.0; 3]; 3]), None);
+
+        let saddle = std::array::from_fn(|j| {
+            std::array::from_fn(|i| {
+                let x = i as f32 - 1.0;
+                let y = j as f32 - 1.0;
+                x * x - y * y
+            })
+        });
+        assert_eq!(refine_peak_2d(saddle), None);
+
+        let mut non_finite = [[0.0f32; 3]; 3];
+        non_finite[0][2] = f32::NAN;
+        assert_eq!(refine_peak_2d(non_finite), None);
+        non_finite[0][2] = f32::INFINITY;
+        assert_eq!(refine_peak_2d(non_finite), None);
+
+        let ridge = std::array::from_fn(|j| {
+            std::array::from_fn(|i| {
+                let x = i as f32 - 1.0;
+                let y = j as f32 - 1.0;
+                x * x + 0.0005 * y * y
+            })
+        });
+        assert_eq!(refine_peak_2d(ridge), None);
+
+        let (peak_x, peak_y) = (5i32, -7i32);
+        let target_x = peak_x as f32 + 0.7;
+        let target_y = peak_y as f32 - 0.4;
+        let sample = |x: i32, y: i32| -> f32 {
+            let rx = x as f32 - target_x;
+            let ry = y as f32 - target_y;
+            rx * rx + 1.5 * rx * ry + 2.0 * ry * ry
+        };
+        let rail_samples = std::array::from_fn(|j| {
+            std::array::from_fn(|i| sample(peak_x + i as i32 - 1, peak_y + j as i32 - 1))
+        });
+        let center = rail_samples[1][1];
+        assert!(
+            rail_samples.iter().flatten().all(|&value| center <= value),
+            "rail fixture must keep the center as the best integer sample"
+        );
+        assert_eq!(refine_peak_2d(rail_samples), None);
+
+        let refine_axis = |c_m: f32, c_0: f32, c_p: f32| -> f32 {
+            let curvature = c_m - 2.0 * c_0 + c_p;
+            if curvature <= 1e-12 {
+                0.0
+            } else {
+                (0.5 * (c_m - c_p) / curvature).clamp(-0.5, 0.5)
+            }
+        };
+        let expected = (
+            refine_axis(rail_samples[1][0], center, rail_samples[1][2]),
+            refine_axis(rail_samples[0][1], center, rail_samples[2][1]),
+        );
+        let got = refine_cepstral_peak(peak_x, peak_y, &sample);
+        assert_eq!(got.0.to_bits(), expected.0.to_bits());
+        assert_eq!(got.1.to_bits(), expected.1.to_bits());
     }
 
     /// Convention gate for the estimator: synthetic line blurs at four angles
