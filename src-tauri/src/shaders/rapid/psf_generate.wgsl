@@ -182,12 +182,10 @@ fn defocus_blur_spectrum(u: f32, v: f32, radius: f32, hardness: f32) -> vec2<f32
 /// Gaussian blur PSF in frequency domain
 /// H(u,v) = exp(-2*pi^2*sigma^2*(u^2 + v^2))
 ///
-/// The Gaussian is self-similar under Fourier transform.
-/// A Gaussian in spatial domain transforms to a Gaussian in frequency domain.
-/// This PSF has no zeros, making it the most stable for deconvolution.
-///
-/// Gaussian is the most stable blur type for deconvolution since it has
-/// no zeros - the transfer function decays smoothly to zero.
+/// A Gaussian is self-similar under Fourier transform and has no zeros, so
+/// its transfer function decays smoothly without a fabricated magnitude
+/// floor. Wiener regularization bounds the inverse; Gaussian-active adaptive
+/// modes use the smooth confidence policy in wiener_filter.wgsl.
 fn gaussian_blur_spectrum(u: f32, v: f32, sigma: f32) -> vec2<f32> {
     let freq_sq = u * u + v * v;
 
@@ -197,11 +195,7 @@ fn gaussian_blur_spectrum(u: f32, v: f32, sigma: f32) -> vec2<f32> {
     // H(u,v) = exp(-2*pi^2*sigma^2*(u^2 + v^2))
     let magnitude = exp(-2.0 * PI * PI * effective_sigma * effective_sigma * freq_sq);
 
-    // Gaussian is always positive, no need for magnitude floor
-    // But clamp to reasonable minimum for numerical stability
-    let safe_magnitude = max(magnitude, MAGNITUDE_FLOOR);
-
-    return vec2<f32>(safe_magnitude, 0.0);
+    return vec2<f32>(magnitude, 0.0);
 }
 
 // ============================================================================

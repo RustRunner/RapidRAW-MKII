@@ -664,7 +664,8 @@ struct WienerParams {
     strength: f32,
     noise_floor: f32,
     adaptive: u32,
-    _pad: [f32; 2],
+    gaussian_active: u32,
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -1956,7 +1957,8 @@ impl RapidDeconvolver {
             strength: params.strength,
             noise_floor: params.noise_floor,
             adaptive: if params.adaptive { 1 } else { 0 },
-            _pad: [0.0; 2],
+            gaussian_active: params.modes.gaussian as u32,
+            _pad: 0,
         };
         queue.write_buffer(&self.wiener_params_buffer, 0, bytemuck::bytes_of(&wiener_params));
 
@@ -4166,6 +4168,81 @@ mod tests {
         assert_eq!(std::mem::size_of::<NormalizeParams>(), 16);
     }
 
+    /// CPU lock for the Gaussian-active adaptive-lambda policy in
+    /// wiener_filter.wgsl. Lambda itself must interpolate smoothly between
+    /// the dead-band and live postures without creating a transfer step.
+    #[test]
+    fn test_gaussian_gate_curve_continuous_and_bounded() {
+        const GATE_LOW_POWER: f32 = 0.01;
+        const GATE_HIGH_POWER: f32 = 0.04;
+
+        for &base_lambda in &[0.01f32, 0.05] {
+            for &snr_clamped in &[0.1f32, 1.0, 10.0] {
+                let lambda_dead = base_lambda / snr_clamped.min(1.0);
+                let lambda_live = base_lambda / snr_clamped;
+                let lambda_at_power = |h2: f32| -> f32 {
+                    let t = ((h2 - GATE_LOW_POWER)
+                        / (GATE_HIGH_POWER - GATE_LOW_POWER))
+                        .clamp(0.0, 1.0);
+                    let trust = t * t * (3.0 - 2.0 * t);
+                    lambda_dead + (lambda_live - lambda_dead) * trust
+                };
+
+                assert!(
+                    (lambda_at_power(GATE_LOW_POWER) - lambda_dead).abs() <= 1e-7,
+                    "low endpoint drifted for base lambda {base_lambda}, SNR {snr_clamped}"
+                );
+                assert!(
+                    (lambda_at_power(GATE_HIGH_POWER) - lambda_live).abs() <= 1e-7,
+                    "high endpoint drifted for base lambda {base_lambda}, SNR {snr_clamped}"
+                );
+
+                let lambda_min = lambda_dead.min(lambda_live);
+                let lambda_max = lambda_dead.max(lambda_live);
+                let mut previous_transfer: Option<f32> = None;
+                let mut max_gain = 0.0f32;
+                for step in 0..=100_000u32 {
+                    let h = step as f32 * 1e-5;
+                    let h2 = h * h;
+                    let lambda = lambda_at_power(h2);
+                    assert!(
+                        lambda >= lambda_min - 1e-7 && lambda <= lambda_max + 1e-7,
+                        "lambda {lambda} escaped [{lambda_min}, {lambda_max}] for base lambda \
+                         {base_lambda}, SNR {snr_clamped}, H {h}"
+                    );
+                    let transfer = h2 / (h2 + lambda);
+                    if let Some(previous) = previous_transfer {
+                        assert!(
+                            (transfer - previous).abs() < 0.01,
+                            "restored transfer stepped from {previous} to {transfer} for base \
+                             lambda {base_lambda}, SNR {snr_clamped}, H {h}"
+                        );
+                    }
+                    previous_transfer = Some(transfer);
+                    max_gain = max_gain.max(h / (h2 + lambda));
+                }
+
+                let transfer_at = |h: f32| -> f32 {
+                    let h2 = h * h;
+                    h2 / (h2 + lambda_at_power(h2))
+                };
+                assert!(
+                    (transfer_at(0.15001) - transfer_at(0.14999)).abs() < 0.01,
+                    "former H=0.15 boundary is discontinuous for base lambda {base_lambda}, \
+                     SNR {snr_clamped}"
+                );
+
+                if snr_clamped == 10.0 {
+                    let bound = if base_lambda == 0.01 { 5.22 } else { 4.49 };
+                    assert!(
+                        max_gain < bound,
+                        "gain {max_gain} exceeds {bound} for base lambda {base_lambda}"
+                    );
+                }
+            }
+        }
+    }
+
     // ========================================================================
     // FFT Reference Tests
     // ========================================================================
@@ -4932,6 +5009,152 @@ mod tests {
         );
     }
 
+    /// Gaussian-floor comparison fixture. Floored-shader baselines captured
+    /// 23AUG26 with the adapter printed by the test:
+    ///
+    /// - fixed lambda=0.01: flat_var 1.571030e-3, near_mse 2.423333e-3
+    /// - adaptive lambda=0.01: flat_var 2.697270e-3, near_mse 3.483825e-3
+    /// - adaptive lambda=0.05: flat_var 1.816453e-3, near_mse 2.721453e-3
+    ///
+    /// Unfloored measurements on the same NVIDIA GB10/Vulkan posture:
+    ///
+    /// - fixed lambda=0.01: flat_var 1.415709e-4, near_mse 1.082751e-3
+    /// - adaptive lambda=0.01: flat_var 1.485348e-4, near_mse 1.059713e-3
+    /// - adaptive lambda=0.05: flat_var 5.162276e-5, near_mse 1.096019e-3
+    ///
+    /// The 1.5e-3 absolute MSE ceiling retains about 36% margin above the
+    /// worst accepted candidate measurement. Comparative gates independently
+    /// require each posture to beat its own floored baseline.
+    #[test]
+    fn test_gpu_gaussian_unflooring_noise_bounded() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("skipping GPU gaussian unflooring test: no adapter ({e})");
+                return;
+            }
+        };
+        eprintln!("gaussian unflooring adapter: {:?}", adapter.get_info());
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RAPID gaussian unflooring test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("failed to create device");
+        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
+
+        let (width, height) = (256usize, 200usize);
+        let sigma = 2.0f32;
+        let field: Vec<f32> = (0..width * height)
+            .map(|i| {
+                let (x, y) = ((i % width) as i32, (i / width) as i32);
+                if (x - 128).abs() <= 3 && (y - 100).abs() <= 3 { 0.9 } else { 0.4 }
+            })
+            .collect();
+        let blurred = gaussian_blur_field(&field, width, height, sigma);
+        let hash2 = |x: u32, y: u32| -> u32 {
+            let mut h = x.wrapping_mul(0x27D4_EB2F) ^ y.wrapping_mul(0x1656_67B1);
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7FEB_352D);
+            h ^= h >> 15;
+            h
+        };
+
+        let flat_var = |img: &image::DynamicImage| -> f64 {
+            let rgb = img.to_rgb32f();
+            let (x0, x1, y0, y1) = (40u32, 88u32, 68u32, 132u32);
+            let n = ((x1 - x0) * (y1 - y0)) as f64;
+            let (mut sum, mut sum2) = (0.0f64, 0.0f64);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let v = rgb.get_pixel(x, y)[0] as f64;
+                    sum += v;
+                    sum2 += v * v;
+                }
+            }
+            let mean = sum / n;
+            (sum2 / n - mean * mean).max(0.0)
+        };
+        let near_mse = |img: &image::DynamicImage| -> f64 {
+            let rgb = img.to_rgb32f();
+            let (x0, x1, y0, y1) = (96u32, 160u32, 84u32, 116u32);
+            let mut sum = 0.0f64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let truth = if (x as i32 - 128).abs() <= 3 && (y as i32 - 100).abs() <= 3 {
+                        0.9f32
+                    } else {
+                        0.4f32
+                    };
+                    let d = (rgb.get_pixel(x, y)[0] - truth) as f64;
+                    sum += d * d;
+                }
+            }
+            sum / ((x1 - x0) * (y1 - y0)) as f64
+        };
+
+        let noisy: Vec<f32> = blurred
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let (x, y) = ((i % width) as u32, (i / width) as u32);
+                v + ((hash2(x, y) & 0xff) as f32 / 255.0 - 0.5) * 0.03
+            })
+            .collect();
+        let input = gray_image(&noisy, width as u32, height as u32);
+
+        let postures = [
+            ("fixed lambda=0.01", 0.01f32, false, 1.571030e-3f64, 2.423333e-3f64),
+            ("adaptive lambda=0.01", 0.01f32, true, 2.697270e-3f64, 3.483825e-3f64),
+            ("adaptive lambda=0.05", 0.05f32, true, 1.816453e-3f64, 2.721453e-3f64),
+        ];
+        let mut observed_variance = [0.0f64; 3];
+        for (index, &(label, lambda, adaptive, floored_var, floored_mse)) in
+            postures.iter().enumerate()
+        {
+            let params = RapidParams {
+                enabled: true,
+                modes: ModeSet::GAUSSIAN,
+                gaussian_sigma: sigma,
+                lambda,
+                strength: 1.0,
+                adaptive,
+                ..Default::default()
+            };
+            let out = deconv
+                .deconvolve_image(&device, &queue, &input, &params)
+                .expect("gaussian deconvolve failed");
+            let (v, m) = (flat_var(&out), near_mse(&out));
+            observed_variance[index] = v;
+            eprintln!("gaussian unfloored {label}: flat_var {v:.6e}, near_mse {m:.6e}");
+            assert!(
+                v <= 0.8 * floored_var,
+                "{label}: flat variance {v:.6e} did not improve at least 20% from floored \
+                 baseline {floored_var:.6e}"
+            );
+            assert!(
+                m <= 1.25 * floored_mse,
+                "{label}: near MSE {m:.6e} exceeds 1.25x floored baseline \
+                 {floored_mse:.6e}"
+            );
+            assert!(
+                m <= 1.5e-3,
+                "{label}: near MSE {m:.6e} exceeds the absolute 1.5e-3 ceiling"
+            );
+        }
+        assert!(
+            observed_variance[2] < observed_variance[1],
+            "adaptive lambda=0.05 variance {:.6e} must stay below lambda=0.01 {:.6e}",
+            observed_variance[2],
+            observed_variance[1]
+        );
+    }
+
     /// Chamfer distances against brute-force Euclidean on a small grid: the
     /// 3x3 1/sqrt(2) transform never undershoots and overestimates by at
     /// most ~8% before the cap.
@@ -5591,16 +5814,23 @@ mod tests {
         gray_image(&blurred, w as u32, h as u32)
     }
 
-    /// Isotropic gaussian blur, separable with clamped borders — the
-    /// real-world blur whose spectrum estimate_gaussian fits.
-    fn gaussian_blur_iso(img: &image::RgbaImage, sigma: f32) -> image::DynamicImage {
-        let (w, h) = (img.width() as i32, img.height() as i32);
+    /// Isotropic gaussian blur, separable over a scalar field with clamped
+    /// borders. The normalized discrete kernel is truncated at +/-3 sigma;
+    /// at sigma=2 its transfer differs from the analytic shader OTF by about
+    /// 0.4% near the former |H|=0.15 crossing, which the comparative fixture
+    /// bounds rather than concealing with a different reference blur.
+    fn gaussian_blur_field(
+        field: &[f32],
+        width: usize,
+        height: usize,
+        sigma: f32,
+    ) -> Vec<f32> {
+        let (w, h) = (width as i32, height as i32);
         let radius = (3.0 * sigma).ceil() as i32;
         let weights: Vec<f32> = (-radius..=radius)
             .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
             .collect();
         let wsum: f32 = weights.iter().sum();
-        let field: Vec<f32> = img.pixels().map(|p| p[0] as f32 / 255.0).collect();
         let mut tmp = vec![0.0f32; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
@@ -5623,7 +5853,16 @@ mod tests {
                 out[(y * w + x) as usize] = acc / wsum;
             }
         }
-        gray_image(&out, w as u32, h as u32)
+        out
+    }
+
+    /// Quantizing wrapper for the real-world blur whose spectrum
+    /// estimate_gaussian fits.
+    fn gaussian_blur_iso(img: &image::RgbaImage, sigma: f32) -> image::DynamicImage {
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let field: Vec<f32> = img.pixels().map(|p| p[0] as f32 / 255.0).collect();
+        let blurred = gaussian_blur_field(&field, w, h, sigma);
+        gray_image(&blurred, w as u32, h as u32)
     }
 
     /// Quantize a grayscale f32 field to an sRGB-range u8 image, clamping to
