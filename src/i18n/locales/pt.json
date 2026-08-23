@@ -318,6 +318,8 @@
         "estimateFailedDefocus": "Raio de desfoque não detectado - ajuste o raio manualmente.",
         "estimateFailedGaussian": "Não foi possível medir o nível de desfoque gaussiano - ajuste o sigma manualmente.",
         "estimateFailedMotion": "Direção do borrão de movimento não detectada - ajuste comprimento e ângulo manualmente.",
+        "estimateSuccessDefocus": "Raio de desfoque estimado: {{radius}} px",
+        "estimateSuccessGaussian": "Sigma gaussiano estimado: {{sigma}}",
         "estimating": "Estimando...",
         "gaussian": "Gaussian",
         "hardness": "Dureza das bordas",

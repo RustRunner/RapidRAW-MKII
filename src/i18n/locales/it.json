@@ -318,6 +318,8 @@
         "estimateFailedDefocus": "Raggio di sfocatura non rilevato: imposta il raggio manualmente.",
         "estimateFailedGaussian": "Livello di sfocatura gaussiana non misurabile: imposta il sigma manualmente.",
         "estimateFailedMotion": "Direzione del mosso non rilevata: imposta lunghezza e angolo manualmente.",
+        "estimateSuccessDefocus": "Raggio di sfocatura stimato: {{radius}} px",
+        "estimateSuccessGaussian": "Sigma gaussiano stimato: {{sigma}}",
         "estimating": "Stima in corso...",
         "gaussian": "Gaussian",
         "hardness": "Durezza dei bordi",

@@ -196,6 +196,9 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidDefocusEnabled]: true,
       }));
+      toast.success(
+        t('editor.adjustments.blurRecovery.estimateSuccessDefocus', { radius: radius.toFixed(1) }),
+      );
     } catch (err) {
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedDefocus')} (${err})`);
     } finally {
@@ -228,6 +231,9 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidGaussianEnabled]: true,
       }));
+      toast.success(
+        t('editor.adjustments.blurRecovery.estimateSuccessGaussian', { sigma: sigma.toFixed(1) }),
+      );
     } catch (err) {
       toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedGaussian')} (${err})`);
     } finally {

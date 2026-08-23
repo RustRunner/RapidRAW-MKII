@@ -334,6 +334,8 @@
         "estimateFailedDefocus": "Радиус расфокусировки не обнаружен - задайте радиус вручную.",
         "estimateFailedGaussian": "Не удалось измерить уровень гауссова размытия - задайте сигму вручную.",
         "estimateFailedMotion": "Направление смаза не обнаружено - задайте длину и угол вручную.",
+        "estimateSuccessDefocus": "Оценочный радиус расфокусировки: {{radius}} пикс.",
+        "estimateSuccessGaussian": "Оценочная сигма гауссова размытия: {{sigma}}",
         "estimating": "Оценка...",
         "gaussian": "Gaussian",
         "hardness": "Жёсткость краёв",

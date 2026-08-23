@@ -318,6 +318,8 @@
         "estimateFailedDefocus": "No se detectó el radio de desenfoque: ajusta el radio manualmente.",
         "estimateFailedGaussian": "No se pudo medir el nivel de desenfoque gaussiano: ajusta el sigma manualmente.",
         "estimateFailedMotion": "No se detectó la dirección del desenfoque de movimiento: ajusta longitud y ángulo manualmente.",
+        "estimateSuccessDefocus": "Radio de desenfoque estimado: {{radius}} px",
+        "estimateSuccessGaussian": "Sigma gaussiana estimada: {{sigma}}",
         "estimating": "Estimando...",
         "gaussian": "Gaussian",
         "hardness": "Dureza de bordes",

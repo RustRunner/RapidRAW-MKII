@@ -302,6 +302,8 @@
         "estimateFailedDefocus": "Kein Defokus-Radius erkannt - Radius manuell einstellen.",
         "estimateFailedGaussian": "Gaußsche Unschärfe nicht messbar - Sigma manuell einstellen.",
         "estimateFailedMotion": "Keine Bewegungsunschärfe-Richtung erkannt - Länge und Winkel manuell einstellen.",
+        "estimateSuccessDefocus": "Geschätzter Defokus-Radius: {{radius}} px",
+        "estimateSuccessGaussian": "Geschätztes Gauß-Sigma: {{sigma}}",
         "estimating": "Schätzung läuft...",
         "gaussian": "Gaussian",
         "hardness": "Kantenhärte",
