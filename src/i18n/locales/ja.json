@@ -302,6 +302,7 @@
         "estimateFailedDefocus": "デフォーカス半径を検出できませんでした。半径を手動で設定してください。",
         "estimateFailedGaussian": "ガウスぼかしの強さを測定できませんでした。シグマを手動で設定してください。",
         "estimateFailedMotion": "ブレの方向を検出できませんでした。長さと角度を手動で設定してください。",
+        "estimateOutOfRangeDefocus": "推定デフォーカス半径 {{radius}} px はエディターの上限 50 px を超えています。変更は適用されませんでした。",
         "estimateSuccessDefocus": "推定デフォーカス半径: {{radius}} px",
         "estimateSuccessGaussian": "推定ガウスシグマ: {{sigma}}",
         "estimating": "推定中...",

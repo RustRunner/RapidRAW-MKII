@@ -302,6 +302,7 @@
         "estimateFailedDefocus": "Could not detect a defocus radius - set the radius manually.",
         "estimateFailedGaussian": "Could not measure a gaussian blur level - set the sigma manually.",
         "estimateFailedMotion": "Could not detect a motion-blur direction - set length and angle manually.",
+        "estimateOutOfRangeDefocus": "The estimated defocus radius of {{radius}} px exceeds the editor's 50 px limit. No change was applied.",
         "estimateSuccessDefocus": "Estimated defocus radius: {{radius}} px",
         "estimateSuccessGaussian": "Estimated gaussian sigma: {{sigma}}",
         "estimating": "Estimating...",

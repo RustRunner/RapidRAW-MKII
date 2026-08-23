@@ -318,6 +318,7 @@
         "estimateFailedDefocus": "Raggio di sfocatura non rilevato: imposta il raggio manualmente.",
         "estimateFailedGaussian": "Livello di sfocatura gaussiana non misurabile: imposta il sigma manualmente.",
         "estimateFailedMotion": "Direzione del mosso non rilevata: imposta lunghezza e angolo manualmente.",
+        "estimateOutOfRangeDefocus": "Il raggio di sfocatura stimato di {{radius}} px supera il limite di 50 px dell’editor. Non è stata applicata alcuna modifica.",
         "estimateSuccessDefocus": "Raggio di sfocatura stimato: {{radius}} px",
         "estimateSuccessGaussian": "Sigma gaussiano stimato: {{sigma}}",
         "estimating": "Stima in corso...",

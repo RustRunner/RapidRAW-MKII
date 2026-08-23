@@ -185,10 +185,20 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
         toast.error(t('editor.adjustments.blurRecovery.estimateFailedDefocus'));
         return;
       }
-      // Snap to the slider's 0.5 step; the floor of 1 keeps a confident
+      // Round to the slider's 0.1 step before checking its upper rail.
+      const roundedRadius = Math.round(estimate.radius * 10) / 10;
+      if (roundedRadius > 50) {
+        toast.error(
+          t('editor.adjustments.blurRecovery.estimateOutOfRangeDefocus', {
+            radius: estimate.radius.toFixed(1),
+          }),
+        );
+        return;
+      }
+      // The floor of 1 keeps a confident
       // estimate from writing 0 and leaving the mode inert. No hardness
       // write - the shader pins the raw jinc for the defocus component.
-      const radius = Math.min(20, Math.max(1, Math.round(estimate.radius * 2) / 2));
+      const radius = Math.max(1, roundedRadius);
       const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
@@ -394,10 +404,10 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                   </div>
                   <Slider
                     label={t('editor.adjustments.blurRecovery.radius')}
-                    max={20}
+                    max={50}
                     min={0}
                     onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
-                    step={0.5}
+                    step={0.1}
                     value={adjustments.rapidRadius}
                     onDragStateChange={onDragStateChange}
                   />
