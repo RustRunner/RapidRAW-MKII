@@ -209,8 +209,12 @@ fn compute_full_transformed_res(
         Cow::Borrowed(loaded_image.image.as_ref())
     };
 
-    let (transformed_img, offset) =
-        apply_all_transformations_scaled(patched_original_image, adjustments, rapid_scale);
+    let (transformed_img, offset) = apply_all_transformations_scaled(
+        patched_original_image,
+        adjustments,
+        rapid_scale,
+        loaded_image.is_raw,
+    );
     Ok((Arc::new(transformed_img.into_owned()), offset))
 }
 
@@ -900,7 +904,7 @@ fn generate_original_transformed_preview(
     }
 
     let (transformed_full_res, _unscaled_crop_offset) =
-        apply_all_transformations(Cow::Borrowed(&image_for_preview), &adjustments_clone);
+        apply_all_transformations(Cow::Borrowed(&image_for_preview), &adjustments_clone, loaded_image.is_raw);
 
     let settings = load_settings(app_handle).unwrap_or_default();
     let default_dim = settings.editor_preview_resolution.unwrap_or(1920);
@@ -1387,7 +1391,7 @@ async fn generate_preview_for_path(
         };
 
         let (transformed_image, unscaled_crop_offset) =
-            apply_all_transformations(Cow::Borrowed(&base_image), &js_adjustments);
+            apply_all_transformations(Cow::Borrowed(&base_image), &js_adjustments, is_raw);
         let (img_w, img_h) = transformed_image.dimensions();
         let mask_definitions: Vec<MaskDefinition> = js_adjustments
             .get("masks")

@@ -455,7 +455,7 @@ fn process_image_for_export_pipeline(
     app_handle: &tauri::AppHandle,
 ) -> Result<DynamicImage, String> {
     let (transformed_image, unscaled_crop_offset) =
-        apply_all_transformations(Cow::Borrowed(base_image), js_adjustments);
+        apply_all_transformations(Cow::Borrowed(base_image), js_adjustments, is_raw);
     let (img_w, img_h) = transformed_image.dimensions();
 
     let mask_definitions: Vec<MaskDefinition> = js_adjustments
@@ -756,7 +756,7 @@ fn export_masks_for_image(
 ) -> Result<(), String> {
     ensure_export_not_cancelled(cancellation_token)?;
     let (transformed_image, unscaled_crop_offset) =
-        apply_all_transformations(Cow::Borrowed(base_image), js_adjustments);
+        apply_all_transformations(Cow::Borrowed(base_image), js_adjustments, is_raw);
     ensure_export_not_cancelled(cancellation_token)?;
     let (img_w, img_h) = transformed_image.dimensions();
     let mask_definitions: Vec<MaskDefinition> = js_adjustments
@@ -1633,7 +1633,7 @@ pub async fn estimate_export_sizes(
         let preview_byte_size = preview_bytes.len();
 
         let (transformed_full_res, _) =
-            apply_all_transformations(&loaded_image.image, &adjustments_clone);
+            apply_all_transformations(&loaded_image.image, &adjustments_clone, loaded_image.is_raw);
         let (full_w, full_h) = transformed_full_res.dimensions();
 
         let (final_full_w, final_full_h) = if let Some(resize_opts) = &export_settings.resize {
@@ -1697,7 +1697,7 @@ pub async fn estimate_export_sizes(
         }
 
         let (transformed_shrunk_res, unscaled_crop_offset) =
-            apply_all_transformations(Cow::Borrowed(&original_image), &js_adjustments);
+            apply_all_transformations(Cow::Borrowed(&original_image), &js_adjustments, is_raw);
         let (shrunk_w, shrunk_h) = transformed_shrunk_res.dimensions();
 
         let preview_base = if shrunk_w > ESTIMATE_DIM || shrunk_h > ESTIMATE_DIM {

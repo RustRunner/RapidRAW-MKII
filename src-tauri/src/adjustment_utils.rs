@@ -93,8 +93,9 @@ pub fn hydrate_adjustments(state: &tauri::State<AppState>, adjustments: &mut ser
 pub fn apply_all_transformations<'a, I: IntoCowImage<'a>>(
     image: I,
     adjustments: &serde_json::Value,
+    source_linear: bool,
 ) -> (Cow<'a, DynamicImage>, (f32, f32)) {
-    apply_all_transformations_scaled(image, adjustments, 1.0)
+    apply_all_transformations_scaled(image, adjustments, 1.0, source_linear)
 }
 
 /// Like [`apply_all_transformations`], but with `rapid_scale < 1.0` the blur
@@ -105,11 +106,16 @@ pub fn apply_all_transformations_scaled<'a, I: IntoCowImage<'a>>(
     image: I,
     adjustments: &serde_json::Value,
     rapid_scale: f32,
+    source_linear: bool,
 ) -> (Cow<'a, DynamicImage>, (f32, f32)) {
     let start_time = std::time::Instant::now();
     let image = image.into_cow();
-    let recovered_image =
-        crate::rapid_processing::apply_blur_recovery_scaled(image, adjustments, rapid_scale);
+    let recovered_image = crate::rapid_processing::apply_blur_recovery_scaled(
+        image,
+        adjustments,
+        rapid_scale,
+        source_linear,
+    );
     let warped_image = apply_geometry_warp(recovered_image, adjustments);
     let blurred_image = crate::lens_blur::apply_lens_blur(warped_image, adjustments);
 

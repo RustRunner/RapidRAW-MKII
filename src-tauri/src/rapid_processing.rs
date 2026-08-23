@@ -444,7 +444,7 @@ fn mirror_fade_map(size: usize, padded: usize, margin: usize) -> Vec<(usize, f32
     map
 }
 
-/// Build the pow2-padded RGBA f32 upload buffer for `deconvolve_image`.
+/// Build the pow2-padded RGBA f32 upload buffer for `deconvolve_linear_image`.
 /// With `params.edge_taper` off this is a plain zero-pad — the A/B baseline
 /// for boundary-ringing tests.
 fn build_padded_input(
@@ -532,9 +532,23 @@ const CLIP_GUARD_SAT: f32 = 0.98;
 /// Full suppression within this many kernel extents of a clipped pixel
 /// (the reach of the clipped sample under the blur)...
 const CLIP_GUARD_D0_EXTENTS: f32 = 1.0;
-/// ...fading to zero by this many (the ring train decays over a few
-/// extents of the Wiener impulse response).
+/// ...normally fading to zero by this many extents.
 const CLIP_GUARD_D1_EXTENTS: f32 = 3.0;
+/// A defocus inverse has a much longer jinc ring train. Real clipped-sky
+/// captures retain visible dark rings well beyond the generic three-extent
+/// feather, so keep identity influence through the measured tail. Motion and
+/// Gaussian modes retain the narrower guard.
+const CLIP_GUARD_DEFOCUS_D1_EXTENTS: f32 = 16.0;
+
+fn clip_guard_d1_pixels(params: &RapidParams, compound_extent: usize) -> f32 {
+    let compact_d1 = CLIP_GUARD_D1_EXTENTS * compound_extent as f32;
+    if params.modes.defocus {
+        let defocus_extent = (2.0 * params.defocus_radius).ceil().max(1.0);
+        compact_d1.max(CLIP_GUARD_DEFOCUS_D1_EXTENTS * defocus_extent)
+    } else {
+        compact_d1
+    }
+}
 
 /// Chamfer 3x3 distance transform: per-pixel distance in pixels to the
 /// nearest set pixel, capped at `cap`. Two raster scans (forward, then
@@ -592,12 +606,17 @@ fn chamfer_distance(mask: &[bool], width: usize, height: usize, cap: f32) -> Vec
 /// Per-pixel guard weight: 1 (reproduce the input) within D0 of a clipped
 /// pixel, 0 (full recovery) beyond D1, smoothstep between. None when nothing
 /// clips, so the recombine loop stays untouched at zero cost.
-fn clip_guard_weights(rgba: &image::Rgba32FImage, extent: usize) -> Option<Vec<f32>> {
+fn clip_guard_weights(
+    rgba: &image::Rgba32FImage,
+    extent: usize,
+    clip_guard_sat_linear: f32,
+    d1_pixels: f32,
+) -> Option<Vec<f32>> {
     let (width, height) = (rgba.width() as usize, rgba.height() as usize);
     let mut mask = vec![false; width * height];
     let mut any = false;
     for (i, p) in rgba.pixels().enumerate() {
-        if p[0].max(p[1]).max(p[2]) >= CLIP_GUARD_SAT {
+        if p[0].max(p[1]).max(p[2]) >= clip_guard_sat_linear {
             mask[i] = true;
             any = true;
         }
@@ -606,7 +625,7 @@ fn clip_guard_weights(rgba: &image::Rgba32FImage, extent: usize) -> Option<Vec<f
         return None;
     }
     let d0 = CLIP_GUARD_D0_EXTENTS * extent as f32;
-    let d1 = CLIP_GUARD_D1_EXTENTS * extent as f32;
+    let d1 = d1_pixels.max(d0);
     let dist = chamfer_distance(&mask, width, height, d1);
     Some(
         dist.iter()
@@ -2189,14 +2208,15 @@ impl RapidDeconvolver {
         Err("RAPID deconvolution not yet implemented (Phase 2-4)".to_string())
     }
 
-    /// High-level deconvolution that takes a DynamicImage and returns a processed DynamicImage.
-    /// This handles all the texture creation, upload, processing, and readback.
-    pub fn deconvolve_image(
+    /// GPU core for a linear DynamicImage. Returns linear ImageRgba32F and
+    /// receives the clip threshold explicitly so provenance stays outside.
+    pub fn deconvolve_linear_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         image: &image::DynamicImage,
         params: &RapidParams,
+        clip_guard_sat_linear: f32,
     ) -> Result<image::DynamicImage, String> {
         use image::{GenericImageView, Rgba};
 
@@ -2431,7 +2451,13 @@ impl RapidDeconvolver {
         // The clip guard fades the gain back to identity near saturated
         // input pixels; at w = 1 the input pixel is reproduced exactly.
         let guard = if params.clip_guard {
-            clip_guard_weights(&rgba_image, kernel_extent(params))
+            let extent = kernel_extent(params);
+            clip_guard_weights(
+                &rgba_image,
+                extent,
+                clip_guard_sat_linear,
+                clip_guard_d1_pixels(params, extent),
+            )
         } else {
             None
         };
@@ -2905,10 +2931,14 @@ fn rapid_vram_budget_from(
     }
 }
 
+/// Run blur recovery in linear light while retaining the original image for
+/// failure. Encoded sources are decoded before any resize and encoded once
+/// after the final resize; `source_linear` is original-source provenance.
 pub fn apply_blur_recovery_scaled<'a>(
     image: std::borrow::Cow<'a, image::DynamicImage>,
     adjustments: &serde_json::Value,
     rapid_scale: f32,
+    source_linear: bool,
 ) -> std::borrow::Cow<'a, image::DynamicImage> {
     let Some(params) = parse_rapid_params(adjustments) else {
         return image;
@@ -2945,13 +2975,38 @@ pub fn apply_blur_recovery_scaled<'a>(
     }
     let scale = rapid_scale.min(vram_scale);
 
+    // The threshold follows original provenance even though the GPU core
+    // always receives a linear working buffer.
+    let clip_guard_sat_linear = if source_linear {
+        CLIP_GUARD_SAT
+    } else {
+        crate::image_processing::srgb_channel_to_linear(CLIP_GUARD_SAT)
+    };
+    let linear = image::DynamicImage::ImageRgba32F(image.as_ref().to_rgba32f());
+    let linear = if source_linear {
+        linear
+    } else {
+        crate::image_processing::apply_srgb_to_linear(linear)
+    };
+
     if scale < 0.999 {
         let small_w = ((w as f32 * scale).round() as u32).max(1);
         let small_h = ((h as f32 * scale).round() as u32).max(1);
-        let small = image.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
-        return match deconvolver.deconvolve_image(device, queue, &small, &params.scaled(scale)) {
+        let small = linear.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
+        return match deconvolver.deconvolve_linear_image(
+            device,
+            queue,
+            &small,
+            &params.scaled(scale),
+            clip_guard_sat_linear,
+        ) {
             Ok(out) => {
                 let restored = out.resize_exact(w, h, image::imageops::FilterType::Triangle);
+                let restored = if source_linear {
+                    restored
+                } else {
+                    crate::image_processing::apply_linear_to_srgb(restored)
+                };
                 log::info!(
                     "RAPID: scaled blur recovery pre-pass ({}x{} @ {:.3}) took {:?}",
                     small_w,
@@ -2968,8 +3023,19 @@ pub fn apply_blur_recovery_scaled<'a>(
         };
     }
 
-    match deconvolver.deconvolve_image(device, queue, image.as_ref(), &params) {
+    match deconvolver.deconvolve_linear_image(
+        device,
+        queue,
+        &linear,
+        &params,
+        clip_guard_sat_linear,
+    ) {
         Ok(out) => {
+            let out = if source_linear {
+                out
+            } else {
+                crate::image_processing::apply_linear_to_srgb(out)
+            };
             log::info!("RAPID: blur recovery pre-pass took {:?}", start.elapsed());
             std::borrow::Cow::Owned(out)
         }
@@ -3201,19 +3267,27 @@ struct WorkingSpectrum {
     scale: f32,
 }
 
-fn working_spectrum(image: &image::DynamicImage) -> WorkingSpectrum {
+fn working_spectrum(image: &image::DynamicImage, source_linear: bool) -> WorkingSpectrum {
     use image::GenericImageView;
 
     let (full_w, full_h) = image.dimensions();
+    // Convert and decode before interpolation: estimators must inspect
+    // luma-of-linear, never a resized encoded buffer.
+    let linear = image::DynamicImage::ImageRgb32F(image.to_rgb32f());
+    let linear = if source_linear {
+        linear
+    } else {
+        crate::image_processing::apply_srgb_to_linear(linear)
+    };
     let scale = (1024.0 / full_w.max(full_h).max(1) as f32).min(1.0);
     let working;
     let working_ref = if scale < 1.0 {
         let w = ((full_w as f32 * scale).round() as u32).max(1);
         let h = ((full_h as f32 * scale).round() as u32).max(1);
-        working = image.resize_exact(w, h, image::imageops::FilterType::Triangle);
+        working = linear.resize_exact(w, h, image::imageops::FilterType::Triangle);
         &working
     } else {
-        image
+        &linear
     };
     let rgb = working_ref.to_rgb32f();
     let (w, h) = (rgb.width() as usize, rgb.height() as usize);
@@ -3350,8 +3424,9 @@ where
 /// along the blur direction. Search radius 3-250 working px; the detection
 /// floor is ~2-3 working px, so short blurs on large images come back
 /// low-confidence rather than wrong.
-pub fn estimate_blur(image: &image::DynamicImage) -> BlurEstimate {
-    let WorkingSpectrum { mut data, spectrum_ln, pw, ph, w, h, scale } = working_spectrum(image);
+pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEstimate {
+    let WorkingSpectrum { mut data, spectrum_ln, pw, ph, w, h, scale } =
+        working_spectrum(image, source_linear);
 
     // Real cepstrum: log magnitude -> inverse FFT (the forward FFT already
     // ran in working_spectrum).
@@ -3532,15 +3607,15 @@ fn suggest_lambda(spectrum_ln: &[f32], pw: usize, ph: usize, angle_deg: f32) -> 
 pub async fn estimate_blur_kernel(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<BlurEstimate, String> {
-    let image = {
+    let (image, source_linear) = {
         let guard = state.original_image.lock().unwrap();
         guard
             .as_ref()
-            .map(|loaded| loaded.image.clone())
+            .map(|loaded| (loaded.image.clone(), loaded.is_raw))
             .ok_or("No image loaded")?
     };
     let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_blur(&image))
+    let estimate = tokio::task::spawn_blocking(move || estimate_blur(&image, source_linear))
         .await
         .map_err(|e| format!("Blur estimation task failed: {e}"))?;
     log::info!(
@@ -3752,13 +3827,13 @@ const DEFOCUS_NOT_CONFIDENT: DefocusEstimate = DefocusEstimate {
 /// ρ ≤ 0.45 band (two zeros minimum for a comb), so small blurs on large
 /// frames come back low-confidence rather than wrong — the motion
 /// estimator's documented limitation, shared.
-pub fn estimate_defocus(image: &image::DynamicImage) -> DefocusEstimate {
+pub fn estimate_defocus(image: &image::DynamicImage, source_linear: bool) -> DefocusEstimate {
     const R_MIN: f32 = 2.5;
     const R_MAX: f32 = 25.0;
     const R_STEP: f32 = 0.1;
     const RHO_MAX: f32 = 0.45;
 
-    let ws = working_spectrum(image);
+    let ws = working_spectrum(image, source_linear);
     let profile = radial_profile_mean(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
 
@@ -3941,8 +4016,8 @@ const GAUSSIAN_NOT_CONFIDENT: GaussianEstimate = GaussianEstimate {
 /// (a, free — it absorbs the power law) from the blur curvature s;
 /// σ_work = √(s/2π²). Fit in f64 on centered predictors; confidence is
 /// the t-statistic of s.
-pub fn estimate_gaussian(image: &image::DynamicImage) -> GaussianEstimate {
-    let ws = working_spectrum(image);
+pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> GaussianEstimate {
+    let ws = working_spectrum(image, source_linear);
     let profile = radial_profile_median(&ws.spectrum_ln, ws.pw, ws.ph);
     let nb = ws.pw / 2;
     let rho_of = |b: usize| (b as f32 + 0.5) / (2.0 * nb as f32);
@@ -4047,15 +4122,15 @@ pub fn estimate_gaussian(image: &image::DynamicImage) -> GaussianEstimate {
 pub async fn estimate_defocus_kernel(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<DefocusEstimate, String> {
-    let image = {
+    let (image, source_linear) = {
         let guard = state.original_image.lock().unwrap();
         guard
             .as_ref()
-            .map(|loaded| loaded.image.clone())
+            .map(|loaded| (loaded.image.clone(), loaded.is_raw))
             .ok_or("No image loaded")?
     };
     let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_defocus(&image))
+    let estimate = tokio::task::spawn_blocking(move || estimate_defocus(&image, source_linear))
         .await
         .map_err(|e| format!("Defocus estimation task failed: {e}"))?;
     log::info!(
@@ -4076,15 +4151,15 @@ pub async fn estimate_defocus_kernel(
 pub async fn estimate_gaussian_kernel(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<GaussianEstimate, String> {
-    let image = {
+    let (image, source_linear) = {
         let guard = state.original_image.lock().unwrap();
         guard
             .as_ref()
-            .map(|loaded| loaded.image.clone())
+            .map(|loaded| (loaded.image.clone(), loaded.is_raw))
             .ok_or("No image loaded")?
     };
     let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_gaussian(&image))
+    let estimate = tokio::task::spawn_blocking(move || estimate_gaussian(&image, source_linear))
         .await
         .map_err(|e| format!("Gaussian estimation task failed: {e}"))?;
     log::info!(
@@ -4487,7 +4562,7 @@ mod tests {
         };
 
         let out = deconv
-            .deconvolve_image(&device, &queue, &input, &params)
+            .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
             .expect("deconvolve_image failed");
         assert_eq!(out.dimensions(), input.dimensions());
 
@@ -4560,7 +4635,7 @@ mod tests {
         };
 
         let out = deconv
-            .deconvolve_image(&device, &queue, &input, &params)
+            .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
             .expect("deconvolve_image failed");
         let output = match out {
             image::DynamicImage::ImageRgba32F(output) => output,
@@ -4620,7 +4695,7 @@ mod tests {
                 ..Default::default()
             };
             deconv
-                .deconvolve_image(&device, &queue, &input, &params)
+                .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
                 .expect("deconvolve_image failed")
         };
         let compound = run(&mut deconv, ModeSet { motion: true, defocus: false, gaussian: true });
@@ -4660,7 +4735,7 @@ mod tests {
                 ..Default::default()
             };
             deconv
-                .deconvolve_image(&device, &queue, &input, &params)
+                .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
                 .expect("deconvolve_image failed")
                 .to_rgba8()
         };
@@ -4774,10 +4849,10 @@ mod tests {
         let tapered_params = RapidParams { edge_taper: true, ..base_params };
 
         let base = deconv
-            .deconvolve_image(&device, &queue, &input, &base_params)
+            .deconvolve_linear_image(&device, &queue, &input, &base_params, CLIP_GUARD_SAT)
             .expect("baseline deconvolve failed");
         let tapered = deconv
-            .deconvolve_image(&device, &queue, &input, &tapered_params)
+            .deconvolve_linear_image(&device, &queue, &input, &tapered_params, CLIP_GUARD_SAT)
             .expect("tapered deconvolve failed");
 
         // The motion OTF is H(k) = exp(-0.5·(k·L/N)²); the Wiener amplitude
@@ -4917,10 +4992,10 @@ mod tests {
         };
 
         let soft = deconv
-            .deconvolve_image(&device, &queue, &input, &soft_params)
+            .deconvolve_linear_image(&device, &queue, &input, &soft_params, CLIP_GUARD_SAT)
             .expect("soft deconvolve failed");
         let hard = deconv
-            .deconvolve_image(&device, &queue, &input, &hard_params)
+            .deconvolve_linear_image(&device, &queue, &input, &hard_params, CLIP_GUARD_SAT)
             .expect("hard deconvolve failed");
 
         let r_soft = ghost_ratio(&soft);
@@ -5049,7 +5124,7 @@ mod tests {
             ..Default::default()
         };
         let out = deconv
-            .deconvolve_image(&device, &queue, &input, &params)
+            .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
             .expect("defocus deconvolve failed");
 
         let (v, m) = (flat_var(&out), near_mse(&out));
@@ -5183,7 +5258,7 @@ mod tests {
                 ..Default::default()
             };
             let out = deconv
-                .deconvolve_image(&device, &queue, &input, &params)
+                .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
                 .expect("gaussian deconvolve failed");
             let (v, m) = (flat_var(&out), near_mse(&out));
             observed_variance[index] = v;
@@ -5243,6 +5318,52 @@ mod tests {
         }
     }
 
+    /// Defocus keeps the guard active across its measured long inverse-jinc
+    /// tail. In a compound kernel only the defocus support receives that
+    /// multiplier; unrelated motion/Gaussian support retains three extents.
+    #[test]
+    fn test_defocus_clip_guard_uses_long_feather() {
+        let motion = RapidParams {
+            modes: ModeSet::MOTION,
+            motion_length: 10.0,
+            ..Default::default()
+        };
+        let defocus_params = RapidParams {
+            modes: ModeSet::DEFOCUS,
+            defocus_radius: 5.0,
+            ..Default::default()
+        };
+        let compound = RapidParams {
+            modes: ModeSet {
+                motion: true,
+                defocus: true,
+                gaussian: false,
+            },
+            motion_length: 200.0,
+            defocus_radius: 10.0,
+            ..Default::default()
+        };
+        let motion_d1 = clip_guard_d1_pixels(&motion, kernel_extent(&motion));
+        let defocus_d1 =
+            clip_guard_d1_pixels(&defocus_params, kernel_extent(&defocus_params));
+        let compound_d1 = clip_guard_d1_pixels(&compound, kernel_extent(&compound));
+        assert_eq!(motion_d1, 30.0);
+        assert_eq!(defocus_d1, 160.0);
+        assert_eq!(kernel_extent(&compound), 220);
+        assert_eq!(compound_d1, 660.0);
+
+        let rgba = image::Rgba32FImage::from_fn(170, 1, |x, _| {
+            let value = if x == 0 { 1.0 } else { 0.2 };
+            image::Rgba([value, value, value, 1.0])
+        });
+        let compact = clip_guard_weights(&rgba, 10, CLIP_GUARD_SAT, motion_d1).unwrap();
+        let defocus =
+            clip_guard_weights(&rgba, 10, CLIP_GUARD_SAT, defocus_d1).unwrap();
+        assert_eq!(compact[100], 0.0);
+        assert!(defocus[100] > 0.3);
+        assert_eq!(defocus[160], 0.0);
+    }
+
     /// Clipped-highlight guard: an overbright disc saturates after disc
     /// blur (recording min(blur, 1.0)), so even the h = 1 filter rings
     /// around it — a model violation, not an OTF defect. With the guard the
@@ -5271,10 +5392,10 @@ mod tests {
         let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
 
         // Overbright disc (4.0, sensor-clipped to 1.0 after blur) at (70,100)
-        // on mid-gray; 5 px bars at x in [150, 210). The clipped set reaches
-        // x ~ 81, so with kernel extent 16 the guard's D1 = 48 ends near
-        // x = 129 and the bars keep full recovery weight.
-        let (width, height) = (256usize, 200usize);
+        // on mid-gray; 5 px bars at x in [370, 430). The clipped set reaches
+        // x ~ 81, so with kernel extent 16 the defocus guard's D1 = 256 ends
+        // near x = 337 and the bars keep full recovery weight.
+        let (width, height) = (512usize, 200usize);
         let radius = 8.0f32;
         let field: Vec<f32> = (0..width * height)
             .map(|i| {
@@ -5283,8 +5404,8 @@ mod tests {
                 let dy = y - 100;
                 if ((dx * dx + dy * dy) as f32).sqrt() <= 6.0 {
                     4.0
-                } else if (150..210).contains(&x) {
-                    if (x - 150) % 10 < 5 { 0.75 } else { 0.15 }
+                } else if (370..430).contains(&x) {
+                    if (x - 370) % 10 < 5 { 0.75 } else { 0.15 }
                 } else {
                     0.4
                 }
@@ -5324,16 +5445,16 @@ mod tests {
             let col = |x: u32| -> f32 {
                 (80..120).map(|y| rgb.get_pixel(x, y)[0]).sum::<f32>() / 40.0
             };
-            let profile: Vec<f32> = (152..208).map(col).collect();
+            let profile: Vec<f32> = (372..428).map(col).collect();
             profile.iter().fold(f32::MIN, |a, &b| a.max(b))
                 - profile.iter().fold(f32::MAX, |a, &b| a.min(b))
         };
 
         let off = deconv
-            .deconvolve_image(&device, &queue, &input, &unguarded)
+            .deconvolve_linear_image(&device, &queue, &input, &unguarded, CLIP_GUARD_SAT)
             .expect("unguarded deconvolve failed");
         let on = deconv
-            .deconvolve_image(&device, &queue, &input, &guarded)
+            .deconvolve_linear_image(&device, &queue, &input, &guarded, CLIP_GUARD_SAT)
             .expect("guarded deconvolve failed");
 
         let (mse_off, mse_on) = (near_disc_mse(&off), near_disc_mse(&on));
@@ -5407,10 +5528,10 @@ mod tests {
         let guarded = RapidParams { clip_guard: true, ..unguarded };
 
         let off = deconv
-            .deconvolve_image(&device, &queue, &input, &unguarded)
+            .deconvolve_linear_image(&device, &queue, &input, &unguarded, CLIP_GUARD_SAT)
             .expect("unguarded deconvolve failed");
         let on = deconv
-            .deconvolve_image(&device, &queue, &input, &guarded)
+            .deconvolve_linear_image(&device, &queue, &input, &guarded, CLIP_GUARD_SAT)
             .expect("guarded deconvolve failed");
         assert!(
             off.as_bytes() == on.as_bytes(),
@@ -5473,7 +5594,7 @@ mod tests {
             ..Default::default()
         };
         let out = deconv
-            .deconvolve_image(&device, &queue, &input, &params)
+            .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
             .expect("deconvolve_image failed");
 
         // Chroma: rg-chromaticity is scale-invariant, so the gain map must
@@ -6061,7 +6182,7 @@ mod tests {
         for &angle in &[0.0f32, 30.0, 45.0, 90.0, 135.0] {
             let blurred =
                 image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, angle));
-            let est = estimate_blur(&blurred);
+            let est = estimate_blur(&blurred, true);
             eprintln!(
                 "blur estimate at {angle}°: L={:.1} A={:.1} H={:.2} confidence={:.1}",
                 est.length, est.angle, est.hardness, est.confidence
@@ -6091,7 +6212,7 @@ mod tests {
         }
 
         // Negative control: no blur -> no confident estimate.
-        let sharp = estimate_blur(&image::DynamicImage::ImageRgba8(scene));
+        let sharp = estimate_blur(&image::DynamicImage::ImageRgba8(scene), true);
         eprintln!(
             "sharp-image: L={:.1} A={:.1} confidence={:.1}",
             sharp.length, sharp.angle, sharp.confidence
@@ -6125,7 +6246,7 @@ mod tests {
             let b = (acc / wsum).round() as u8;
             image::Rgba([b, b, b, 255])
         });
-        let est = estimate_blur(&image::DynamicImage::ImageRgba8(blurred));
+        let est = estimate_blur(&image::DynamicImage::ImageRgba8(blurred), true);
         eprintln!(
             "directional gaussian: L={:.1} A={:.1} H={:.2} confidence={:.1} ({}confident)",
             est.length,
@@ -6164,8 +6285,8 @@ mod tests {
             image::Rgba([b, b, b, 255])
         });
 
-        let est_clean = estimate_blur(&image::DynamicImage::ImageRgba8(blurred));
-        let est_noisy = estimate_blur(&image::DynamicImage::ImageRgba8(noisy));
+        let est_clean = estimate_blur(&image::DynamicImage::ImageRgba8(blurred), true);
+        let est_noisy = estimate_blur(&image::DynamicImage::ImageRgba8(noisy), true);
         eprintln!(
             "lambda suggestion: clean {:.4} (confidence {:.1}), noisy {:.4} (confidence {:.1})",
             est_clean.lambda, est_clean.confidence, est_noisy.lambda, est_noisy.confidence
@@ -6194,7 +6315,7 @@ mod tests {
         let scene = synthetic_scene(1024, 1024);
         let blur_len = 221.0f32;
         let blurred = image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, 0.0));
-        let est = estimate_blur(&blurred);
+        let est = estimate_blur(&blurred, true);
         eprintln!(
             "long blur: L={:.1} A={:.1} H={:.2} confidence={:.1}",
             est.length, est.angle, est.hardness, est.confidence
@@ -6239,7 +6360,7 @@ mod tests {
         let scene = synthetic_scene(512, 512);
         for &radius in &[4.0f32, 8.0, 14.0] {
             let blurred = disc_blur(&scene, radius);
-            let est = estimate_defocus(&blurred);
+            let est = estimate_defocus(&blurred, true);
             eprintln!(
                 "defocus estimate at R={radius}: R={:.2} confidence={:.1} λ={:.4} ({}confident)",
                 est.radius,
@@ -6259,7 +6380,7 @@ mod tests {
             );
         }
 
-        let sharp = estimate_defocus(&image::DynamicImage::ImageRgba8(scene));
+        let sharp = estimate_defocus(&image::DynamicImage::ImageRgba8(scene), true);
         eprintln!(
             "sharp-image defocus: R={:.2} confidence={:.1}",
             sharp.radius, sharp.confidence
@@ -6277,7 +6398,7 @@ mod tests {
     fn test_estimate_defocus_scale_mapping() {
         let scene = synthetic_scene(2048, 2048);
         let blurred = disc_blur(&scene, 16.0);
-        let est = estimate_defocus(&blurred);
+        let est = estimate_defocus(&blurred, true);
         eprintln!(
             "defocus scale mapping: R={:.2} confidence={:.1} ({}confident)",
             est.radius,
@@ -6299,7 +6420,7 @@ mod tests {
     fn test_estimate_defocus_rejects_gaussian() {
         let scene = synthetic_scene(512, 512);
         let blurred = gaussian_blur_iso(&scene, 3.0);
-        let est = estimate_defocus(&blurred);
+        let est = estimate_defocus(&blurred, true);
         eprintln!(
             "defocus-on-gaussian: R={:.2} confidence={:.1}",
             est.radius, est.confidence
@@ -6319,7 +6440,7 @@ mod tests {
         let scene = synthetic_scene(512, 512);
         for &sigma in &[1.5f32, 3.0, 6.0] {
             let blurred = gaussian_blur_iso(&scene, sigma);
-            let est = estimate_gaussian(&blurred);
+            let est = estimate_gaussian(&blurred, true);
             eprintln!(
                 "gaussian estimate at σ={sigma}: σ={:.2} t={:.1} λ={:.4} ({}confident)",
                 est.sigma,
@@ -6344,7 +6465,7 @@ mod tests {
             );
         }
 
-        let sharp = estimate_gaussian(&image::DynamicImage::ImageRgba8(scene));
+        let sharp = estimate_gaussian(&image::DynamicImage::ImageRgba8(scene), true);
         eprintln!(
             "sharp-image gaussian: σ={:.2} t={:.1}",
             sharp.sigma, sharp.confidence
@@ -6362,7 +6483,7 @@ mod tests {
     fn test_estimate_gaussian_scale_mapping() {
         let scene = synthetic_scene(2048, 2048);
         let blurred = gaussian_blur_iso(&scene, 4.0);
-        let est = estimate_gaussian(&blurred);
+        let est = estimate_gaussian(&blurred, true);
         eprintln!(
             "gaussian scale mapping: σ={:.2} t={:.1} ({}confident)",
             est.sigma,
@@ -6384,7 +6505,7 @@ mod tests {
     fn test_estimate_gaussian_rejects_defocus() {
         let scene = synthetic_scene(512, 512);
         let blurred = disc_blur(&scene, 8.0);
-        let est = estimate_gaussian(&blurred);
+        let est = estimate_gaussian(&blurred, true);
         eprintln!(
             "gaussian-on-defocus: σ={:.2} t={:.1}",
             est.sigma, est.confidence
@@ -6403,7 +6524,7 @@ mod tests {
     fn test_estimate_gaussian_rejects_motion() {
         let scene = synthetic_scene(512, 512);
         let blurred = image::DynamicImage::ImageRgba8(motion_blur_line(&scene, 25.0, 0.0));
-        let est = estimate_gaussian(&blurred);
+        let est = estimate_gaussian(&blurred, true);
         eprintln!(
             "gaussian-on-motion: σ={:.2} t={:.1}",
             est.sigma, est.confidence
@@ -6427,8 +6548,8 @@ mod tests {
         let tiny = image::DynamicImage::ImageRgba8(synthetic_scene(8, 8));
         let strip = image::DynamicImage::ImageRgba8(synthetic_scene(1024, 128));
         for (name, img) in [("flat", &flat), ("tiny", &tiny), ("strip", &strip)] {
-            let d = estimate_defocus(img);
-            let g = estimate_gaussian(img);
+            let d = estimate_defocus(img, true);
+            let g = estimate_gaussian(img, true);
             eprintln!(
                 "degenerate {name}: defocus R={:.2} c={:.1}, gaussian σ={:.2} t={:.1}",
                 d.radius, d.confidence, g.sigma, g.confidence
@@ -6815,6 +6936,358 @@ mod tests {
         assert_eq!(params.modes, ModeSet::MOTION);
     }
 
+    fn rgb_error(
+        actual: &image::DynamicImage,
+        expected: &image::DynamicImage,
+    ) -> (f32, f32) {
+        assert_eq!(
+            (actual.width(), actual.height()),
+            (expected.width(), expected.height())
+        );
+        let actual = actual.to_rgb32f();
+        let expected = expected.to_rgb32f();
+        let mut max_error = 0.0f32;
+        let mut squared_error = 0.0f64;
+        let mut samples = 0usize;
+        for (a, b) in actual.as_raw().iter().zip(expected.as_raw()) {
+            let error = (*a - *b).abs();
+            max_error = max_error.max(error);
+            squared_error += (error as f64) * (error as f64);
+            samples += 1;
+        }
+        (max_error, (squared_error / samples as f64).sqrt() as f32)
+    }
+
+    #[test]
+    fn test_deconvolve_linear_matches_encoded_flag() {
+        if get_rapid_gpu().is_none() {
+            eprintln!("skipping encoded provenance GPU test: no adapter");
+            return;
+        }
+
+        let linear = image::DynamicImage::ImageRgba32F(image::Rgba32FImage::from_fn(
+            192,
+            128,
+            |x, y| {
+                let wave =
+                    0.5 + 0.25 * (x as f32 / 11.0).sin() + 0.25 * (y as f32 / 17.0).cos();
+                let stroke = if (x / 13 + y / 19) % 5 == 0 { 0.12 } else { 0.0 };
+                let value = (0.08 + 0.58 * wave + stroke).clamp(0.02, 0.82);
+                let alpha = 0.35 + 0.6 * ((x + 3 * y) % 31) as f32 / 30.0;
+                image::Rgba([value, 0.84 * value + 0.03, 0.68 * value + 0.07, alpha])
+            },
+        ));
+        let encoded = crate::image_processing::apply_linear_to_srgb(linear.clone());
+        let adjustments = serde_json::json!({
+            "rapidMotionEnabled": false,
+            "rapidDefocusEnabled": true,
+            "rapidGaussianEnabled": false,
+            "rapidRadius": 3.5,
+            "rapidLambda": 0.02,
+            "rapidStrength": 80.0,
+        });
+
+        let linear_out = apply_blur_recovery_scaled(
+            std::borrow::Cow::Owned(linear),
+            &adjustments,
+            1.0,
+            true,
+        )
+        .into_owned();
+        let encoded_out = apply_blur_recovery_scaled(
+            std::borrow::Cow::Owned(encoded),
+            &adjustments,
+            1.0,
+            false,
+        )
+        .into_owned();
+        let decoded_out = crate::image_processing::apply_srgb_to_linear(encoded_out);
+        let (max_error, rms_error) = rgb_error(&decoded_out, &linear_out);
+        eprintln!(
+            "linear/encoded wrapper agreement: max {max_error:.3e}, rms {rms_error:.3e}"
+        );
+        assert!(
+            max_error < 1e-5 && rms_error < 1e-6,
+            concat!(
+                "encoded provenance diverged after decoding: ",
+                "max {:.3e}, rms {:.3e}"
+            ),
+            max_error, rms_error
+        );
+    }
+
+    /// A 1152px source forces the estimator resize branch. Decode-before-resize
+    /// measured RMS 7.96e-5 on the reference host; the intentionally wrong
+    /// encoded-as-linear flag measured 3.72e-1 (about 4,670x worse).
+    #[test]
+    fn test_working_spectrum_linearizes() {
+        const WIDTH: usize = 1152;
+        const HEIGHT: usize = 768;
+        const RADIUS: f32 = 7.0;
+        let scene: Vec<f32> = (0..WIDTH * HEIGHT)
+            .map(|i| {
+                let (x, y) = ((i % WIDTH) as u32, (i / WIDTH) as u32);
+                let mut hash = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+                hash ^= hash >> 16;
+                hash = hash.wrapping_mul(0x7FEB_352D);
+                hash ^= hash >> 15;
+                let noise = (hash & 0xffff) as f32 / 65535.0;
+                let wave =
+                    0.5 + 0.25 * (x as f32 / 37.0).sin() + 0.25 * (y as f32 / 29.0).cos();
+                let stroke = if (x / 47 + y / 61) % 7 == 0 { 0.1 } else { 0.0 };
+                (0.04 + 0.28 * noise + 0.48 * wave + stroke).clamp(0.02, 0.86)
+            })
+            .collect();
+        let blurred = disc_blur_field(&scene, WIDTH, HEIGHT, RADIUS);
+        let linear = image::DynamicImage::ImageRgb32F(image::Rgb32FImage::from_fn(
+            WIDTH as u32,
+            HEIGHT as u32,
+            |x, y| {
+                let value = blurred[y as usize * WIDTH + x as usize];
+                image::Rgb([value, value, value])
+            },
+        ));
+        let encoded = crate::image_processing::apply_linear_to_srgb(linear.clone());
+
+        let linear_ws = working_spectrum(&linear, true);
+        let encoded_ws = working_spectrum(&encoded, false);
+        let wrong_ws = working_spectrum(&encoded, true);
+        assert_eq!(
+            (linear_ws.w, linear_ws.h, linear_ws.pw, linear_ws.ph),
+            (encoded_ws.w, encoded_ws.h, encoded_ws.pw, encoded_ws.ph)
+        );
+        assert_eq!(linear_ws.scale.to_bits(), encoded_ws.scale.to_bits());
+
+        let spectrum_error = |candidate: &WorkingSpectrum| -> (f32, f32) {
+            let mut max_error = 0.0f32;
+            let mut squared_error = 0.0f64;
+            for (a, b) in linear_ws.spectrum_ln.iter().zip(&candidate.spectrum_ln) {
+                let error = (*a - *b).abs();
+                max_error = max_error.max(error);
+                squared_error += (error as f64) * (error as f64);
+            }
+            (
+                max_error,
+                (squared_error / linear_ws.spectrum_ln.len() as f64).sqrt() as f32,
+            )
+        };
+        let (matched_max, matched_rms) = spectrum_error(&encoded_ws);
+        let (_, wrong_rms) = spectrum_error(&wrong_ws);
+        eprintln!(
+            concat!(
+                "working spectrum transfer posture: matched max {:.3e}, ",
+                "matched rms {:.3e}, wrong-flag rms {:.3e}"
+            ),
+            matched_max, matched_rms, wrong_rms
+        );
+        assert!(
+            matched_max < 1.2e-2 && matched_rms < 2e-4,
+            "linearized spectrum mismatch: max {matched_max:.3e}, rms {matched_rms:.3e}"
+        );
+        assert!(
+            wrong_rms > 100.0 * matched_rms.max(1e-6) && wrong_rms > 0.2,
+            concat!(
+                "wrong provenance was not detectably worse: ",
+                "matched {:.3e}, wrong {:.3e}"
+            ),
+            matched_rms, wrong_rms
+        );
+
+        let linear_estimate = estimate_defocus(&linear, true);
+        let encoded_estimate = estimate_defocus(&encoded, false);
+        assert!(linear_estimate.confident && encoded_estimate.confident);
+        assert!(
+            (linear_estimate.radius - encoded_estimate.radius).abs() <= 0.2,
+            "radius changed with encoding: linear {:.2}, encoded {:.2}",
+            linear_estimate.radius,
+            encoded_estimate.radius
+        );
+        assert!(
+            (linear_estimate.lambda - encoded_estimate.lambda).abs() <= 0.002,
+            "lambda changed with encoding: linear {:.4}, encoded {:.4}",
+            linear_estimate.lambda,
+            encoded_estimate.lambda
+        );
+    }
+
+    #[test]
+    fn test_blur_recovery_scaled_linearizes_before_resize() {
+        let Some(gpu) = get_rapid_gpu() else {
+            eprintln!("skipping scaled linearization GPU test: no adapter");
+            return;
+        };
+
+        const WIDTH: u32 = 320;
+        const HEIGHT: u32 = 240;
+        const SCALE: f32 = 0.5;
+        let encoded = image::DynamicImage::ImageRgba32F(image::Rgba32FImage::from_fn(
+            WIDTH,
+            HEIGHT,
+            |x, y| {
+                let dx = x as i32 - 76;
+                let dy = y as i32 - 92;
+                let highlight = dx * dx + dy * dy <= 36;
+                let strokes = (132..260).contains(&x) && ((x - 132) / 3) % 2 == 0;
+                let diagonal = ((x as i32 - y as i32 - 35).abs() <= 2)
+                    || ((x as i32 + y as i32 - 360).abs() <= 2);
+                let value: f32 = if highlight {
+                    0.985
+                } else if strokes || diagonal {
+                    0.88
+                } else {
+                    0.08 + 0.2 * (x as f32 / 23.0).sin().abs()
+                };
+                image::Rgba([
+                    value,
+                    (0.9 * value + 0.02).min(0.985),
+                    (0.72 * value + 0.04).min(0.985),
+                    1.0,
+                ])
+            },
+        ));
+        let adjustments = serde_json::json!({
+            "rapidMotionEnabled": false,
+            "rapidDefocusEnabled": true,
+            "rapidGaussianEnabled": false,
+            "rapidRadius": 4.0,
+            "rapidLambda": 0.02,
+            "rapidStrength": 85.0,
+        });
+        let wrapper = apply_blur_recovery_scaled(
+            std::borrow::Cow::Owned(encoded.clone()),
+            &adjustments,
+            SCALE,
+            false,
+        )
+        .into_owned();
+
+        let params = parse_rapid_params(&adjustments).unwrap();
+        let small_w = (WIDTH as f32 * SCALE).round() as u32;
+        let small_h = (HEIGHT as f32 * SCALE).round() as u32;
+        let decoded =
+            crate::image_processing::apply_srgb_to_linear(image::DynamicImage::ImageRgba32F(
+                encoded.to_rgba32f(),
+            ));
+        let correct_small =
+            decoded.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
+        let encoded_small =
+            encoded.resize_exact(small_w, small_h, image::imageops::FilterType::Triangle);
+        let wrong_order_small = crate::image_processing::apply_srgb_to_linear(encoded_small);
+        let decoded_threshold =
+            crate::image_processing::srgb_channel_to_linear(CLIP_GUARD_SAT);
+        let scaled_params = params.scaled(SCALE);
+
+        let (reference_linear, wrong_order_linear, wrong_threshold_linear) = {
+            let mut gpu = gpu.lock().unwrap();
+            let RapidGpu {
+                device,
+                queue,
+                deconvolver,
+                ..
+            } = &mut *gpu;
+            let reference = deconvolver
+                .deconvolve_linear_image(
+                    device,
+                    queue,
+                    &correct_small,
+                    &scaled_params,
+                    decoded_threshold,
+                )
+                .expect("reference deconvolution failed");
+            let wrong_order = deconvolver
+                .deconvolve_linear_image(
+                    device,
+                    queue,
+                    &wrong_order_small,
+                    &scaled_params,
+                    decoded_threshold,
+                )
+                .expect("wrong-order deconvolution failed");
+            let wrong_threshold = deconvolver
+                .deconvolve_linear_image(
+                    device,
+                    queue,
+                    &correct_small,
+                    &scaled_params,
+                    CLIP_GUARD_SAT,
+                )
+                .expect("wrong-threshold deconvolution failed");
+            (reference, wrong_order, wrong_threshold)
+        };
+        let finish = |linear: image::DynamicImage| {
+            let restored =
+                linear.resize_exact(WIDTH, HEIGHT, image::imageops::FilterType::Triangle);
+            crate::image_processing::apply_linear_to_srgb(restored)
+        };
+        let reference = finish(reference_linear);
+        let wrong_order = finish(wrong_order_linear);
+        let wrong_threshold = finish(wrong_threshold_linear);
+
+        let (reference_max, reference_rms) = rgb_error(&wrapper, &reference);
+        let (_, wrong_order_rms) = rgb_error(&wrapper, &wrong_order);
+        let (_, wrong_threshold_rms) = rgb_error(&wrapper, &wrong_threshold);
+        eprintln!(
+            concat!(
+                "scaled linearization posture: reference max {:.3e}, ",
+                "rms {:.3e}; encoded-first rms {:.3e}; raw-threshold rms {:.3e}"
+            ),
+            reference_max, reference_rms, wrong_order_rms, wrong_threshold_rms
+        );
+        assert!(
+            reference_max < 2e-5 && reference_rms < 2e-6,
+            concat!(
+                "scaled wrapper missed explicit linear reference: ",
+                "max {:.3e}, rms {:.3e}"
+            ),
+            reference_max, reference_rms
+        );
+        assert!(
+            wrong_order_rms > 2e-2 && wrong_order_rms > 20.0 * reference_rms.max(1e-7),
+            "resize-encoded-first path was not detectably different: {wrong_order_rms:.3e}"
+        );
+        assert!(
+            wrong_threshold_rms > 5e-3
+                && wrong_threshold_rms > 20.0 * reference_rms.max(1e-7),
+            "wrapper did not preserve encoded threshold provenance: {wrong_threshold_rms:.3e}"
+        );
+    }
+
+    #[test]
+    fn test_clip_guard_threshold_tracks_encoding() {
+        let encoded_highlight = 0.985;
+        let decoded_highlight =
+            crate::image_processing::srgb_channel_to_linear(encoded_highlight);
+        let rgba = image::Rgba32FImage::from_fn(7, 7, |x, y| {
+            let value = if x == 3 && y == 3 {
+                decoded_highlight
+            } else {
+                0.2
+            };
+            image::Rgba([value, value, value, 1.0])
+        });
+        let decoded_threshold =
+            crate::image_processing::srgb_channel_to_linear(CLIP_GUARD_SAT);
+        let d1_pixels = CLIP_GUARD_DEFOCUS_D1_EXTENTS * 2.0;
+        let guard = clip_guard_weights(
+            &rgba,
+            2,
+            decoded_threshold,
+            d1_pixels,
+        )
+        .expect("decoded 0.985 highlight must trip the encoded-source threshold");
+        assert!(guard.iter().any(|&weight| weight > 0.0));
+        assert!(
+            clip_guard_weights(
+                &rgba,
+                2,
+                CLIP_GUARD_SAT,
+                d1_pixels,
+            )
+            .is_none(),
+            "decoded 0.985 highlight must not trip the raw linear threshold"
+        );
+    }
+
     #[test]
     fn test_blur_recovery_scaled_preserves_dimensions() {
         // Output dimensions must equal input dimensions so downstream
@@ -6831,7 +7304,12 @@ mod tests {
             "rapidLambda": 0.01,
             "rapidStrength": 100.0,
         });
-        let out = apply_blur_recovery_scaled(std::borrow::Cow::Owned(img), &adjustments, 0.5);
+        let out = apply_blur_recovery_scaled(
+            std::borrow::Cow::Owned(img),
+            &adjustments,
+            0.5,
+            true,
+        );
         assert_eq!((out.width(), out.height()), (200, 150));
     }
 }
