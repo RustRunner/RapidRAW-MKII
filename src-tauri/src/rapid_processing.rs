@@ -3108,6 +3108,14 @@ const MOTION_MAX_RELATIVE_LENGTH_DELTA: f32 = 0.25;
 const MOTION_MAX_ANGLE_DELTA_DEG: f32 = 8.0;
 const MOTION_MIN_NATIVE_MATCHES: usize = 3;
 const MOTION_AUTO_HARDNESS_MAX: f32 = 0.9;
+// A very long, globally coherent camera sweep needs materially more inverse
+// gain than lambda=0.1 permits. Exact RAW A/B fixed the transition at the
+// first long-blur preset: all native regions must agree tightly before the
+// estimator may retain the recoverable midpoint lambda.
+const MOTION_UNIFORM_SWEEP_MIN_LENGTH: f32 = 100.0;
+const MOTION_UNIFORM_SWEEP_MAX_RELATIVE_LENGTH_SPREAD: f32 = 0.1;
+const MOTION_UNIFORM_SWEEP_MAX_ANGLE_SPREAD_DEG: f32 = 3.0;
+const MOTION_UNIFORM_SWEEP_LAMBDA: f32 = 0.01;
 
 /// Cap on observed log-depression depth (shared by the motion hardness fit
 /// and the defocus ring matcher): a true spectral zero has unbounded log
@@ -3739,6 +3747,49 @@ fn motion_estimates_agree(whole: BlurEstimate, native: BlurEstimate) -> bool {
         && axial_angle_delta(native.angle, whole.angle) <= MOTION_MAX_ANGLE_DELTA_DEG
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionFieldClass {
+    Corroborated,
+    UniformLongSweep,
+}
+
+fn classify_motion_field(
+    whole: BlurEstimate,
+    native_estimates: &[BlurEstimate],
+    matching: &[BlurEstimate],
+    length: f32,
+) -> MotionFieldClass {
+    if length < MOTION_UNIFORM_SWEEP_MIN_LENGTH
+        || matching.len() != native_estimates.len()
+        || matching.len() < MOTION_MIN_NATIVE_MATCHES
+    {
+        return MotionFieldClass::Corroborated;
+    }
+
+    let (min_length, max_length) = matching
+        .iter()
+        .map(|estimate| estimate.length)
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(minimum, maximum), value| {
+            (minimum.min(value), maximum.max(value))
+        });
+    let relative_length_spread = (max_length - min_length) / length;
+    let (min_angle_delta, max_angle_delta) = matching
+        .iter()
+        .map(|estimate| signed_axial_angle_delta(whole.angle, estimate.angle))
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(minimum, maximum), value| {
+            (minimum.min(value), maximum.max(value))
+        });
+    let angle_spread = max_angle_delta - min_angle_delta;
+
+    if relative_length_spread <= MOTION_UNIFORM_SWEEP_MAX_RELATIVE_LENGTH_SPREAD
+        && angle_spread <= MOTION_UNIFORM_SWEEP_MAX_ANGLE_SPREAD_DEG
+    {
+        MotionFieldClass::UniformLongSweep
+    } else {
+        MotionFieldClass::Corroborated
+    }
+}
+
 fn corroborate_motion_estimate(
     whole: BlurEstimate,
     native_estimates: &[BlurEstimate],
@@ -3768,16 +3819,34 @@ fn corroborate_motion_estimate(
             .collect(),
     )?;
     let angle = (whole.angle + angle_delta).rem_euclid(180.0);
+    let field_class = classify_motion_field(whole, native_estimates, &matching, length);
     let hardness = finite_median(matching.iter().map(|estimate| estimate.hardness).collect())?
         .clamp(0.0, MOTION_AUTO_HARDNESS_MAX);
-    // Favor the safest of the corroborating suppression estimates: too much
-    // regularization merely softens, while too little creates dark ringing.
-    let lambda = matching
-        .iter()
-        .map(|estimate| estimate.lambda)
-        .filter(|value| value.is_finite())
-        .fold(0.01f32, f32::max)
-        .clamp(0.01, 0.1);
+    let lambda = if field_class == MotionFieldClass::UniformLongSweep {
+        // On the exact 145 px sweep, lambda=0.1 suppressed nearly all useful
+        // inversion while lambda=0.01 raised gradient/Laplacian detail by
+        // 75%/181% with only 8 severe-dark pixels in 44.7 million. Requiring
+        // every native region plus tight spread prevents a tracked subject
+        // or isolated moving object from entering this path.
+        log::info!(
+            "RAPID: uniform long camera sweep L={:.2}px A={:.2}deg; retaining recovery lambda={:.4}",
+            length,
+            angle,
+            MOTION_UNIFORM_SWEEP_LAMBDA,
+        );
+        MOTION_UNIFORM_SWEEP_LAMBDA
+    } else {
+        // General motion favors the safest corroborating suppression: exact
+        // RAW A/B on the shorter 59 px vehicle frame removed all severe-dark
+        // pixels at lambda=0.1. Too much regularization merely softens there,
+        // while too little recreates the reported black-dot artifacts.
+        matching
+            .iter()
+            .map(|estimate| estimate.lambda)
+            .filter(|value| value.is_finite())
+            .fold(0.01f32, f32::max)
+            .clamp(0.01, 0.1)
+    };
     let confidence = finite_median(matching.iter().map(|estimate| estimate.confidence).collect())?;
     Some(BlurEstimate { length, angle, confidence, confident: true, hardness, lambda })
 }
@@ -7047,6 +7116,42 @@ mod tests {
         assert!(
             corroborate_motion_estimate(whole, &background_only).is_none(),
             "matching background corners must not override a disagreeing center subject"
+        );
+    }
+
+    #[test]
+    fn test_motion_long_uniform_sweep_retains_recoverable_lambda() {
+        let estimate = |length: f32, angle: f32, confidence: f32, lambda: f32| BlurEstimate {
+            length,
+            angle,
+            confidence,
+            confident: true,
+            hardness: 0.75,
+            lambda,
+        };
+        let whole = estimate(143.97, 97.33, 25.0, 0.1);
+        let native = [
+            estimate(142.39, 97.59, 20.44, 0.1),
+            estimate(145.95, 96.76, 14.05, 0.1),
+            estimate(145.50, 98.42, 25.19, 0.1),
+            estimate(146.27, 98.04, 13.73, 0.1),
+            estimate(142.42, 96.88, 16.00, 0.1),
+        ];
+        let result = corroborate_motion_estimate(whole, &native)
+            .expect("the exact global-sweep signature should corroborate");
+        assert!((result.length - 145.50).abs() < 1e-4);
+        assert!(
+            (result.lambda - MOTION_UNIFORM_SWEEP_LAMBDA).abs() < 1e-6,
+            "uniform long sweep was over-regularized: {result:?}"
+        );
+
+        let mut incomplete = native;
+        incomplete[4] = BLUR_NOT_CONFIDENT;
+        let conservative = corroborate_motion_estimate(whole, &incomplete)
+            .expect("four agreeing regions still form general consensus");
+        assert!(
+            (conservative.lambda - 0.1).abs() < 1e-6,
+            "incomplete field agreement must stay conservatively regularized"
         );
     }
 
