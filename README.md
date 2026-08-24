@@ -10,12 +10,12 @@
 
 <br><br>
 
-[![MKII tag](https://img.shields.io/github/v/tag/RustRunner/RapidRAW-MKII?include_prereleases&sort=semver&style=flat-square&label=MKII&color=4f5b45)](https://github.com/RustRunner/RapidRAW-MKII/tags)
+[![Latest release](https://img.shields.io/github/v/release/RustRunner/RapidRAW-MKII?style=flat-square&label=release&color=4f5b45)](https://github.com/RustRunner/RapidRAW-MKII/releases/latest)
 [![Windows release](https://img.shields.io/github/actions/workflow/status/RustRunner/RapidRAW-MKII/windows-release.yml?style=flat-square&label=Windows&color=4f5b45)](https://github.com/RustRunner/RapidRAW-MKII/actions/workflows/windows-release.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-4f5b45?style=flat-square)](LICENSE)
 [![Upstream: RapidRAW](https://img.shields.io/badge/upstream-RapidRAW-59636b?style=flat-square)](https://github.com/CyberTimon/RapidRAW)
 
-[Source milestones](https://github.com/RustRunner/RapidRAW-MKII/tags) · [MKII changes](#what-mark-ii-changes) · [Build from source](#build-from-source) · [Original RapidRAW](https://github.com/CyberTimon/RapidRAW)
+[Download latest release](https://github.com/RustRunner/RapidRAW-MKII/releases/latest) · [Source milestones](https://github.com/RustRunner/RapidRAW-MKII/tags) · [MKII changes](#what-mark-ii-changes) · [Build from source](#build-from-source) · [Original RapidRAW](https://github.com/CyberTimon/RapidRAW)
 
 </div>
 
@@ -68,7 +68,7 @@ Mark II is engineered for degraded source material where positive identification
 
 ## Versions and builds
 
-Versioned MKII source milestones are published under [Tags](https://github.com/RustRunner/RapidRAW-MKII/tags). The Windows tag workflow prepares installer artifacts and draft GitHub Releases; published packages will appear on the [Releases page](https://github.com/RustRunner/RapidRAW-MKII/releases). Until a package is published for your platform, build the `mkii` branch from source.
+The current supported release is [MKII-v1.0.0](https://github.com/RustRunner/RapidRAW-MKII/releases/tag/MKII-v1.0.0), with prebuilt packages for Windows x64 and Linux ARM64. Historical source milestones remain available under [Tags](https://github.com/RustRunner/RapidRAW-MKII/tags). For platforms without a published package, build the `mkii` branch from source.
 
 For the mainstream project, its latest features, and its official packages, use the [original RapidRAW releases](https://github.com/CyberTimon/RapidRAW/releases).
 
@@ -83,7 +83,7 @@ npm ci
 npm start
 ```
 
-Useful development checks:
+Available development commands:
 
 ```bash
 npm run typecheck

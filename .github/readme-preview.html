@@ -593,7 +593,7 @@
 
             <div class="badges" aria-label="Project badges">
               <span class="badge"
-                ><span class="badge-label">MKII</span><span class="badge-value">v1.6.0-mkii.5</span></span
+                ><span class="badge-label">release</span><span class="badge-value">MKII-v1.0.0</span></span
               >
               <span class="badge"
                 ><span class="badge-label">Windows</span><span class="badge-value">passing</span></span
@@ -607,6 +607,8 @@
             </div>
 
             <p class="quick-links">
+              <a href="https://github.com/RustRunner/RapidRAW-MKII/releases/latest">Download latest release</a>
+              <span>·</span>
               <a href="https://github.com/RustRunner/RapidRAW-MKII/tags">Source milestones</a>
               <span>·</span>
               <a href="#mkii-changes">MKII changes</a>
@@ -739,11 +741,11 @@
 
           <h2>Versions and builds</h2>
           <p>
-            Versioned MKII source milestones are published under
-            <a href="https://github.com/RustRunner/RapidRAW-MKII/tags">Tags</a>. The Windows tag workflow prepares
-            installer artifacts and draft GitHub Releases; published packages will appear on the
-            <a href="https://github.com/RustRunner/RapidRAW-MKII/releases">Releases page</a>. Until a package is
-            published for your platform, build the <code>mkii</code> branch from source.
+            The current supported release is
+            <a href="https://github.com/RustRunner/RapidRAW-MKII/releases/tag/MKII-v1.0.0">MKII-v1.0.0</a>, with
+            prebuilt packages for Windows x64 and Linux ARM64. Historical source milestones remain available under
+            <a href="https://github.com/RustRunner/RapidRAW-MKII/tags">Tags</a>. For platforms without a published
+            package, build the <code>mkii</code> branch from source.
           </p>
           <p>
             For the mainstream project, its latest features, and its official packages, use the
@@ -760,7 +762,7 @@
 <span class="prompt">$</span> cd RapidRAW-MKII
 <span class="prompt">$</span> npm ci
 <span class="prompt">$</span> npm start</code></pre>
-          <p>Useful development checks:</p>
+          <p>Available development commands:</p>
           <pre><code><span class="prompt">$</span> npm run typecheck
 <span class="prompt">$</span> npm run lint
 <span class="prompt">$</span> npm run build</code></pre>
