@@ -2729,9 +2729,16 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         // and that pin simultaneously in a compound set.
         hardness: (adjustments["rapidHardness"].as_f64().unwrap_or(100.0) as f32 / 100.0)
             .clamp(0.0, 1.0),
-        // Always on in production, no UI toggle: the light-centered rings it
-        // removes are a defect, not a look.
-        clip_guard: true,
+        // The clipped-highlight identity blend is a Defocus safeguard. A
+        // Motion kernel must remain spatially uniform: reflective plates,
+        // vehicle paint, tail lights, and signs routinely contain clipped
+        // channels, and restoring the input for one-to-three motion lengths
+        // around them visibly exempts the intended target from recovery.
+        // Any active Motion mode therefore disables the guard, including
+        // compound sets; regularization and hardness remain its artifact
+        // controls. Keep the measured long-tail guard for non-Motion
+        // Defocus, whose inverse-jinc rings motivated it.
+        clip_guard: modes.defocus && !modes.motion,
         ..Default::default()
     })
 }
@@ -8085,9 +8092,10 @@ mod tests {
     /// the defocus component pins its own raw jinc inside psf_generate.wgsl
     /// (guarded by test_gpu_defocus_hardness_invariance), so parse must not
     /// mask the slider — in a compound set the same uniform serves motion.
-    /// The parse must also hardcode the clip guard on (no UI toggle).
+    /// The clip guard is Defocus-only: Motion must process reflective targets
+    /// instead of restoring the input around their clipped channels.
     #[test]
-    fn test_parse_hardness_slider_passthrough() {
+    fn test_parse_hardness_slider_and_mode_specific_clip_guard() {
         let mut adjustments = serde_json::json!({
             "rapidEnabled": true,
             "rapidBlurType": "defocus",
@@ -8102,7 +8110,7 @@ mod tests {
             "defocus must pass the slider through (the pin lives in the shader), got {}",
             params.hardness
         );
-        assert!(params.clip_guard, "clip guard must be always-on in production");
+        assert!(params.clip_guard, "Defocus-only recovery must retain its long-tail guard");
 
         adjustments["rapidBlurType"] = serde_json::json!("motion");
         let params = parse_rapid_params(&adjustments).expect("params should parse");
@@ -8110,6 +8118,57 @@ mod tests {
             (params.hardness - 0.4).abs() < 1e-6,
             "motion must keep the parsed hardness, got {}",
             params.hardness
+        );
+        assert!(
+            !params.clip_guard,
+            "Motion recovery must not restore bright plates and signs to the input"
+        );
+
+        adjustments["rapidMotionEnabled"] = serde_json::json!(true);
+        adjustments["rapidDefocusEnabled"] = serde_json::json!(true);
+        adjustments["rapidGaussianEnabled"] = serde_json::json!(false);
+        adjustments["rapidLength"] = serde_json::json!(40.0);
+        adjustments["rapidRadius"] = serde_json::json!(8.0);
+        let params = parse_rapid_params(&adjustments).expect("compound params should parse");
+        assert!(params.modes.motion && params.modes.defocus);
+        assert!(
+            !params.clip_guard,
+            "an active Motion member must keep a compound recovery spatially uniform"
+        );
+    }
+
+    #[test]
+    fn test_motion_production_bypasses_wide_clip_identity_mask() {
+        let adjustments = serde_json::json!({
+            "rapidMotionEnabled": true,
+            "rapidDefocusEnabled": false,
+            "rapidGaussianEnabled": false,
+            "rapidLength": 116.0,
+            "rapidAngle": 0.0,
+            "rapidLambda": 0.01,
+            "rapidStrength": 82.0,
+            "rapidHardness": 89.0,
+        });
+        let params = parse_rapid_params(&adjustments).expect("Motion params should parse");
+        let extent = kernel_extent(&params);
+        let d1 = clip_guard_d1_pixels(&params, extent);
+        assert_eq!(extent, 116);
+        assert_eq!(d1, 348.0);
+
+        // Reproduce the old mask geometry: one clipped channel at x=0 fully
+        // restores a target 100 px away and still blends the input back at
+        // x=250. Reflective plates and signs therefore looked untouched even
+        // though the FFT result covered the full frame.
+        let rgba = image::Rgba32FImage::from_fn(400, 1, |x, _| {
+            let value = if x == 0 { 1.0 } else { 0.2 };
+            image::Rgba([value, value, value, 1.0])
+        });
+        let old_guard = clip_guard_weights(&rgba, extent, CLIP_GUARD_SAT, d1).unwrap();
+        assert_eq!(old_guard[100], 1.0);
+        assert!(old_guard[250] > 0.0);
+        assert!(
+            !params.clip_guard,
+            "production Motion must bypass the identity mask over the entire frame"
         );
     }
 
