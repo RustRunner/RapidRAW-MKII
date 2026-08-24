@@ -1,4 +1,5 @@
 import { useCallback, useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { platform } from '@tauri-apps/plugin-os';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X } from 'lucide-react';
@@ -23,6 +24,7 @@ const RestoreDownIcon = ({ size = 14, className = '' }) => (
 export default function TitleBar() {
   const [osPlatform, setOsPlatform] = useState('');
   const [isMaximized, setIsMaximized] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
 
   const appWindow = getCurrentWindow();
 
@@ -37,6 +39,20 @@ export default function TitleBar() {
       }
     };
     getPlatform();
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    getVersion()
+      .then((version) => {
+        if (isMounted) setAppVersion(version);
+      })
+      .catch((error) => console.error('Failed to get app version:', error));
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -91,9 +107,17 @@ export default function TitleBar() {
   return (
     <div className="relative pt-2 px-2 w-full z-50 bg-transparent" {...outerDragProps}>
       <div
-        className="h-10 bg-bg-secondary flex justify-between items-center select-none rounded-lg overflow-hidden"
+        className="relative h-10 bg-bg-secondary flex justify-between items-center select-none rounded-lg overflow-hidden"
         {...outerDragProps}
       >
+        {appVersion && (
+          <p
+            data-tauri-drag-region
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[10px] font-medium tracking-[0.16em] text-text-secondary/60 pointer-events-none"
+          >
+            MKII-v{appVersion}
+          </p>
+        )}
         <div className="flex items-center h-full">
           {isMac && (
             <div className="flex items-center h-full px-4 space-x-2 z-10">
