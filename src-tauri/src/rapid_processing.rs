@@ -3082,6 +3082,26 @@ pub struct BlurEstimate {
 /// reaches ~4-5 sigma, so a real cepstral peak must clear that comfortably.
 const BLUR_CONFIDENCE_GATE: f32 = 6.0;
 
+/// Canonical no-op result for every motion-estimation bail path.
+const BLUR_NOT_CONFIDENT: BlurEstimate = BlurEstimate {
+    length: 0.0,
+    angle: 0.0,
+    confidence: 0.0,
+    confident: false,
+    hardness: 0.0,
+    lambda: 0.01,
+};
+
+// Large-frame estimates are first discovered on a downscaled whole image,
+// then corroborated on native-resolution regions. This keeps the fast global
+// search while preventing its resampling-softened spectrum from prescribing
+// an unnecessarily hard inverse filter.
+const MOTION_NATIVE_TILE_EXTENT: u32 = 1024;
+const MOTION_MAX_RELATIVE_LENGTH_DELTA: f32 = 0.25;
+const MOTION_MAX_ANGLE_DELTA_DEG: f32 = 8.0;
+const MOTION_MIN_NATIVE_MATCHES: usize = 3;
+const MOTION_AUTO_HARDNESS_MAX: f32 = 0.9;
+
 /// Cap on observed log-depression depth (shared by the motion hardness fit
 /// and the defocus ring matcher): a true spectral zero has unbounded log
 /// depth while observed notches saturate at the noise floor, so one
@@ -3550,9 +3570,14 @@ where
 /// along the blur direction. Search radius 3-250 working px; the detection
 /// floor is ~2-3 working px, so short blurs on large images come back
 /// low-confidence rather than wrong.
-pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEstimate {
+fn estimate_blur_probe(
+    image: &image::DynamicImage,
+    source_linear: bool,
+    rect: Option<crate::image_processing::PixelRect>,
+    scale_override: Option<f32>,
+) -> BlurEstimate {
     let WorkingSpectrum { mut data, spectrum_ln, luma: _, pw, ph, w, h, scale } =
-        working_spectrum(image, source_linear, None, None);
+        working_spectrum(image, source_linear, rect, scale_override);
 
     // Real cepstrum: log magnitude -> inverse FFT (the forward FFT already
     // ran in working_spectrum).
@@ -3626,14 +3651,7 @@ pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEs
 
     if count < 16 {
         // Image too small to search meaningfully.
-        return BlurEstimate {
-            length: 0.0,
-            angle: 0.0,
-            confidence: 0.0,
-            confident: false,
-            hardness: 0.0,
-            lambda: 0.01,
-        };
+        return BLUR_NOT_CONFIDENT;
     }
     let n = count as f64;
     let mean_c = sum / n;
@@ -3673,6 +3691,153 @@ pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEs
     let lambda = if confident { suggest_lambda(&spectrum_ln, pw, ph, angle) } else { 0.01 };
 
     BlurEstimate { length, angle, confidence, confident, hardness, lambda }
+}
+
+fn axial_angle_delta(a: f32, b: f32) -> f32 {
+    let delta = (a - b).abs().rem_euclid(180.0);
+    delta.min(180.0 - delta)
+}
+
+fn signed_axial_angle_delta(reference: f32, candidate: f32) -> f32 {
+    (candidate - reference + 90.0).rem_euclid(180.0) - 90.0
+}
+
+fn finite_median(mut values: Vec<f32>) -> Option<f32> {
+    if values.is_empty() || values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let middle = values.len() / 2;
+    Some(if values.len() % 2 == 1 {
+        values[middle]
+    } else {
+        (values[middle - 1] + values[middle]) / 2.0
+    })
+}
+
+fn motion_estimates_agree(whole: BlurEstimate, native: BlurEstimate) -> bool {
+    if !whole.confident
+        || !native.confident
+        || !whole.length.is_finite()
+        || !native.length.is_finite()
+        || whole.length <= 0.0
+        || native.length <= 0.0
+        || !whole.angle.is_finite()
+        || !native.angle.is_finite()
+    {
+        return false;
+    }
+    let relative_length_delta = (native.length - whole.length).abs() / whole.length;
+    relative_length_delta <= MOTION_MAX_RELATIVE_LENGTH_DELTA
+        && axial_angle_delta(native.angle, whole.angle) <= MOTION_MAX_ANGLE_DELTA_DEG
+}
+
+fn corroborate_motion_estimate(
+    whole: BlurEstimate,
+    native_estimates: &[BlurEstimate],
+) -> Option<BlurEstimate> {
+    // The first scheduled region is always the frame center, where the
+    // intended subject usually lies. A panned background may agree across
+    // several corner tiles while the tracked subject carries a different
+    // residual blur; never auto-apply that background kernel over the subject.
+    let center = native_estimates.first().copied()?;
+    if !motion_estimates_agree(whole, center) {
+        return None;
+    }
+    let matching: Vec<_> = native_estimates
+        .iter()
+        .copied()
+        .filter(|native| motion_estimates_agree(whole, *native))
+        .collect();
+    if matching.len() < MOTION_MIN_NATIVE_MATCHES {
+        return None;
+    }
+
+    let length = finite_median(matching.iter().map(|estimate| estimate.length).collect())?;
+    let angle_delta = finite_median(
+        matching
+            .iter()
+            .map(|estimate| signed_axial_angle_delta(whole.angle, estimate.angle))
+            .collect(),
+    )?;
+    let angle = (whole.angle + angle_delta).rem_euclid(180.0);
+    let hardness = finite_median(matching.iter().map(|estimate| estimate.hardness).collect())?
+        .clamp(0.0, MOTION_AUTO_HARDNESS_MAX);
+    // Favor the safest of the corroborating suppression estimates: too much
+    // regularization merely softens, while too little creates dark ringing.
+    let lambda = matching
+        .iter()
+        .map(|estimate| estimate.lambda)
+        .filter(|value| value.is_finite())
+        .fold(0.01f32, f32::max)
+        .clamp(0.01, 0.1);
+    let confidence = finite_median(matching.iter().map(|estimate| estimate.confidence).collect())?;
+    Some(BlurEstimate { length, angle, confidence, confident: true, hardness, lambda })
+}
+
+/// Estimate linear motion blur via a fast whole-frame search. Large images
+/// must then agree with the native center and at least three native-resolution
+/// regions overall; their robust aggregate supplies the applied length, angle,
+/// hardness, and suppression.
+/// This prevents a downscaled spectrum from auto-applying a maximally hard
+/// inverse while leaving the manual Hardness slider's full range available.
+pub fn estimate_blur(image: &image::DynamicImage, source_linear: bool) -> BlurEstimate {
+    use image::GenericImageView;
+
+    let mut whole = estimate_blur_probe(image, source_linear, None, None);
+    whole.hardness = whole.hardness.min(MOTION_AUTO_HARDNESS_MAX);
+    let source_dims = image.dimensions();
+    if !whole.confident || source_dims.0.max(source_dims.1) <= MOTION_NATIVE_TILE_EXTENT {
+        return whole;
+    }
+
+    let tile_dims = (
+        source_dims.0.min(MOTION_NATIVE_TILE_EXTENT),
+        source_dims.1.min(MOTION_NATIVE_TILE_EXTENT),
+    );
+    let centers = [(0.5, 0.5), (0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+    let mut seen = Vec::new();
+    let mut native_estimates = Vec::new();
+    for center in centers {
+        let rect = analysis_tile_rect(source_dims, tile_dims, center);
+        if seen.contains(&rect) {
+            continue;
+        }
+        seen.push(rect);
+        let estimate = estimate_blur_probe(image, source_linear, Some(rect), Some(1.0));
+        log::info!(
+            "RAPID: motion native probe center=({:.2},{:.2}) L={:.2}px A={:.2}deg H={:.3} confidence={:.2} confident={}",
+            center.0,
+            center.1,
+            estimate.length,
+            estimate.angle,
+            estimate.hardness,
+            estimate.confidence,
+            estimate.confident,
+        );
+        native_estimates.push(estimate);
+    }
+
+    if let Some(refined) = corroborate_motion_estimate(whole, &native_estimates) {
+        log::info!(
+            "RAPID: motion native corroboration replaced whole L={:.2}px A={:.2}deg H={:.3} with L={:.2}px A={:.2}deg H={:.3}",
+            whole.length,
+            whole.angle,
+            whole.hardness,
+            refined.length,
+            refined.angle,
+            refined.hardness,
+        );
+        refined
+    } else {
+        log::info!(
+            "RAPID: motion estimate rejected: native center and at least {} total probes did not corroborate whole L={:.2}px A={:.2}deg",
+            MOTION_MIN_NATIVE_MATCHES,
+            whole.length,
+            whole.angle,
+        );
+        BLUR_NOT_CONFIDENT
+    }
 }
 
 /// Suggest a Wiener regularization (the UI's "Artifact suppression") from
@@ -3934,6 +4099,14 @@ const DEFOCUS_SOFT_MIN_RING_CONTRAST: f32 = 0.08;
 const DEFOCUS_SOFT_MIN_RING_CONFIDENCE: f32 = 3.0;
 const DEFOCUS_SOFT_MAX_RADIUS_DELTA: f32 = 0.25;
 const DEFOCUS_EQUIVALENT_DISC_SCALE: f32 = 2.0;
+
+// A large RAW can retain a highly significant jinc pattern while demosaic,
+// denoise, optics, and the whole-frame downscale attenuate its absolute ring
+// contrast. Accept that narrow case only when the whole probe is strong and
+// interior and the independent Gaussian fit does not identify smooth blur.
+const DEFOCUS_ATTENUATED_MIN_RING_CONTRAST: f32 = 0.15;
+const DEFOCUS_ATTENUATED_MIN_RING_CONFIDENCE: f32 = 8.0;
+const DEFOCUS_ATTENUATED_MIN_GRID_RADIUS: f32 = 3.0;
 #[cfg(test)]
 const INTERACTIVE_ESTIMATE_BUDGET_MS: u128 = 3000;
 
@@ -3961,6 +4134,7 @@ enum ProbeKind {
     Center,
     Detail,
     SoftOptical,
+    AttenuatedJinc,
 }
 
 #[derive(Debug, Clone)]
@@ -4252,7 +4426,7 @@ fn centered_axis_start(extent: u32, tile_extent: u32, fraction: f64) -> u32 {
         .clamp(0.0, high as f64) as u32
 }
 
-fn defocus_tile_rect(
+fn analysis_tile_rect(
     source_dims: (u32, u32),
     tile_dims: (u32, u32),
     center: (f64, f64),
@@ -4344,7 +4518,7 @@ fn laplacian_variance(
 
 fn choose_detail_tile(working: &WorkingLuma) -> Option<crate::image_processing::PixelRect> {
     let tile_dims = (working.source_dims.0.min(1024), working.source_dims.1.min(1024));
-    let center = defocus_tile_rect(working.source_dims, tile_dims, (0.5, 0.5));
+    let center = analysis_tile_rect(working.source_dims, tile_dims, (0.5, 0.5));
     let fractions = [0.25, 0.5, 0.75];
     let mut seen = vec![center];
     let mut best: Option<(crate::image_processing::PixelRect, f64)> = None;
@@ -4354,7 +4528,7 @@ fn choose_detail_tile(working: &WorkingLuma) -> Option<crate::image_processing::
             if fx == 0.5 && fy == 0.5 {
                 continue;
             }
-            let rect = defocus_tile_rect(working.source_dims, tile_dims, (fx, fy));
+            let rect = analysis_tile_rect(working.source_dims, tile_dims, (fx, fy));
             if seen.contains(&rect) {
                 continue;
             }
@@ -4453,6 +4627,48 @@ fn soft_optical_defocus_estimate(
     ))
 }
 
+fn attenuated_jinc_defocus_estimate(
+    probes: &[ProbeEvaluation],
+    gaussian: GaussianEstimate,
+) -> Option<(DefocusEstimate, f32, f32, f32)> {
+    if gaussian.confident || !gaussian.sigma.is_finite() || !gaussian.confidence.is_finite() {
+        return None;
+    }
+
+    let probe = probes.iter().find(|probe| {
+        probe.kind == ProbeKind::Whole
+            && probe.scale.is_finite()
+            && probe.scale > 0.0
+            && probe.scale < 1.0
+            && !probe.boundary
+            && probe.best_idx.is_some()
+            && probe.r_grid.is_some_and(|radius| {
+                radius.is_finite() && radius >= DEFOCUS_ATTENUATED_MIN_GRID_RADIUS
+            })
+            && probe
+                .ring_contrast
+                .is_some_and(|contrast| {
+                    contrast.is_finite() && contrast >= DEFOCUS_ATTENUATED_MIN_RING_CONTRAST
+                })
+            && probe.estimate.radius.is_finite()
+            && probe.estimate.radius > 0.0
+            && probe.estimate.confidence.is_finite()
+            && probe.estimate.confidence >= DEFOCUS_ATTENUATED_MIN_RING_CONFIDENCE
+    })?;
+
+    Some((
+        DefocusEstimate {
+            radius: probe.estimate.radius,
+            confidence: probe.estimate.confidence,
+            confident: true,
+            lambda: 0.01,
+        },
+        probe.r_grid.unwrap(),
+        probe.ring_contrast.unwrap(),
+        probe.scale,
+    ))
+}
+
 fn estimate_defocus_outcome(
     image: &image::DynamicImage,
     source_linear: bool,
@@ -4489,7 +4705,7 @@ fn estimate_defocus_outcome(
 
     if source_dims.0.max(source_dims.1) > 1024 {
         let tile_dims = (source_dims.0.min(1024), source_dims.1.min(1024));
-        let center = defocus_tile_rect(source_dims, tile_dims, (0.5, 0.5));
+        let center = analysis_tile_rect(source_dims, tile_dims, (0.5, 0.5));
         let detail = choose_detail_tile(&working);
         drop(working);
         probes.push(evaluate_defocus_probe(
@@ -4528,6 +4744,21 @@ fn estimate_defocus_outcome(
             );
             outcome.result = estimate;
             outcome.winner = Some(ProbeKind::SoftOptical);
+        } else if let Some((estimate, grid_radius, ring_contrast, scale)) =
+            attenuated_jinc_defocus_estimate(&outcome.probes, gaussian)
+        {
+            log::info!(
+                "RAPID: defocus attenuated-jinc fallback R={:.2}px whole-grid={:.2} contrast={:.3} confidence={:.2} scale={:.4}; Gaussian fit not confident (sigma={:.2}, t={:.1})",
+                estimate.radius,
+                grid_radius,
+                ring_contrast,
+                estimate.confidence,
+                scale,
+                gaussian.sigma,
+                gaussian.confidence,
+            );
+            outcome.result = estimate;
+            outcome.winner = Some(ProbeKind::AttenuatedJinc);
         }
     }
     outcome
@@ -6762,6 +6993,77 @@ mod tests {
         assert_eq!(got.1.to_bits(), expected.1.to_bits());
     }
 
+    #[test]
+    fn test_motion_native_corroboration_is_robust_and_axial() {
+        let estimate = |length: f32,
+                        angle: f32,
+                        hardness: f32,
+                        confidence: f32,
+                        lambda: f32|
+         -> BlurEstimate {
+            BlurEstimate {
+                length,
+                angle,
+                confidence,
+                confident: true,
+                hardness,
+                lambda,
+            }
+        };
+        let whole = estimate(59.0, 179.0, 1.0, 56.0, 0.01);
+        let native = [
+            estimate(58.0, 1.0, 0.875, 20.0, 0.02),
+            estimate(60.0, 178.0, 0.8125, 30.0, 0.03),
+            estimate(59.0, 179.5, 0.875, 25.0, 0.025),
+            estimate(59.0, 25.0, 1.0, 80.0, 0.01),
+            BLUR_NOT_CONFIDENT,
+        ];
+
+        let result = corroborate_motion_estimate(whole, &native)
+            .expect("three native regions agree across the 180-degree wrap");
+        assert!((result.length - 59.0).abs() < 1e-6);
+        assert!(axial_angle_delta(result.angle, 179.5) < 1e-6);
+        assert!((result.hardness - 0.875).abs() < 1e-6);
+        assert!((result.lambda - 0.03).abs() < 1e-6);
+        assert!((result.confidence - 25.0).abs() < 1e-6);
+
+        assert!(
+            corroborate_motion_estimate(whole, &native[..2]).is_none(),
+            "two matching regions must not authorize a large-frame estimate"
+        );
+        let background_only = [
+            BLUR_NOT_CONFIDENT,
+            estimate(58.0, 1.0, 0.875, 20.0, 0.02),
+            estimate(60.0, 178.0, 0.8125, 30.0, 0.03),
+            estimate(59.0, 179.5, 0.875, 25.0, 0.025),
+        ];
+        assert!(
+            corroborate_motion_estimate(whole, &background_only).is_none(),
+            "matching background corners must not override a disagreeing center subject"
+        );
+    }
+
+    #[test]
+    fn test_estimate_blur_large_frame_uses_native_regions() {
+        let scene = synthetic_scene(1536, 1024);
+        let blur_len = 59.0f32;
+        let angle = 15.0f32;
+        let blurred =
+            image::DynamicImage::ImageRgba8(motion_blur_line(&scene, blur_len, angle));
+        let est = estimate_blur(&blurred, true);
+        eprintln!(
+            "large motion estimate: L={:.1} A={:.1} H={:.3} confidence={:.1}",
+            est.length, est.angle, est.hardness, est.confidence
+        );
+        assert!(est.confident, "native regions did not corroborate: {est:?}");
+        assert!((est.length - blur_len).abs() <= 3.0, "length off: {est:?}");
+        assert!(axial_angle_delta(est.angle, angle) <= 3.0, "angle off: {est:?}");
+        assert!(
+            (0.7..=MOTION_AUTO_HARDNESS_MAX).contains(&est.hardness),
+            "automatic hardness unsafe or implausibly soft: {est:?}"
+        );
+    }
+
     /// Convention gate for the estimator: synthetic line blurs at five angles
     /// must come back with the right length and angle in psf_generate.wgsl's
     /// motion_angle convention (degrees, 0-180, image-space Y-down), and a
@@ -7208,6 +7510,65 @@ mod tests {
     }
 
     #[test]
+    fn test_attenuated_jinc_fallback_accepts_only_guarded_large_raw_signature() {
+        let probe = |kind: ProbeKind,
+                     radius: f32,
+                     grid_radius: f32,
+                     confidence: f32,
+                     contrast: f32,
+                     boundary: bool,
+                     scale: f32|
+         -> ProbeEvaluation {
+            ProbeEvaluation {
+                kind,
+                estimate: DefocusEstimate {
+                    radius,
+                    confidence,
+                    confident: false,
+                    lambda: 0.01,
+                },
+                best_idx: Some(5),
+                r_grid: Some(grid_radius),
+                ring_contrast: Some(contrast),
+                boundary,
+                scale,
+            }
+        };
+        let gaussian_not_confident = GaussianEstimate {
+            sigma: 0.0,
+            confidence: 0.0,
+            confident: false,
+            lambda: 0.01,
+        };
+        let measured = probe(ProbeKind::Whole, 16.83, 3.0, 9.69, 0.186, false, 0.1778);
+        let accepted = attenuated_jinc_defocus_estimate(&[measured.clone()], gaussian_not_confident)
+            .expect("the measured large-RAW signature should be accepted");
+        assert!((accepted.0.radius - 16.83).abs() < 1e-6);
+        assert!(accepted.0.confident);
+
+        let confident_gaussian = GaussianEstimate { confident: true, ..gaussian_not_confident };
+        assert!(
+            attenuated_jinc_defocus_estimate(&[measured.clone()], confident_gaussian).is_none(),
+            "a smooth Gaussian fit must veto the fallback"
+        );
+
+        let rejected = [
+            probe(ProbeKind::Detail, 16.83, 3.0, 9.69, 0.186, false, 0.1778),
+            probe(ProbeKind::Whole, 16.83, 3.0, 9.69, 0.186, false, 1.0),
+            probe(ProbeKind::Whole, 16.83, 3.0, 9.69, 0.186, true, 0.1778),
+            probe(ProbeKind::Whole, 16.83, 2.9, 9.69, 0.186, false, 0.1778),
+            probe(ProbeKind::Whole, 16.83, 3.0, 7.99, 0.186, false, 0.1778),
+            probe(ProbeKind::Whole, 16.83, 3.0, 9.69, 0.149, false, 0.1778),
+        ];
+        for candidate in rejected {
+            assert!(
+                attenuated_jinc_defocus_estimate(&[candidate], gaussian_not_confident).is_none(),
+                "a fallback guard was bypassed"
+            );
+        }
+    }
+
+    #[test]
     fn test_estimate_defocus_roi_targets_plate() {
         use crate::image_processing::PixelRect;
 
@@ -7262,6 +7623,96 @@ mod tests {
         assert!(!center.passes(), "center unexpectedly saw the top-band target");
         assert_eq!(fallback.winner, Some(ProbeKind::Detail));
         assert!((fallback.result.radius - 5.0).abs() <= 0.5);
+    }
+
+    #[test]
+    #[ignore = "release-only 24 MP latency/RSS acceptance benchmark"]
+    fn benchmark_estimate_motion_native_budget() {
+        use std::time::{Duration, Instant};
+
+        assert!(!cfg!(debug_assertions), "run this benchmark with cargo test --release");
+
+        const WIDTH: u32 = 6000;
+        const HEIGHT: u32 = 4000;
+        const BLUR_LENGTH: i32 = 59;
+        const HALF_BLUR: i32 = BLUR_LENGTH / 2;
+
+        let noise_byte = |x: u32, y: u32| -> u8 {
+            let mut hash = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+            hash ^= hash >> 16;
+            hash = hash.wrapping_mul(0x7FEB_352D);
+            hash ^= hash >> 15;
+            hash = hash.wrapping_mul(0x846C_A68B);
+            hash ^= hash >> 16;
+            (hash & 0xff) as u8
+        };
+
+        // Build a true 59 px horizontal box blur in O(width*height): each
+        // row gets a deterministic broadband source and prefix-sum window.
+        // Generation is outside the timed region; only the command's image
+        // handoff clone and production estimator count against the budget.
+        let mut fixture = image::RgbImage::new(WIDTH, HEIGHT);
+        let output = fixture.as_mut();
+        let mut row = vec![0u8; WIDTH as usize];
+        let mut prefix = vec![0u32; WIDTH as usize + 1];
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                row[x as usize] = noise_byte(x, y);
+                prefix[x as usize + 1] = prefix[x as usize] + row[x as usize] as u32;
+            }
+            for x in 0..WIDTH {
+                let left = x as i32 - HALF_BLUR;
+                let right = x as i32 + HALF_BLUR;
+                let clamped_left = left.max(0) as usize;
+                let clamped_right = right.min(WIDTH as i32 - 1) as usize;
+                let mut sum = prefix[clamped_right + 1] - prefix[clamped_left];
+                if left < 0 {
+                    sum += (-left) as u32 * row[0] as u32;
+                }
+                if right >= WIDTH as i32 {
+                    sum += (right - WIDTH as i32 + 1) as u32 * row[WIDTH as usize - 1] as u32;
+                }
+                let value = (sum / BLUR_LENGTH as u32) as u8;
+                let index = (y as usize * WIDTH as usize + x as usize) * 3;
+                output[index..index + 3].fill(value);
+            }
+        }
+        let fixture = image::DynamicImage::ImageRgb8(fixture);
+
+        let timed = || {
+            let start = Instant::now();
+            let command_handoff = fixture.clone();
+            let estimate = estimate_blur(&command_handoff, true);
+            (start.elapsed(), estimate)
+        };
+        let (_, warmup) = timed();
+        assert!(warmup.confident, "warmup failed: {warmup:?}");
+
+        let mut measured: Vec<Duration> = Vec::with_capacity(3);
+        for run in 1..=3 {
+            let (elapsed, estimate) = timed();
+            assert!(estimate.confident, "run {run} failed: {estimate:?}");
+            assert!((estimate.length - BLUR_LENGTH as f32).abs() <= 3.0, "{estimate:?}");
+            assert!(axial_angle_delta(estimate.angle, 0.0) <= 3.0, "{estimate:?}");
+            assert!(estimate.hardness <= MOTION_AUTO_HARDNESS_MAX, "{estimate:?}");
+            eprintln!(
+                "native motion run {run}: {:.1} ms, L={:.1} A={:.1} H={:.3}",
+                elapsed.as_secs_f64() * 1000.0,
+                estimate.length,
+                estimate.angle,
+                estimate.hardness,
+            );
+            measured.push(elapsed);
+        }
+        measured.sort();
+        let median = measured[1];
+        eprintln!("native motion median: {:.1} ms", median.as_secs_f64() * 1000.0);
+        assert!(
+            median.as_millis() <= INTERACTIVE_ESTIMATE_BUDGET_MS,
+            "native motion median {:.1} ms exceeds {} ms",
+            median.as_secs_f64() * 1000.0,
+            INTERACTIVE_ESTIMATE_BUDGET_MS
+        );
     }
 
     #[test]
