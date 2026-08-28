@@ -226,7 +226,7 @@ export default function DenoiseModal({
   const [isMounted, setIsMounted] = useState(false);
   const [show, setShow] = useState(false);
   const [intensity, setIntensity] = useState<number>(15);
-  const [method, setMethod] = useState<'ai' | 'bm3d'>('ai');
+  const [method, setMethod] = useState<'ai' | 'bm3d'>('bm3d');
   const [isSaving, setIsSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; path: string } | null>(null);
@@ -257,7 +257,7 @@ export default function DenoiseModal({
 
   useEffect(() => {
     if (isOpen) {
-      setMethod(isRaw ? 'ai' : 'bm3d');
+      setMethod('bm3d');
       setIntensity(isRaw ? 50 : 15);
       setIsMounted(true);
       const timer = setTimeout(() => setShow(true), 10);
