@@ -22,7 +22,8 @@ export default function UpscalePanel() {
     }
     setIsUpscaling(true);
     try {
-      const newPath = await invoke<string>(Invokes.UpscaleAndSaveImage, { path });
+      const jsAdjustments = useEditorStore.getState().adjustments;
+      const newPath = await invoke<string>(Invokes.UpscaleAndSaveImage, { path, jsAdjustments });
       useProcessStore.getState().setProcess({ initialFileToOpen: newPath });
     } catch (err) {
       toast.error(`Failed to upscale image: ${err}`);

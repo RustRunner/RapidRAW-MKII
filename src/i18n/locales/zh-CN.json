@@ -363,7 +363,7 @@
         "applied": "Applied",
         "apply": "Apply",
         "applying": "Upscaling...",
-        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "description": "使用高质量 Lanczos 插值将图像分辨率提升一倍。当前的编辑（裁剪、色彩、蒙版）会被固化到结果中，并作为新文件保存在原图旁边后打开。",
         "heading": "2x Upscale"
       }
     },

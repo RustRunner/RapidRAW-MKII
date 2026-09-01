@@ -363,7 +363,7 @@
         "applied": "Applied",
         "apply": "Apply",
         "applying": "Upscaling...",
-        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Saves the result as a new file next to the original and opens it.",
+        "description": "Doubles the image resolution with high-quality Lanczos interpolation. Your current edits (crop, color, masks) are baked into the result, which is saved as a new file next to the original and opened.",
         "heading": "2x Upscale"
       }
     },

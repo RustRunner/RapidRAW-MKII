@@ -218,14 +218,12 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       const length = Math.min(200, Math.max(1, Math.round(estimate.length)));
       const angle = Math.min(180, Math.max(0, Math.round(estimate.angle)));
       const hardness = Math.min(100, Math.max(0, Math.round(100 * estimate.hardness)));
-      const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       // A landed estimate must never leave its own mode off.
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidLength]: length,
         [BlurRecoveryAdjustment.RapidAngle]: angle,
         [BlurRecoveryAdjustment.RapidHardness]: hardness,
-        [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidMotionEnabled]: true,
       }));
       // Flash the angle overlay so the detected direction is visible.
@@ -281,11 +279,9 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       // leaving the mode inert. No hardness write - the shader pins the
       // raw jinc for the defocus component.
       const radius = Math.max(1, roundedRadius);
-      const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidRadius]: radius,
-        [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidDefocusEnabled]: true,
       }));
       toast.success(t('editor.adjustments.blurRecovery.estimateSuccessDefocus', { radius: radius.toFixed(1) }));
@@ -320,11 +316,9 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       // Top clamp 8: the PSF caps effective sigma there, so applying more
       // would lie about what renders. Snap to the slider's 0.1 step.
       const sigma = Math.min(8, Math.max(0.5, Math.round(estimate.sigma * 10) / 10));
-      const lambda = Math.min(LAMBDA_MAX, Math.max(LAMBDA_MIN, estimate.lambda));
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         [BlurRecoveryAdjustment.RapidSigma]: sigma,
-        [BlurRecoveryAdjustment.RapidLambda]: lambda,
         [BlurRecoveryAdjustment.RapidGaussianEnabled]: true,
       }));
       toast.success(t('editor.adjustments.blurRecovery.estimateSuccessGaussian', { sigma: sigma.toFixed(1) }));
