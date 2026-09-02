@@ -4,7 +4,6 @@ import { Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'react-toastify';
-import debounce from 'lodash.debounce';
 
 import { ImageDimensions, RenderSize, useImageRenderSize } from '../../hooks/useImageRenderSize';
 import { Adjustments, AiPatch, MaskContainer } from '../../utils/adjustments';
@@ -29,6 +28,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { useUIStore } from '../../store/useUIStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useAiMasking } from '../../hooks/useAiMasking';
+import { useEditorActions } from '../../hooks/useEditorActions';
 
 const parseRgb = (rgbStr: string): [number, number, number, number] => {
   const match = rgbStr.match(/[\d.]+/g);
@@ -123,10 +123,6 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const hasRenderedFirstFrame = useEditorStore((s) => s.hasRenderedFirstFrame);
 
   const setEditor = useEditorStore((s) => s.setEditor);
-  const undo = useEditorStore((s) => s.undo);
-  const redo = useEditorStore((s) => s.redo);
-  const goToHistoryIndex = useEditorStore((s) => s.goToHistoryIndex);
-  const pushHistory = useEditorStore((s) => s.pushHistory);
   const draftCrop = useEditorStore((s) => s.draftCrop);
   const adjustmentsSnapshotVersion = useEditorStore((s) => s.adjustmentsSnapshotVersion);
   const canUndo = adjustmentsHistoryIndex > 0;
@@ -134,19 +130,17 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
 
   const isAndroid = osPlatform === 'android';
 
-  const debouncedSetHistory = useMemo(() => debounce((newAdj: Adjustments) => pushHistory(newAdj), 500), [pushHistory]);
-
-  const setAdjustments = useCallback(
-    (value: Partial<Adjustments> | ((prev: Adjustments) => Adjustments)) => {
-      setEditor((state) => {
-        const prevAdjustments = state.adjustments;
-        const newAdjustments = typeof value === 'function' ? value(prevAdjustments) : { ...prevAdjustments, ...value };
-        debouncedSetHistory(newAdjustments);
-        return { adjustments: newAdjustments };
-      });
-    },
-    [debouncedSetHistory, setEditor],
-  );
+  // Every editor adjustment write shares the one module-level history queue in
+  // useEditorActions. Editor used to keep a private debounce instance that no
+  // navigation path ever cancelled, so an in-flight edit could push the
+  // previous image's adjustments onto the next image's freshly reset history.
+  const {
+    setAdjustments,
+    setAdjustmentsFoldingDraft,
+    undoAdjustments,
+    redoAdjustments,
+    goToAdjustmentsHistoryIndex,
+  } = useEditorActions();
 
   const { handleGenerateAiMask, handleQuickErase, handleManualCleanup } = useAiMasking();
 
@@ -262,13 +256,13 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
 
   const handleStraighten = useCallback(
     (angleCorrection: number) => {
-      setAdjustments((prev: Adjustments) => {
+      setAdjustmentsFoldingDraft((prev: Adjustments) => {
         const newRotation = (prev.rotation || 0) + angleCorrection;
         return { ...prev, rotation: newRotation };
       });
       setEditor({ isStraightenActive: false });
     },
-    [setAdjustments, setEditor],
+    [setAdjustmentsFoldingDraft, setEditor],
   );
 
   const updateSubMaskLocal = useCallback(
@@ -2067,11 +2061,11 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           isLoading={isLoading}
           onBackToLibrary={onBackToLibrary}
           onImageSelect={onImageSelect}
-          onRedo={redo}
+          onRedo={redoAdjustments}
           onToggleFullScreen={handleToggleFullScreen}
           onToggleShowOriginal={toggleShowOriginal}
           onToggleSplitView={toggleSplitView}
-          onUndo={undo}
+          onUndo={undoAdjustments}
           selectedImage={selectedImage}
           showOriginal={showOriginal}
           splitView={splitView}
@@ -2079,7 +2073,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           onToggleDateView={() => setShowExifDateView((prev) => !prev)}
           adjustmentsHistory={adjustmentsHistory}
           adjustmentsHistoryIndex={adjustmentsHistoryIndex}
-          goToAdjustmentsHistoryIndex={goToHistoryIndex}
+          goToAdjustmentsHistoryIndex={goToAdjustmentsHistoryIndex}
         />
       </div>
 

@@ -15,13 +15,39 @@ import {
   completeRecoveryGroups,
   normalizeLoadedAdjustments,
 } from '../utils/adjustments';
-import { calculateCenteredCrop } from '../utils/cropUtils';
-import { Invokes } from '../components/ui/AppProperties';
+import {
+  calculateCenteredCrop,
+  getOrientedDimensions,
+  isFullFrameCrop,
+  percentToPixelCrop,
+} from '../utils/cropUtils';
+import { Crop, PercentCrop } from 'react-image-crop';
+import { Invokes, SelectedImage } from '../components/ui/AppProperties';
 import { globalImageCache } from '../utils/ImageLRUCache';
 
-export const debouncedSetHistory = debounce((newAdj: Adjustments) => {
-  useEditorStore.getState().pushHistory(newAdj);
+// Scheduled with the snapshot version that was current when the edit was made.
+// A later image load, reset, undo/redo or metadata replacement invalidates the
+// queued push even if the caller forgot an eager .cancel().
+export const debouncedSetHistory = debounce((newAdj: Adjustments, snapshotVersion: number) => {
+  const state = useEditorStore.getState();
+  if (state.adjustmentsSnapshotVersion !== snapshotVersion) return;
+  state.pushHistory(newAdj);
 }, 500);
+
+/**
+ * Fold a pending crop draft into `prev`, canonicalising a full-frame rectangle
+ * to `null` (D7). Returns `prev` unchanged when there is no draft, so callers
+ * can fold unconditionally.
+ */
+function foldDraftCrop(prev: Adjustments, draftCrop: PercentCrop | null, selectedImage: SelectedImage | null) {
+  if (!draftCrop || !selectedImage?.width || !selectedImage?.height) return prev;
+
+  const orientationSteps = prev.orientationSteps || 0;
+  const pixelCrop = percentToPixelCrop(draftCrop, selectedImage.width, selectedImage.height, orientationSteps);
+  const { width: W, height: H } = getOrientedDimensions(selectedImage.width, selectedImage.height, orientationSteps);
+
+  return { ...prev, crop: pixelCrop && isFullFrameCrop(pixelCrop, W, H) ? null : pixelCrop };
+}
 
 export const debouncedSave = debounce((path: string, adjustmentsToSave: Adjustments) => {
   invoke(Invokes.SaveMetadataAndUpdateThumbnail, { path, adjustments: adjustmentsToSave }).catch((err) => {
@@ -38,12 +64,90 @@ export function useEditorActions() {
       setEditor((state) => {
         const prev = state.adjustments;
         const newAdjustments = typeof value === 'function' ? value(prev) : { ...prev, ...value };
-        debouncedSetHistory(newAdjustments);
+        // An updater returning `prev` means "nothing changed" -- honour it
+        // rather than pushing a duplicate history snapshot.
+        if (newAdjustments === prev) return {};
+        debouncedSetHistory(newAdjustments, state.adjustmentsSnapshotVersion);
         return { adjustments: newAdjustments };
       });
     },
     [setEditor],
   );
+
+  /**
+   * The only way a geometry control may write adjustments while the crop panel
+   * is open. Folds any pending drag into the committed crop first, then applies
+   * `value` over the folded state, then clears the draft -- all in one store
+   * transition, so the geometry effect never observes a stale draft beside new
+   * geometry. A `value` carrying its own `crop` overrides the fold, which is
+   * what step rotation and an explicit pasted crop rely on.
+   */
+  const setAdjustmentsFoldingDraft = useCallback(
+    (value: Partial<Adjustments> | ((prev: Adjustments) => Adjustments)) => {
+      setEditor((state) => {
+        const prev = state.adjustments;
+        const folded = foldDraftCrop(prev, state.draftCrop, state.selectedImage);
+        const next = typeof value === 'function' ? value(folded) : { ...folded, ...value };
+
+        if (next === prev) {
+          return state.draftCrop === null ? {} : { draftCrop: null };
+        }
+
+        debouncedSetHistory(next, state.adjustmentsSnapshotVersion);
+        return { adjustments: next, draftCrop: null };
+      });
+    },
+    [setEditor],
+  );
+
+  /**
+   * Discrete-action write: no debounce, its own synchronous history entry, and
+   * a flush of any older pending edit first so the two land as ordered entries.
+   * Returns whether anything was actually written.
+   */
+  const commitAdjustmentsImmediately = useCallback(
+    (value: Partial<Adjustments> | ((prev: Adjustments) => Adjustments)): boolean => {
+      const store = useEditorStore.getState();
+      const prev = store.adjustments;
+      const next = typeof value === 'function' ? value(prev) : { ...prev, ...value };
+      if (next === prev) return false;
+
+      debouncedSetHistory.flush();
+      store.setEditor({ adjustments: next });
+      useEditorStore.getState().pushHistory(next);
+      return true;
+    },
+    [],
+  );
+
+  /** Pending draft as an oriented pixel rectangle, or null when there is none. */
+  const draftToPixelCrop = useCallback((): Crop | null => {
+    const { draftCrop, selectedImage, adjustments } = useEditorStore.getState();
+    if (!draftCrop || !selectedImage?.width || !selectedImage?.height) return null;
+    return percentToPixelCrop(
+      draftCrop,
+      selectedImage.width,
+      selectedImage.height,
+      adjustments.orientationSteps || 0,
+    );
+  }, []);
+
+  // History navigation flushes the pending edit first, so it becomes its own
+  // entry and the move lands where the user expects.
+  const undoAdjustments = useCallback(() => {
+    debouncedSetHistory.flush();
+    useEditorStore.getState().undo();
+  }, []);
+
+  const redoAdjustments = useCallback(() => {
+    debouncedSetHistory.flush();
+    useEditorStore.getState().redo();
+  }, []);
+
+  const goToAdjustmentsHistoryIndex = useCallback((index: number) => {
+    debouncedSetHistory.flush();
+    useEditorStore.getState().goToHistoryIndex(index);
+  }, []);
 
   const handleRotate = useCallback(
     (degrees: number) => {
@@ -310,6 +414,12 @@ export function useEditorActions() {
 
   return {
     setAdjustments,
+    setAdjustmentsFoldingDraft,
+    commitAdjustmentsImmediately,
+    draftToPixelCrop,
+    undoAdjustments,
+    redoAdjustments,
+    goToAdjustmentsHistoryIndex,
     handleRotate,
     handleAutoAdjustments,
     handleLutSelect,

@@ -28,7 +28,8 @@ export const useKeyboardShortcuts = ({
   handleToggleFullScreen,
   handleZoomChange,
 }: KeyboardShortcutsProps) => {
-  const { handleRotate, handleCopyAdjustments, handlePasteAdjustments } = useEditorActions();
+  const { handleRotate, handleCopyAdjustments, handlePasteAdjustments, undoAdjustments, redoAdjustments } =
+    useEditorActions();
   const { handleRate, handleSetColorLabel } = useLibraryActions();
 
   const sortedListRef = useRef(sortedImageList);
@@ -238,16 +239,16 @@ export const useKeyboardShortcuts = ({
       },
       undo: {
         shouldFire: (s: any) => !!s.editor.selectedImage && s.editor.historyIndex > 0,
-        execute: (e: any, s: any) => {
+        execute: (e: any) => {
           e.preventDefault();
-          s.editor.undo();
+          undoAdjustments();
         },
       },
       redo: {
         shouldFire: (s: any) => !!s.editor.selectedImage && s.editor.historyIndex < s.editor.history.length - 1,
-        execute: (e: any, s: any) => {
+        execute: (e: any) => {
           e.preventDefault();
-          s.editor.redo();
+          redoAdjustments();
         },
       },
       toggle_fullscreen: {
@@ -598,6 +599,8 @@ export const useKeyboardShortcuts = ({
     handleRotate,
     handleCopyAdjustments,
     handlePasteAdjustments,
+    undoAdjustments,
+    redoAdjustments,
     handleRate,
     handleSetColorLabel,
   ]);
