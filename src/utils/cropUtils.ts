@@ -164,6 +164,39 @@ export function calculateAreaPreservingCrop(
   return isCropWithinBounds(candidate, W, H, rotation) ? candidate : null;
 }
 
+/**
+ * Map a crop rectangle through a 90-degree step into the rotated frame.
+ *
+ * `orientedWidth` x `orientedHeight` is the frame the crop is currently
+ * expressed in; the result is in the transposed
+ * `orientedHeight` x `orientedWidth` frame. Direction matches the backend's
+ * orientationSteps convention, where +1 step is `rotate90()` -- clockwise
+ * (`apply_coarse_rotation`, src-tauri/src/image_processing.rs).
+ *
+ * Derivation, clockwise: a point (x, y) lands at (H - y, x), so the rectangle's
+ * top-left corner becomes its top-right and the new origin is taken from the
+ * original bottom-left.
+ */
+export function rotatePixelCrop90(
+  crop: Crop,
+  orientedWidth: number,
+  orientedHeight: number,
+  direction: 'cw' | 'ccw',
+): Crop {
+  const rotated =
+    direction === 'cw'
+      ? { x: orientedHeight - (crop.y + crop.height), y: crop.x }
+      : { x: crop.y, y: orientedWidth - (crop.x + crop.width) };
+
+  return {
+    unit: 'px',
+    x: Math.round(rotated.x),
+    y: Math.round(rotated.y),
+    width: crop.height,
+    height: crop.width,
+  };
+}
+
 export function rotateCropCenter(
   crop: Crop,
   orientedWidth: number,

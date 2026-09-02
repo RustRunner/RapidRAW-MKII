@@ -52,7 +52,15 @@ export default function CropPanel() {
   const isStraightenActive = useEditorStore((s) => s.isStraightenActive);
   const activeOverlay = useEditorStore((s) => s.overlayMode);
   const setEditor = useEditorStore((s) => s.setEditor);
-  const { setAdjustments } = useEditorActions();
+  // Every adjustments write in this panel is a geometry or transform change,
+  // so they all fold a pending drag in first. The fold is a no-op when there
+  // is no draft, which is simpler than reasoning about which writers are
+  // geometric.
+  const {
+    setAdjustmentsFoldingDraft: setAdjustments,
+    draftToPixelCrop,
+    handleRotate,
+  } = useEditorActions();
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
   const [isTransformModalOpen, setIsTransformModalOpen] = useState(false);
@@ -250,6 +258,7 @@ export default function CropPanel() {
       }
       let newCrop: Crop | null = null;
       if (selectedImage?.width && selectedImage?.height) {
+        const referenceCrop = draftToPixelCrop() ?? adjustments.crop;
         newCrop =
           calculateAreaPreservingCrop(
             selectedImage.width,
@@ -257,13 +266,13 @@ export default function CropPanel() {
             orientationSteps,
             newAspectRatio,
             rotation,
-            adjustments.crop,
+            referenceCrop,
           ) ??
           calculateCenteredCrop(selectedImage.width, selectedImage.height, orientationSteps, newAspectRatio, rotation);
       }
       setAdjustments((prev: Adjustments) => ({ ...prev, aspectRatio: newAspectRatio, crop: newCrop }));
     },
-    [selectedImage, orientationSteps, rotation, adjustments.crop, setAdjustments],
+    [selectedImage, orientationSteps, rotation, adjustments.crop, draftToPixelCrop, setAdjustments],
   );
 
   useEffect(() => {
@@ -410,24 +419,9 @@ export default function CropPanel() {
     }
   };
 
-  const handleStepRotate = (degrees: number) => {
-    const increment = degrees > 0 ? 1 : 3;
-    setAdjustments((prev: Adjustments) => {
-      const newAspectRatio = prev.aspectRatio && prev.aspectRatio !== 0 ? 1 / prev.aspectRatio : null;
-      const newOrientationSteps = ((prev.orientationSteps || 0) + increment) % 4;
-      const newCrop =
-        selectedImage?.width && selectedImage?.height
-          ? calculateCenteredCrop(selectedImage.width, selectedImage.height, newOrientationSteps, newAspectRatio, 0)
-          : null;
-      return {
-        ...prev,
-        aspectRatio: newAspectRatio,
-        orientationSteps: newOrientationSteps,
-        rotation: 0,
-        crop: newCrop,
-      };
-    });
-  };
+  // Shared with the keyboard rotate action so panel buttons and shortcuts take
+  // the same branch, including the draft-mapping one.
+  const handleStepRotate = handleRotate;
 
   const resetFineRotation = () => {
     updateLocalRotation(null);

@@ -20,6 +20,7 @@ import {
   getOrientedDimensions,
   isFullFrameCrop,
   percentToPixelCrop,
+  rotatePixelCrop90,
 } from '../utils/cropUtils';
 import { Crop, PercentCrop } from 'react-image-crop';
 import { Invokes, SelectedImage } from '../components/ui/AppProperties';
@@ -149,27 +150,57 @@ export function useEditorActions() {
     useEditorStore.getState().goToHistoryIndex(index);
   }, []);
 
+  /**
+   * 90-degree step rotation, shared by the crop panel's buttons and the
+   * keyboard action so both take the same branch.
+   *
+   * With a pending drag the drawn rectangle is folded in and then mapped into
+   * the new oriented frame, so an off-centre crop stays where the user put it.
+   * With no draft this keeps the historical centred-crop behaviour.
+   */
   const handleRotate = useCallback(
     (degrees: number) => {
-      const { selectedImage, adjustments } = useEditorStore.getState();
+      const { selectedImage, draftCrop } = useEditorStore.getState();
       const increment = degrees > 0 ? 1 : 3;
-      const newAspectRatio =
-        adjustments.aspectRatio && adjustments.aspectRatio !== 0 ? 1 / adjustments.aspectRatio : null;
-      const newOrientationSteps = ((adjustments.orientationSteps || 0) + increment) % 4;
-      const newCrop =
-        selectedImage?.width && selectedImage?.height
-          ? calculateCenteredCrop(selectedImage.width, selectedImage.height, newOrientationSteps, newAspectRatio)
-          : null;
+      const direction = increment === 1 ? 'cw' : 'ccw';
+      const hadDraft = draftCrop !== null;
 
-      setAdjustments((prev) => ({
-        ...prev,
-        aspectRatio: newAspectRatio,
-        orientationSteps: newOrientationSteps,
-        rotation: 0,
-        crop: newCrop,
-      }));
+      setAdjustmentsFoldingDraft((prev) => {
+        const newAspectRatio = prev.aspectRatio && prev.aspectRatio !== 0 ? 1 / prev.aspectRatio : null;
+        const newOrientationSteps = ((prev.orientationSteps || 0) + increment) % 4;
+
+        let newCrop: Crop | null = null;
+        if (selectedImage?.width && selectedImage?.height) {
+          // `prev` is the folded state, so prev.crop already carries the drag.
+          if (hadDraft && prev.crop) {
+            const from = getOrientedDimensions(
+              selectedImage.width,
+              selectedImage.height,
+              prev.orientationSteps || 0,
+            );
+            const to = getOrientedDimensions(selectedImage.width, selectedImage.height, newOrientationSteps);
+            const mapped = rotatePixelCrop90(prev.crop, from.width, from.height, direction);
+            newCrop = isFullFrameCrop(mapped, to.width, to.height) ? null : mapped;
+          } else {
+            newCrop = calculateCenteredCrop(
+              selectedImage.width,
+              selectedImage.height,
+              newOrientationSteps,
+              newAspectRatio,
+            );
+          }
+        }
+
+        return {
+          ...prev,
+          aspectRatio: newAspectRatio,
+          orientationSteps: newOrientationSteps,
+          rotation: 0,
+          crop: newCrop,
+        };
+      });
     },
-    [setAdjustments],
+    [setAdjustmentsFoldingDraft],
   );
 
   const handleAutoAdjustments = useCallback(async () => {
@@ -292,7 +323,7 @@ export function useEditorActions() {
 
   const handlePasteAdjustments = useCallback(
     (paths?: string[]) => {
-      const { copiedAdjustments, selectedImage, adjustments } = useEditorStore.getState();
+      const { copiedAdjustments, selectedImage } = useEditorStore.getState();
       const { multiSelectedPaths } = useLibraryStore.getState();
       const { appSettings } = useSettingsStore.getState();
       const { setProcess } = useProcessStore.getState();
@@ -337,7 +368,10 @@ export function useEditorActions() {
       pathsToUpdate.forEach((p) => globalImageCache.delete(p));
 
       if (selectedImage && pathsToUpdate.includes(selectedImage.path)) {
-        setAdjustments({ ...adjustments, ...adjustmentsToApply });
+        // Only the patch. Passing the whole stale adjustments object would
+        // carry its old crop over a pending draft and undo the fold; if the
+        // patch itself includes crop, that pasted crop intentionally wins.
+        setAdjustmentsFoldingDraft(adjustmentsToApply);
       }
 
       invoke(Invokes.ApplyAdjustmentsToPaths, { paths: pathsToUpdate, adjustments: adjustmentsToApply })
