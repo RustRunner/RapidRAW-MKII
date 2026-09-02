@@ -30,7 +30,6 @@ use wgpu::util::DeviceExt;
 pub enum BlurType {
     Motion = 0,
     Defocus = 1,
-    Gaussian = 2,
 }
 
 impl Default for BlurType {
@@ -44,7 +43,6 @@ impl From<u32> for BlurType {
         match value {
             0 => BlurType::Motion,
             1 => BlurType::Defocus,
-            2 => BlurType::Gaussian,
             _ => BlurType::Motion,
         }
     }
@@ -58,22 +56,19 @@ impl From<u32> for BlurType {
 pub struct ModeSet {
     pub motion: bool,
     pub defocus: bool,
-    pub gaussian: bool,
 }
 
 impl ModeSet {
-    pub const MOTION: Self = Self { motion: true, defocus: false, gaussian: false };
-    pub const DEFOCUS: Self = Self { motion: false, defocus: true, gaussian: false };
-    pub const GAUSSIAN: Self = Self { motion: false, defocus: false, gaussian: true };
+    pub const MOTION: Self = Self { motion: true, defocus: false };
+    pub const DEFOCUS: Self = Self { motion: false, defocus: true };
 
     pub fn any(self) -> bool {
-        self.motion || self.defocus || self.gaussian
+        self.motion || self.defocus
     }
 
-    /// Uniform encoding for psf_generate.wgsl: bit0 = motion, bit1 =
-    /// defocus, bit2 = gaussian.
+    /// Uniform encoding for psf_generate.wgsl: bit0 = motion, bit1 = defocus.
     pub fn bits(self) -> u32 {
-        (self.motion as u32) | ((self.defocus as u32) << 1) | ((self.gaussian as u32) << 2)
+        (self.motion as u32) | ((self.defocus as u32) << 1)
     }
 }
 
@@ -96,8 +91,6 @@ pub struct RapidParams {
     pub motion_angle: f32,
     /// Defocus blur radius in pixels
     pub defocus_radius: f32,
-    /// Gaussian blur sigma
-    pub gaussian_sigma: f32,
     /// Regularization parameter (noise-to-signal ratio estimate)
     pub lambda: f32,
     /// Deconvolution strength (0-1, blend with original)
@@ -137,7 +130,6 @@ impl Default for RapidParams {
             motion_length: 10.0,
             motion_angle: 0.0,
             defocus_radius: 5.0,
-            gaussian_sigma: 2.0,
             lambda: 0.01,
             strength: 1.0,
             edge_taper: true,
@@ -152,14 +144,13 @@ impl Default for RapidParams {
 impl RapidParams {
     /// Rescale the spatial kernel parameters for a working image that has been
     /// downscaled by `scale`. Lambda and strength describe frequency-domain
-    /// behavior and blending, not pixel extents, so they stay unchanged. The
-    /// Motion and Gaussian retain their existing floors at degenerate scales;
-    /// defocus preserves the requested sub-pixel radius.
+    /// behavior and blending, not pixel extents, so they stay unchanged. Motion
+    /// retains its existing floor at degenerate scales; defocus preserves the
+    /// requested sub-pixel radius.
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             motion_length: (self.motion_length * scale).max(1.0),
             defocus_radius: self.defocus_radius * scale,
-            gaussian_sigma: (self.gaussian_sigma * scale).max(0.3),
             ..*self
         }
     }
@@ -206,9 +197,6 @@ fn kernel_extent(params: &RapidParams) -> usize {
     if params.modes.defocus {
         extent += 2.0 * params.defocus_radius;
     }
-    if params.modes.gaussian {
-        extent += 6.0 * params.gaussian_sigma;
-    }
     (extent.ceil() as usize).max(1)
 }
 
@@ -251,11 +239,6 @@ fn mode_axis_components(params: &RapidParams, mode: BlurType, axis: usize) -> Ve
             // jinc spectrum = uniform disk, which projects as its chord length.
             let r = params.defocus_radius.max(0.0);
             vec![(1.0, r, Box::new(move |t: f32| (r * r - t * t).max(0.0).sqrt()) as Density)]
-        }
-        BlurType::Gaussian => {
-            // gaussian_blur_spectrum caps effective sigma at 8; mirror that.
-            let s = params.gaussian_sigma.clamp(1e-3, 8.0);
-            vec![(1.0, 3.0 * s, Box::new(move |t: f32| (-t * t / (2.0 * s * s)).exp()) as Density)]
         }
     }
 }
@@ -336,7 +319,6 @@ fn psf_axis_projection(params: &RapidParams, axis: usize) -> Vec<f32> {
     for (active, mode) in [
         (params.modes.motion, BlurType::Motion),
         (params.modes.defocus, BlurType::Defocus),
-        (params.modes.gaussian, BlurType::Gaussian),
     ] {
         if !active {
             continue;
@@ -671,8 +653,8 @@ struct PSFParams {
     motion_length: f32,
     motion_angle: f32,
     defocus_radius: f32,
-    gaussian_sigma: f32,
     hardness: f32,
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -684,8 +666,7 @@ struct WienerParams {
     strength: f32,
     noise_floor: f32,
     adaptive: u32,
-    gaussian_active: u32,
-    _pad: u32,
+    _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -1913,8 +1894,8 @@ impl RapidDeconvolver {
             motion_length: params.motion_length,
             motion_angle: params.motion_angle,
             defocus_radius: params.defocus_radius,
-            gaussian_sigma: params.gaussian_sigma,
             hardness: params.hardness,
+            _pad: 0,
         };
         queue.write_buffer(&self.psf_params_buffer, 0, bytemuck::bytes_of(&psf_params));
 
@@ -1977,8 +1958,7 @@ impl RapidDeconvolver {
             strength: params.strength,
             noise_floor: params.noise_floor,
             adaptive: if params.adaptive { 1 } else { 0 },
-            gaussian_active: params.modes.gaussian as u32,
-            _pad: 0,
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.wiener_params_buffer, 0, bytemuck::bytes_of(&wiener_params));
 
@@ -2197,12 +2177,11 @@ impl RapidDeconvolver {
         // TODO: Implement full pipeline in Phase 4
         // For now, just log that we would process
         log::info!(
-            "RAPID: Would deconvolve {:?} blur (length={}, angle={}, radius={}, sigma={})",
+            "RAPID: Would deconvolve {:?} blur (length={}, angle={}, radius={})",
             params.modes,
             params.motion_length,
             params.motion_angle,
-            params.defocus_radius,
-            params.gaussian_sigma
+            params.defocus_radius
         );
 
         Err("RAPID deconvolution not yet implemented (Phase 2-4)".to_string())
@@ -2236,13 +2215,12 @@ impl RapidDeconvolver {
 
         // Log processing info
         log::info!(
-            "RAPID deconvolve_image: {}x{} image, {:?} blur (L={:.1}, A={:.1}°, R={:.1}, σ={:.1}), λ={:.4}, strength={:.1}%",
+            "RAPID deconvolve_image: {}x{} image, {:?} blur (L={:.1}, A={:.1}°, R={:.1}), λ={:.4}, strength={:.1}%",
             width, height,
             params.modes,
             params.motion_length,
             params.motion_angle,
             params.defocus_radius,
-            params.gaussian_sigma,
             params.lambda,
             params.strength * 100.0
         );
@@ -2679,15 +2657,11 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         .as_f64()
         .unwrap_or(if legacy_on { 5.0 } else { 0.0 }) as f32)
         .min(20.0);
-    let gaussian_sigma = (adjustments["rapidSigma"]
-        .as_f64()
-        .unwrap_or(if legacy_on { 2.0 } else { 0.0 }) as f32)
-        .min(8.0);
     let lambda = (adjustments["rapidLambda"].as_f64().unwrap_or(0.01) as f32)
         .clamp(0.001, 0.1);
     let strength = (adjustments["rapidStrength"].as_f64().unwrap_or(100.0) as f32 / 100.0)
         .clamp(0.0, 1.0);
-    let gen2 = ["rapidMotionEnabled", "rapidDefocusEnabled", "rapidGaussianEnabled"]
+    let gen2 = ["rapidMotionEnabled", "rapidDefocusEnabled"]
         .iter()
         .any(|k| adjustments[*k].is_boolean());
     let mode_on = |key: &str, name: &str, kernel: f32| {
@@ -2703,8 +2677,6 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         motion: mode_on("rapidMotionEnabled", "motion", motion_length) && motion_length > 0.0,
         defocus: mode_on("rapidDefocusEnabled", "defocus", defocus_radius)
             && defocus_radius > 0.0,
-        gaussian: mode_on("rapidGaussianEnabled", "gaussian", gaussian_sigma)
-            && gaussian_sigma > 0.0,
     };
     if !modes.any() || strength <= 0.0 {
         return None;
@@ -2715,7 +2687,6 @@ pub fn parse_rapid_params(adjustments: &serde_json::Value) -> Option<RapidParams
         motion_length,
         motion_angle: adjustments["rapidAngle"].as_f64().unwrap_or(0.0) as f32,
         defocus_radius,
-        gaussian_sigma,
         lambda,
         strength,
         // Always on in production since the toggle was demoted; stale
@@ -2765,11 +2736,7 @@ pub fn migrate_legacy_recovery_state(adjustments: &mut serde_json::Value) {
 }
 
 fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
-    const TOGGLES: [&str; 3] = [
-        "rapidMotionEnabled",
-        "rapidDefocusEnabled",
-        "rapidGaussianEnabled",
-    ];
+    const TOGGLES: [&str; 2] = ["rapidMotionEnabled", "rapidDefocusEnabled"];
     // Any toggle present means the record is already current — only a stray
     // hand-edited rapidEnabled needs cleaning up.
     if TOGGLES.iter().any(|k| adjustments[*k].is_boolean()) {
@@ -2778,13 +2745,12 @@ fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
         }
         return;
     }
-    const LEGACY_KEYS: [&str; 9] = [
+    const LEGACY_KEYS: [&str; 8] = [
         "rapidEnabled",
         "rapidBlurType",
         "rapidLength",
         "rapidAngle",
         "rapidRadius",
-        "rapidSigma",
         "rapidLambda",
         "rapidHardness",
         "rapidStrength",
@@ -2799,25 +2765,23 @@ fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
         .to_string();
     let kernel_len = adjustments["rapidLength"].as_f64().unwrap_or(0.0);
     let kernel_rad = adjustments["rapidRadius"].as_f64().unwrap_or(0.0);
-    let kernel_sig = adjustments["rapidSigma"].as_f64().unwrap_or(0.0);
     let Some(obj) = adjustments.as_object_mut() else {
         return;
     };
-    let mut set_toggles = |motion: bool, defocus: bool, gaussian: bool| {
+    // A legacy record whose only mode was "gaussian" migrates to all-off: the
+    // mode no longer exists, and there is no faithful mapping from a sigma to
+    // a motion length or defocus radius.
+    let mut set_toggles = |motion: bool, defocus: bool| {
         obj.insert("rapidMotionEnabled".to_string(), serde_json::json!(motion));
         obj.insert("rapidDefocusEnabled".to_string(), serde_json::json!(defocus));
-        obj.insert(
-            "rapidGaussianEnabled".to_string(),
-            serde_json::json!(gaussian),
-        );
     };
     match legacy_enabled {
         // Explicit false: the stage was off; stored kernel values are
         // abandoned state, zeroed as before, and every toggle comes out
         // explicit false.
         Some(false) => {
-            set_toggles(false, false, false);
-            for key in ["rapidLength", "rapidRadius", "rapidSigma"] {
+            set_toggles(false, false);
+            for key in ["rapidLength", "rapidRadius"] {
                 obj.insert(key.to_string(), serde_json::json!(0.0));
             }
         }
@@ -2825,16 +2789,8 @@ fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
         // defaults into keys the sidecar never stored so the render
         // survives the flag's removal.
         Some(true) => {
-            set_toggles(
-                legacy_mode == "motion",
-                legacy_mode == "defocus",
-                legacy_mode == "gaussian",
-            );
-            for (key, default) in [
-                ("rapidLength", 10.0),
-                ("rapidRadius", 5.0),
-                ("rapidSigma", 2.0),
-            ] {
+            set_toggles(legacy_mode == "motion", legacy_mode == "defocus");
+            for (key, default) in [("rapidLength", 10.0), ("rapidRadius", 5.0)] {
                 obj.entry(key).or_insert_with(|| serde_json::json!(default));
             }
         }
@@ -2844,7 +2800,6 @@ fn migrate_rapid_state(adjustments: &mut serde_json::Value) {
             set_toggles(
                 legacy_mode == "motion" && kernel_len > 0.0,
                 legacy_mode == "defocus" && kernel_rad > 0.0,
-                legacy_mode == "gaussian" && kernel_sig > 0.0,
             );
         }
     }
@@ -4982,7 +4937,13 @@ fn estimate_gaussian_spectrum(ws: &WorkingSpectrum) -> GaussianEstimate {
     GaussianEstimate { sigma, confidence: t, confident, lambda }
 }
 
-/// Estimate isotropic gaussian blur sigma from an image.
+/// Estimate isotropic gaussian blur sigma from a whole image.
+///
+/// Test-only since the Gaussian recovery mode was removed: production reaches
+/// the estimator through `estimate_gaussian_spectrum`, which the *defocus*
+/// estimator still calls for its soft-optical and attenuated-jinc fallbacks.
+/// The tests over this wrapper are what guard that shared path.
+#[cfg(test)]
 pub fn estimate_gaussian(image: &image::DynamicImage, source_linear: bool) -> GaussianEstimate {
     let ws = working_spectrum(image, source_linear, None, None);
     estimate_gaussian_spectrum(&ws)
@@ -5027,32 +4988,6 @@ pub async fn estimate_defocus_kernel(
 /// Tauri command: estimate the gaussian blur sigma of the currently loaded
 /// image from its spectral falloff. Full-resolution sigma; the frontend
 /// leaves the sliders untouched when `confident` is false.
-#[tauri::command]
-pub async fn estimate_gaussian_kernel(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<GaussianEstimate, String> {
-    let (image, source_linear) = {
-        let guard = state.original_image.lock().unwrap();
-        guard
-            .as_ref()
-            .map(|loaded| (loaded.image.clone(), loaded.is_raw))
-            .ok_or("No image loaded")?
-    };
-    let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_gaussian(&image, source_linear))
-        .await
-        .map_err(|e| format!("Gaussian estimation task failed: {e}"))?;
-    log::info!(
-        "RAPID: gaussian estimate σ={:.2}px λ={:.4} confidence={:.1} ({}confident) in {:?}",
-        estimate.sigma,
-        estimate.lambda,
-        estimate.confidence,
-        if estimate.confident { "" } else { "not " },
-        start.elapsed()
-    );
-    Ok(estimate)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5067,7 +5002,7 @@ mod tests {
     fn test_blur_type_conversion() {
         assert_eq!(BlurType::from(0), BlurType::Motion);
         assert_eq!(BlurType::from(1), BlurType::Defocus);
-        assert_eq!(BlurType::from(2), BlurType::Gaussian);
+        assert_eq!(BlurType::from(2), BlurType::Motion); // Retired gaussian discriminant
         assert_eq!(BlurType::from(99), BlurType::Motion); // Default fallback
     }
 
@@ -5122,81 +5057,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<WienerParams>(), 32);
         assert_eq!(std::mem::size_of::<UtilityParams>(), 32);
         assert_eq!(std::mem::size_of::<NormalizeParams>(), 16);
-    }
-
-    /// CPU lock for the Gaussian-active adaptive-lambda policy in
-    /// wiener_filter.wgsl. Lambda itself must interpolate smoothly between
-    /// the dead-band and live postures without creating a transfer step.
-    #[test]
-    fn test_gaussian_gate_curve_continuous_and_bounded() {
-        const GATE_LOW_POWER: f32 = 0.01;
-        const GATE_HIGH_POWER: f32 = 0.04;
-
-        for &base_lambda in &[0.01f32, 0.05] {
-            for &snr_clamped in &[0.1f32, 1.0, 10.0] {
-                let lambda_dead = base_lambda / snr_clamped.min(1.0);
-                let lambda_live = base_lambda / snr_clamped;
-                let lambda_at_power = |h2: f32| -> f32 {
-                    let t = ((h2 - GATE_LOW_POWER)
-                        / (GATE_HIGH_POWER - GATE_LOW_POWER))
-                        .clamp(0.0, 1.0);
-                    let trust = t * t * (3.0 - 2.0 * t);
-                    lambda_dead + (lambda_live - lambda_dead) * trust
-                };
-
-                assert!(
-                    (lambda_at_power(GATE_LOW_POWER) - lambda_dead).abs() <= 1e-7,
-                    "low endpoint drifted for base lambda {base_lambda}, SNR {snr_clamped}"
-                );
-                assert!(
-                    (lambda_at_power(GATE_HIGH_POWER) - lambda_live).abs() <= 1e-7,
-                    "high endpoint drifted for base lambda {base_lambda}, SNR {snr_clamped}"
-                );
-
-                let lambda_min = lambda_dead.min(lambda_live);
-                let lambda_max = lambda_dead.max(lambda_live);
-                let mut previous_transfer: Option<f32> = None;
-                let mut max_gain = 0.0f32;
-                for step in 0..=100_000u32 {
-                    let h = step as f32 * 1e-5;
-                    let h2 = h * h;
-                    let lambda = lambda_at_power(h2);
-                    assert!(
-                        lambda >= lambda_min - 1e-7 && lambda <= lambda_max + 1e-7,
-                        "lambda {lambda} escaped [{lambda_min}, {lambda_max}] for base lambda \
-                         {base_lambda}, SNR {snr_clamped}, H {h}"
-                    );
-                    let transfer = h2 / (h2 + lambda);
-                    if let Some(previous) = previous_transfer {
-                        assert!(
-                            (transfer - previous).abs() < 0.01,
-                            "restored transfer stepped from {previous} to {transfer} for base \
-                             lambda {base_lambda}, SNR {snr_clamped}, H {h}"
-                        );
-                    }
-                    previous_transfer = Some(transfer);
-                    max_gain = max_gain.max(h / (h2 + lambda));
-                }
-
-                let transfer_at = |h: f32| -> f32 {
-                    let h2 = h * h;
-                    h2 / (h2 + lambda_at_power(h2))
-                };
-                assert!(
-                    (transfer_at(0.15001) - transfer_at(0.14999)).abs() < 0.01,
-                    "former H=0.15 boundary is discontinuous for base lambda {base_lambda}, \
-                     SNR {snr_clamped}"
-                );
-
-                if snr_clamped == 10.0 {
-                    let bound = if base_lambda == 0.01 { 5.22 } else { 4.49 };
-                    assert!(
-                        max_gain < bound,
-                        "gain {max_gain} exceeds {bound} for base lambda {base_lambda}"
-                    );
-                }
-            }
-        }
     }
 
     // ========================================================================
@@ -5434,8 +5294,8 @@ mod tests {
 
         let params = RapidParams {
             enabled: true,
-            modes: ModeSet::GAUSSIAN,
-            gaussian_sigma: 1.5,
+            modes: ModeSet::DEFOCUS,
+            defocus_radius: 1.5,
             lambda: 0.01,
             strength: 1.0,
             ..Default::default()
@@ -5569,7 +5429,7 @@ mod tests {
                 modes,
                 motion_length: 12.0,
                 motion_angle: 0.0,
-                gaussian_sigma: 1.5,
+                defocus_radius: 1.5,
                 lambda: 0.01,
                 strength: 1.0,
                 ..Default::default()
@@ -5578,13 +5438,13 @@ mod tests {
                 .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
                 .expect("deconvolve_image failed")
         };
-        let compound = run(&mut deconv, ModeSet { motion: true, defocus: false, gaussian: true });
+        let compound = run(&mut deconv, ModeSet { motion: true, defocus: true });
         assert_eq!(compound.dimensions(), input.dimensions());
         for p in compound.to_rgb32f().pixels() {
             assert!(p.0.iter().all(|c| c.is_finite()), "non-finite pixel in compound output");
         }
         let motion_only = run(&mut deconv, ModeSet::MOTION);
-        let gaussian_only = run(&mut deconv, ModeSet::GAUSSIAN);
+        let defocus_only = run(&mut deconv, ModeSet::DEFOCUS);
         let differs = |a: &image::DynamicImage, b: &image::DynamicImage| -> bool {
             a.to_rgb8()
                 .pixels()
@@ -5592,7 +5452,7 @@ mod tests {
                 .any(|(pa, pb)| pa.0.iter().zip(&pb.0).any(|(&ca, &cb)| ca.abs_diff(cb) > 1))
         };
         assert!(differs(&compound, &motion_only), "compound output equals motion-only");
-        assert!(differs(&compound, &gaussian_only), "compound output equals gaussian-only");
+        assert!(differs(&compound, &defocus_only), "compound output equals defocus-only");
     }
 
     /// The defocus component's hardness is pinned to 1.0 inside the shader
@@ -6020,152 +5880,6 @@ mod tests {
         );
     }
 
-    /// Gaussian-floor comparison fixture. Floored-shader baselines captured
-    /// 23AUG26 with the adapter printed by the test:
-    ///
-    /// - fixed lambda=0.01: flat_var 1.571030e-3, near_mse 2.423333e-3
-    /// - adaptive lambda=0.01: flat_var 2.697270e-3, near_mse 3.483825e-3
-    /// - adaptive lambda=0.05: flat_var 1.816453e-3, near_mse 2.721453e-3
-    ///
-    /// Unfloored measurements on the same NVIDIA GB10/Vulkan posture:
-    ///
-    /// - fixed lambda=0.01: flat_var 1.415709e-4, near_mse 1.082751e-3
-    /// - adaptive lambda=0.01: flat_var 1.485348e-4, near_mse 1.059713e-3
-    /// - adaptive lambda=0.05: flat_var 5.162276e-5, near_mse 1.096019e-3
-    ///
-    /// The 1.5e-3 absolute MSE ceiling retains about 36% margin above the
-    /// worst accepted candidate measurement. Comparative gates independently
-    /// require each posture to beat its own floored baseline.
-    #[test]
-    fn test_gpu_gaussian_unflooring_noise_bounded() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        })) {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("skipping GPU gaussian unflooring test: no adapter ({e})");
-                return;
-            }
-        };
-        eprintln!("gaussian unflooring adapter: {:?}", adapter.get_info());
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("RAPID gaussian unflooring test device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        }))
-        .expect("failed to create device");
-        let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
-
-        let (width, height) = (256usize, 200usize);
-        let sigma = 2.0f32;
-        let field: Vec<f32> = (0..width * height)
-            .map(|i| {
-                let (x, y) = ((i % width) as i32, (i / width) as i32);
-                if (x - 128).abs() <= 3 && (y - 100).abs() <= 3 { 0.9 } else { 0.4 }
-            })
-            .collect();
-        let blurred = gaussian_blur_field(&field, width, height, sigma);
-        let hash2 = |x: u32, y: u32| -> u32 {
-            let mut h = x.wrapping_mul(0x27D4_EB2F) ^ y.wrapping_mul(0x1656_67B1);
-            h ^= h >> 16;
-            h = h.wrapping_mul(0x7FEB_352D);
-            h ^= h >> 15;
-            h
-        };
-
-        let flat_var = |img: &image::DynamicImage| -> f64 {
-            let rgb = img.to_rgb32f();
-            let (x0, x1, y0, y1) = (40u32, 88u32, 68u32, 132u32);
-            let n = ((x1 - x0) * (y1 - y0)) as f64;
-            let (mut sum, mut sum2) = (0.0f64, 0.0f64);
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let v = rgb.get_pixel(x, y)[0] as f64;
-                    sum += v;
-                    sum2 += v * v;
-                }
-            }
-            let mean = sum / n;
-            (sum2 / n - mean * mean).max(0.0)
-        };
-        let near_mse = |img: &image::DynamicImage| -> f64 {
-            let rgb = img.to_rgb32f();
-            let (x0, x1, y0, y1) = (96u32, 160u32, 84u32, 116u32);
-            let mut sum = 0.0f64;
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let truth = if (x as i32 - 128).abs() <= 3 && (y as i32 - 100).abs() <= 3 {
-                        0.9f32
-                    } else {
-                        0.4f32
-                    };
-                    let d = (rgb.get_pixel(x, y)[0] - truth) as f64;
-                    sum += d * d;
-                }
-            }
-            sum / ((x1 - x0) * (y1 - y0)) as f64
-        };
-
-        let noisy: Vec<f32> = blurred
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                let (x, y) = ((i % width) as u32, (i / width) as u32);
-                v + ((hash2(x, y) & 0xff) as f32 / 255.0 - 0.5) * 0.03
-            })
-            .collect();
-        let input = gray_image(&noisy, width as u32, height as u32);
-
-        let postures = [
-            ("fixed lambda=0.01", 0.01f32, false, 1.571030e-3f64, 2.423333e-3f64),
-            ("adaptive lambda=0.01", 0.01f32, true, 2.697270e-3f64, 3.483825e-3f64),
-            ("adaptive lambda=0.05", 0.05f32, true, 1.816453e-3f64, 2.721453e-3f64),
-        ];
-        let mut observed_variance = [0.0f64; 3];
-        for (index, &(label, lambda, adaptive, floored_var, floored_mse)) in
-            postures.iter().enumerate()
-        {
-            let params = RapidParams {
-                enabled: true,
-                modes: ModeSet::GAUSSIAN,
-                gaussian_sigma: sigma,
-                lambda,
-                strength: 1.0,
-                adaptive,
-                ..Default::default()
-            };
-            let out = deconv
-                .deconvolve_linear_image(&device, &queue, &input, &params, CLIP_GUARD_SAT)
-                .expect("gaussian deconvolve failed");
-            let (v, m) = (flat_var(&out), near_mse(&out));
-            observed_variance[index] = v;
-            eprintln!("gaussian unfloored {label}: flat_var {v:.6e}, near_mse {m:.6e}");
-            assert!(
-                v <= 0.8 * floored_var,
-                "{label}: flat variance {v:.6e} did not improve at least 20% from floored \
-                 baseline {floored_var:.6e}"
-            );
-            assert!(
-                m <= 1.25 * floored_mse,
-                "{label}: near MSE {m:.6e} exceeds 1.25x floored baseline \
-                 {floored_mse:.6e}"
-            );
-            assert!(
-                m <= 1.5e-3,
-                "{label}: near MSE {m:.6e} exceeds the absolute 1.5e-3 ceiling"
-            );
-        }
-        assert!(
-            observed_variance[2] < observed_variance[1],
-            "adaptive lambda=0.05 variance {:.6e} must stay below lambda=0.01 {:.6e}",
-            observed_variance[2],
-            observed_variance[1]
-        );
-    }
-
     /// Chamfer distances against brute-force Euclidean on a small grid: the
     /// 3x3 1/sqrt(2) transform never undershoots and overestimates by at
     /// most ~8% before the cap.
@@ -6217,7 +5931,6 @@ mod tests {
             modes: ModeSet {
                 motion: true,
                 defocus: true,
-                gaussian: false,
             },
             motion_length: 200.0,
             defocus_radius: 10.0,
@@ -6446,8 +6159,10 @@ mod tests {
         let mut deconv = RapidDeconvolver::new(&adapter, &device).expect("failed to create deconvolver");
 
         // Vertical bars with ~2 px per-channel misregistration (R shifted
-        // left, B right — simulated CA), then gaussian-blurred so the
-        // deconvolution has real detail to recover.
+        // left, B right — simulated CA), then softened so the deconvolution
+        // has real detail to recover. The blur used to soften and the model
+        // used to invert need not match: what is under test is the chroma
+        // gain map, not recovery fidelity.
         let (width, height) = (192u32, 160u32);
         let bar = |x: i64| -> f32 {
             if (x.rem_euclid(48)) < 24 { 0.25 } else { 0.75 }
@@ -6467,8 +6182,12 @@ mod tests {
 
         let params = RapidParams {
             enabled: true,
-            modes: ModeSet::GAUSSIAN,
-            gaussian_sigma: 1.5,
+            modes: ModeSet::DEFOCUS,
+            // A gaussian of sigma s spreads about as far as a disk of radius
+            // 2s, so radius 3 is the comparable inverse for the .blur(1.5)
+            // above. The models need not match exactly - what is under test
+            // is the chroma gain map, not recovery fidelity.
+            defocus_radius: 3.0,
             lambda: 0.01,
             strength: 1.0,
             ..Default::default()
@@ -6537,7 +6256,6 @@ mod tests {
             motion_length: 100.0,
             motion_angle: 35.0,
             defocus_radius: 40.0,
-            gaussian_sigma: 4.0,
             lambda: 0.02,
             strength: 0.8,
             ..Default::default()
@@ -6546,16 +6264,14 @@ mod tests {
         let s = p.scaled(0.25);
         assert!((s.motion_length - 25.0).abs() < 1e-6);
         assert!((s.defocus_radius - 10.0).abs() < 1e-6);
-        assert!((s.gaussian_sigma - 1.0).abs() < 1e-6);
         // Non-spatial parameters must be untouched by scaling.
         assert_eq!(s.lambda, p.lambda);
         assert_eq!(s.strength, p.strength);
         assert_eq!(s.motion_angle, p.motion_angle);
 
-        // Motion and Gaussian retain their kernel floors at degenerate scales.
+        // Motion retains its kernel floor at degenerate scales.
         let tiny = p.scaled(0.001);
         assert!(tiny.motion_length >= 1.0);
-        assert!(tiny.gaussian_sigma >= 0.3);
 
         // Defocus preserves an honest sub-pixel working radius.
         let subpixel = RapidParams { defocus_radius: 2.0, ..p }.scaled(0.17);
@@ -6581,11 +6297,12 @@ mod tests {
         let ky = psf_axis_projection(&p, 1);
         assert_eq!(ky.len(), 1, "vertical projection of a horizontal line must be identity");
 
-        // Defocus and gaussian project onto both axes.
-        for p in [
-            RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() },
-            RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() },
-        ] {
+        // Defocus projects onto both axes.
+        for p in [RapidParams {
+            modes: ModeSet::DEFOCUS,
+            defocus_radius: 5.0,
+            ..Default::default()
+        }] {
             for axis in 0..2 {
                 let k = psf_axis_projection(&p, axis);
                 assert!(k.len() > 1);
@@ -6598,11 +6315,10 @@ mod tests {
     fn test_mode_set_bits() {
         assert_eq!(ModeSet::MOTION.bits(), 1);
         assert_eq!(ModeSet::DEFOCUS.bits(), 2);
-        assert_eq!(ModeSet::GAUSSIAN.bits(), 4);
-        let all = ModeSet { motion: true, defocus: true, gaussian: true };
-        assert_eq!(all.bits(), 7);
+        let all = ModeSet { motion: true, defocus: true };
+        assert_eq!(all.bits(), 3);
         assert!(all.any());
-        let none = ModeSet { motion: false, defocus: false, gaussian: false };
+        let none = ModeSet { motion: false, defocus: false };
         assert_eq!(none.bits(), 0);
         assert!(!none.any());
     }
@@ -6614,19 +6330,17 @@ mod tests {
         assert_eq!(kernel_extent(&motion), 10);
         let defocus = RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() };
         assert_eq!(kernel_extent(&defocus), 10);
-        let gaussian = RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() };
-        assert_eq!(kernel_extent(&gaussian), 12);
         // Compound supports add (convolution support is the sum).
         let compound = RapidParams {
-            modes: ModeSet { motion: true, defocus: false, gaussian: true },
+            modes: ModeSet { motion: true, defocus: true },
             motion_length: 10.0,
-            gaussian_sigma: 2.0,
+            defocus_radius: 5.0,
             ..Default::default()
         };
-        assert_eq!(kernel_extent(&compound), 22);
+        assert_eq!(kernel_extent(&compound), 20);
         // An empty set floors at 1 like a sub-pixel kernel.
         let empty = RapidParams {
-            modes: ModeSet { motion: false, defocus: false, gaussian: false },
+            modes: ModeSet { motion: false, defocus: false },
             ..Default::default()
         };
         assert_eq!(kernel_extent(&empty), 1);
@@ -6655,11 +6369,6 @@ mod tests {
             1.269696504e-1, 1.243876815e-1, 1.162930802e-1, 1.013437882e-1, 7.534631342e-2,
             1.914434321e-2,
         ];
-        const GAUSSIAN2_AX0: [f32; 13] = [
-            2.393511590e-3, 9.225073270e-3, 2.781469934e-2, 6.561533362e-2, 1.211178526e-1,
-            1.749509126e-1, 1.977652311e-1, 1.749508977e-1, 1.211178526e-1, 6.561533362e-2,
-            2.781470306e-2, 9.225073270e-3, 2.393511357e-3,
-        ];
         let motion = RapidParams {
             modes: ModeSet::MOTION,
             motion_length: 20.0,
@@ -6668,12 +6377,10 @@ mod tests {
             ..Default::default()
         };
         let defocus = RapidParams { modes: ModeSet::DEFOCUS, defocus_radius: 5.0, ..Default::default() };
-        let gaussian = RapidParams { modes: ModeSet::GAUSSIAN, gaussian_sigma: 2.0, ..Default::default() };
-        let cases: [(&str, &RapidParams, usize, &[f32]); 4] = [
+        let cases: [(&str, &RapidParams, usize, &[f32]); 3] = [
             ("motion ax0", &motion, 0, &MOTION20_H04_AX0),
             ("motion ax1", &motion, 1, &MOTION20_H04_AX1),
             ("defocus ax0", &defocus, 0, &DEFOCUS5_AX0),
-            ("gaussian ax0", &gaussian, 0, &GAUSSIAN2_AX0),
         ];
         for (name, p, axis, golden) in cases {
             let k = psf_axis_projection(p, axis);
@@ -6692,7 +6399,7 @@ mod tests {
         // Motion at 30° + defocus: support = sum of member supports
         // (19 + 11 - 1), unit mass, symmetric (both members are symmetric).
         let p = RapidParams {
-            modes: ModeSet { motion: true, defocus: true, gaussian: false },
+            modes: ModeSet { motion: true, defocus: true },
             motion_length: 20.0,
             motion_angle: 30.0,
             hardness: 0.4,
@@ -6713,7 +6420,7 @@ mod tests {
         // unchanged: horizontal motion projects onto y as [1.0], so
         // motion+defocus on axis 1 equals defocus alone.
         let horiz = RapidParams {
-            modes: ModeSet { motion: true, defocus: true, gaussian: false },
+            modes: ModeSet { motion: true, defocus: true },
             motion_length: 20.0,
             motion_angle: 0.0,
             defocus_radius: 5.0,
@@ -8165,18 +7872,15 @@ mod tests {
         let mut adjustments = serde_json::json!({
             "rapidMotionEnabled": true,
             "rapidDefocusEnabled": true,
-            "rapidGaussianEnabled": true,
             "rapidLength": 5000.0,
             "rapidAngle": 721.0,
             "rapidRadius": 500.0,
-            "rapidSigma": 40.0,
             "rapidLambda": 5.0,
             "rapidStrength": 100.0,
         });
         let params = parse_rapid_params(&adjustments).expect("params should parse");
         assert_eq!(params.motion_length, 200.0);
         assert_eq!(params.defocus_radius, 20.0);
-        assert_eq!(params.gaussian_sigma, 8.0);
         assert_eq!(params.lambda, 0.1);
         assert_eq!(params.motion_angle, 721.0);
 
@@ -8185,11 +7889,9 @@ mod tests {
         assert_eq!(params.lambda, 0.001);
 
         adjustments["rapidMotionEnabled"] = serde_json::json!(false);
-        adjustments["rapidGaussianEnabled"] = serde_json::json!(false);
         let params = parse_rapid_params(&adjustments).expect("defocus should parse");
         assert!(!params.modes.motion);
         assert!(params.modes.defocus);
-        assert!(!params.modes.gaussian);
         assert_eq!(kernel_extent(&params), 40);
     }
 
@@ -8231,7 +7933,6 @@ mod tests {
 
         adjustments["rapidMotionEnabled"] = serde_json::json!(true);
         adjustments["rapidDefocusEnabled"] = serde_json::json!(true);
-        adjustments["rapidGaussianEnabled"] = serde_json::json!(false);
         adjustments["rapidLength"] = serde_json::json!(40.0);
         adjustments["rapidRadius"] = serde_json::json!(8.0);
         let params = parse_rapid_params(&adjustments).expect("compound params should parse");
@@ -8247,7 +7948,6 @@ mod tests {
         let adjustments = serde_json::json!({
             "rapidMotionEnabled": true,
             "rapidDefocusEnabled": false,
-            "rapidGaussianEnabled": false,
             "rapidLength": 116.0,
             "rapidAngle": 0.0,
             "rapidLambda": 0.01,
@@ -8284,7 +7984,6 @@ mod tests {
         let adjustments = serde_json::json!({
             "rapidMotionEnabled": false,
             "rapidDefocusEnabled": false,
-            "rapidGaussianEnabled": false,
             "rapidLength": 50.0,
             "rapidRadius": 8.0,
             "rapidStrength": 100.0,
@@ -8310,18 +8009,13 @@ mod tests {
     fn test_parse_compound_modes() {
         let adjustments = serde_json::json!({
             "rapidMotionEnabled": true,
-            "rapidDefocusEnabled": false,
-            "rapidGaussianEnabled": true,
+            "rapidDefocusEnabled": true,
             "rapidLength": 24.0,
             "rapidRadius": 8.0,
-            "rapidSigma": 1.5,
             "rapidStrength": 100.0,
         });
         let params = parse_rapid_params(&adjustments).expect("compound set should parse");
-        assert_eq!(
-            params.modes,
-            ModeSet { motion: true, defocus: false, gaussian: true }
-        );
+        assert_eq!(params.modes, ModeSet { motion: true, defocus: true });
     }
 
     /// Gen-2 detection is object-wide: one toggle present means absent
@@ -8371,21 +8065,21 @@ mod tests {
     /// kernel: the other modes' stored values must not activate it.
     #[test]
     fn test_parse_gate_active_mode_kernel() {
-        let mk = |blur_type: &str, length: f64, radius: f64, sigma: f64| {
+        let mk = |blur_type: &str, length: f64, radius: f64| {
             serde_json::json!({
                 "rapidBlurType": blur_type,
                 "rapidLength": length,
                 "rapidRadius": radius,
-                "rapidSigma": sigma,
                 "rapidStrength": 100.0,
             })
         };
-        assert!(parse_rapid_params(&mk("motion", 0.0, 5.0, 2.0)).is_none());
-        assert!(parse_rapid_params(&mk("motion", 50.0, 0.0, 0.0)).is_some());
-        assert!(parse_rapid_params(&mk("defocus", 50.0, 0.0, 2.0)).is_none());
-        assert!(parse_rapid_params(&mk("defocus", 0.0, 8.0, 0.0)).is_some());
-        assert!(parse_rapid_params(&mk("gaussian", 50.0, 8.0, 0.0)).is_none());
-        assert!(parse_rapid_params(&mk("gaussian", 0.0, 0.0, 2.5)).is_some());
+        assert!(parse_rapid_params(&mk("motion", 0.0, 5.0)).is_none());
+        assert!(parse_rapid_params(&mk("motion", 50.0, 0.0)).is_some());
+        assert!(parse_rapid_params(&mk("defocus", 50.0, 0.0)).is_none());
+        assert!(parse_rapid_params(&mk("defocus", 0.0, 8.0)).is_some());
+        // The retired gaussian mode matches nothing, so a legacy sidecar
+        // naming it activates no stage regardless of its stored kernels.
+        assert!(parse_rapid_params(&mk("gaussian", 50.0, 8.0)).is_none());
     }
 
     #[test]
@@ -8408,7 +8102,6 @@ mod tests {
         assert_eq!(params.modes, ModeSet::MOTION);
         assert!((params.motion_length - 10.0).abs() < 1e-6);
         assert!((params.defocus_radius - 5.0).abs() < 1e-6);
-        assert!((params.gaussian_sigma - 2.0).abs() < 1e-6);
     }
 
     #[test]
@@ -8422,10 +8115,8 @@ mod tests {
         assert!(off.get("rapidEnabled").is_none());
         assert_eq!(off["rapidLength"], serde_json::json!(0.0));
         assert_eq!(off["rapidRadius"], serde_json::json!(0.0));
-        assert_eq!(off["rapidSigma"], serde_json::json!(0.0));
         assert_eq!(off["rapidMotionEnabled"], serde_json::json!(false));
         assert_eq!(off["rapidDefocusEnabled"], serde_json::json!(false));
-        assert_eq!(off["rapidGaussianEnabled"], serde_json::json!(false));
         assert_eq!(off["rapidStrength"], serde_json::json!(100.0));
         assert_eq!(off["rapidHardness"], serde_json::json!(100.0));
         assert_eq!(off["exposure"], serde_json::json!(1.0));
@@ -8437,10 +8128,8 @@ mod tests {
         assert!(on.get("rapidEnabled").is_none());
         assert_eq!(on["rapidLength"], serde_json::json!(120.0));
         assert_eq!(on["rapidRadius"], serde_json::json!(5.0));
-        assert_eq!(on["rapidSigma"], serde_json::json!(2.0));
         assert_eq!(on["rapidMotionEnabled"], serde_json::json!(true));
         assert_eq!(on["rapidDefocusEnabled"], serde_json::json!(false));
-        assert_eq!(on["rapidGaussianEnabled"], serde_json::json!(false));
     }
 
     /// Gen-1 records (kernel-gated interim, no toggles): the saved mode's
@@ -8453,7 +8142,6 @@ mod tests {
         migrate_legacy_recovery_state(&mut active);
         assert_eq!(active["rapidDefocusEnabled"], serde_json::json!(true));
         assert_eq!(active["rapidMotionEnabled"], serde_json::json!(false));
-        assert_eq!(active["rapidGaussianEnabled"], serde_json::json!(false));
         assert_eq!(active["rapidStrength"], serde_json::json!(100.0));
         assert_eq!(active["rapidHardness"], serde_json::json!(100.0));
 
@@ -8482,7 +8170,7 @@ mod tests {
         assert_eq!(modern, before);
 
         let mut stray = serde_json::json!({
-            "rapidGaussianEnabled": false, "rapidEnabled": true, "rapidLength": 80.0,
+            "rapidDefocusEnabled": false, "rapidEnabled": true, "rapidLength": 80.0,
         });
         migrate_legacy_recovery_state(&mut stray);
         assert!(stray.get("rapidEnabled").is_none());
@@ -8558,7 +8246,6 @@ mod tests {
         let pasted = serde_json::json!({
             "rapidMotionEnabled": true,
             "rapidDefocusEnabled": false,
-            "rapidGaussianEnabled": false,
             "rapidBlurType": "motion",
             "rapidLength": 80.0,
             "rapidStrength": 100.0,
@@ -8619,7 +8306,6 @@ mod tests {
         let adjustments = serde_json::json!({
             "rapidMotionEnabled": false,
             "rapidDefocusEnabled": true,
-            "rapidGaussianEnabled": false,
             "rapidRadius": 3.5,
             "rapidLambda": 0.02,
             "rapidStrength": 80.0,
@@ -9014,7 +8700,6 @@ mod tests {
         let adjustments = serde_json::json!({
             "rapidMotionEnabled": false,
             "rapidDefocusEnabled": true,
-            "rapidGaussianEnabled": false,
             "rapidRadius": 4.0,
             "rapidLambda": 0.02,
             "rapidStrength": 85.0,

@@ -148,13 +148,11 @@ pub fn calculate_transform_hash(adjustments: &serde_json::Value) -> u64 {
         for key in [
             "rapidMotionEnabled",
             "rapidDefocusEnabled",
-            "rapidGaussianEnabled",
-            "rapidBlurType",
+                "rapidBlurType",
             "rapidLength",
             "rapidAngle",
             "rapidRadius",
-            "rapidSigma",
-            "rapidLambda",
+                "rapidLambda",
             "rapidHardness",
             "rapidStrength",
         ] {
@@ -358,12 +356,12 @@ mod tests {
         // Toggling a second mode into the compound set must re-render: the
         // toggle keys are part of the active-state hash.
         let single = serde_json::json!({
-            "rapidMotionEnabled": true, "rapidGaussianEnabled": false,
-            "rapidLength": 50.0, "rapidSigma": 1.5,
+            "rapidMotionEnabled": true, "rapidDefocusEnabled": false,
+            "rapidLength": 50.0, "rapidRadius": 5.0,
         });
         let compound = serde_json::json!({
-            "rapidMotionEnabled": true, "rapidGaussianEnabled": true,
-            "rapidLength": 50.0, "rapidSigma": 1.5,
+            "rapidMotionEnabled": true, "rapidDefocusEnabled": true,
+            "rapidLength": 50.0, "rapidRadius": 5.0,
         });
         assert_ne!(
             calculate_transform_hash(&single),

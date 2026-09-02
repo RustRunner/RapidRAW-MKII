@@ -84,12 +84,10 @@ export enum LowLightAdjustment {
 export enum BlurRecoveryAdjustment {
   RapidMotionEnabled = 'rapidMotionEnabled',
   RapidDefocusEnabled = 'rapidDefocusEnabled',
-  RapidGaussianEnabled = 'rapidGaussianEnabled',
   RapidBlurType = 'rapidBlurType',
   RapidLength = 'rapidLength',
   RapidAngle = 'rapidAngle',
   RapidRadius = 'rapidRadius',
-  RapidSigma = 'rapidSigma',
   RapidLambda = 'rapidLambda',
   RapidHardness = 'rapidHardness',
   RapidStrength = 'rapidStrength',
@@ -196,12 +194,10 @@ export interface Adjustments {
   denoiseChroma: number;
   rapidMotionEnabled: boolean;
   rapidDefocusEnabled: boolean;
-  rapidGaussianEnabled: boolean;
-  rapidBlurType: 'motion' | 'defocus' | 'gaussian';
+  rapidBlurType: 'motion' | 'defocus';
   rapidLength: number;
   rapidAngle: number;
   rapidRadius: number;
-  rapidSigma: number;
   rapidLambda: number;
   rapidHardness: number;
   rapidStrength: number;
@@ -544,12 +540,10 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   denoiseChroma: 0,
   rapidMotionEnabled: false,
   rapidDefocusEnabled: false,
-  rapidGaussianEnabled: false,
   rapidBlurType: 'motion',
   rapidLength: 0,
   rapidAngle: 0,
   rapidRadius: 0,
-  rapidSigma: 0,
   rapidLambda: 0.01,
   rapidHardness: 50,
   rapidStrength: 50,
@@ -715,14 +709,13 @@ export const completeRecoveryGroups = (
 
 type RecoveryLegacy = Partial<Adjustments> & { rapidEnabled?: boolean };
 
-const RAPID_TOGGLE_KEYS = ['rapidMotionEnabled', 'rapidDefocusEnabled', 'rapidGaussianEnabled'] as const;
+const RAPID_TOGGLE_KEYS = ['rapidMotionEnabled', 'rapidDefocusEnabled'] as const;
 const RAPID_LEGACY_KEYS = [
   'rapidEnabled',
   'rapidBlurType',
   'rapidLength',
   'rapidAngle',
   'rapidRadius',
-  'rapidSigma',
   'rapidLambda',
   'rapidHardness',
   'rapidStrength',
@@ -746,30 +739,28 @@ const migrateRapidKeys = (migrated: RecoveryLegacy, pinTaste: boolean): void => 
     return;
   }
   const legacyEnabled = migrated.rapidEnabled;
+  // A legacy record whose saved mode was 'gaussian' matches neither branch
+  // below and migrates to all-off: the mode is gone, and there is no faithful
+  // mapping from a sigma to a motion length or defocus radius.
   const mode = migrated.rapidBlurType ?? 'motion';
   if (legacyEnabled === false) {
     // The stage was off; stored kernel values are abandoned state.
     migrated.rapidMotionEnabled = false;
     migrated.rapidDefocusEnabled = false;
-    migrated.rapidGaussianEnabled = false;
     migrated.rapidLength = 0;
     migrated.rapidRadius = 0;
-    migrated.rapidSigma = 0;
   } else if (legacyEnabled === true) {
     // The saved mode was active; pin the old kernel defaults into keys the
     // object never stored so the render survives the flag's removal.
     migrated.rapidMotionEnabled = mode === 'motion';
     migrated.rapidDefocusEnabled = mode === 'defocus';
-    migrated.rapidGaussianEnabled = mode === 'gaussian';
     migrated.rapidLength = migrated.rapidLength ?? 10;
     migrated.rapidRadius = migrated.rapidRadius ?? 5;
-    migrated.rapidSigma = migrated.rapidSigma ?? 2;
   } else {
     // Kernel-gated interim: only the saved mode could be active, iff its
     // kernel was positive.
     migrated.rapidMotionEnabled = mode === 'motion' && (migrated.rapidLength ?? 0) > 0;
     migrated.rapidDefocusEnabled = mode === 'defocus' && (migrated.rapidRadius ?? 0) > 0;
-    migrated.rapidGaussianEnabled = mode === 'gaussian' && (migrated.rapidSigma ?? 0) > 0;
   }
   if (pinTaste) {
     migrated.rapidStrength = migrated.rapidStrength ?? 100;
@@ -917,12 +908,10 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     denoiseChroma: migratedRecovery.denoiseChroma ?? INITIAL_ADJUSTMENTS.denoiseChroma,
     rapidMotionEnabled: migratedRecovery.rapidMotionEnabled ?? INITIAL_ADJUSTMENTS.rapidMotionEnabled,
     rapidDefocusEnabled: migratedRecovery.rapidDefocusEnabled ?? INITIAL_ADJUSTMENTS.rapidDefocusEnabled,
-    rapidGaussianEnabled: migratedRecovery.rapidGaussianEnabled ?? INITIAL_ADJUSTMENTS.rapidGaussianEnabled,
     rapidBlurType: migratedRecovery.rapidBlurType ?? INITIAL_ADJUSTMENTS.rapidBlurType,
     rapidLength: migratedRecovery.rapidLength ?? INITIAL_ADJUSTMENTS.rapidLength,
     rapidAngle: migratedRecovery.rapidAngle ?? INITIAL_ADJUSTMENTS.rapidAngle,
     rapidRadius: migratedRecovery.rapidRadius ?? INITIAL_ADJUSTMENTS.rapidRadius,
-    rapidSigma: migratedRecovery.rapidSigma ?? INITIAL_ADJUSTMENTS.rapidSigma,
     rapidLambda: migratedRecovery.rapidLambda ?? INITIAL_ADJUSTMENTS.rapidLambda,
     rapidHardness: migratedRecovery.rapidHardness ?? INITIAL_ADJUSTMENTS.rapidHardness,
     rapidStrength: migratedRecovery.rapidStrength ?? INITIAL_ADJUSTMENTS.rapidStrength,

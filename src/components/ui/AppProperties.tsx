@@ -49,7 +49,6 @@ export enum Invokes {
   DuplicateFile = 'duplicate_file',
   EstimateBlurKernel = 'estimate_blur_kernel',
   EstimateDefocusKernel = 'estimate_defocus_kernel',
-  EstimateGaussianKernel = 'estimate_gaussian_kernel',
   EstimateGlareVeil = 'estimate_glare_veil',
   EstimateNoiseLevel = 'estimate_noise_level',
   EstimateExportSizes = 'estimate_export_sizes',
@@ -175,7 +174,7 @@ export interface AppSettings {
   customAiTags?: string[];
   filterCriteria?: FilterCriteria;
   lastFolderState?: any;
-  lastBlurMode?: 'motion' | 'defocus' | 'gaussian';
+  lastBlurMode?: 'motion' | 'defocus';
   pinnedFolders?: any;
   lastRootPath: string | null;
   rootFolders?: string[];

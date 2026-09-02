@@ -22,15 +22,11 @@
 
 // Numerical stability constant
 const EPSILON: f32 = 1e-10;
-// Non-Gaussian dead-band threshold: MAGNITUDE_FLOOR² from psf_generate.wgsl.
+// Dead-band threshold: MAGNITUDE_FLOOR² from psf_generate.wgsl.
 // Bins below it may only raise lambda, never drop it below base. The floored
 // hardness-0 motion envelope squares to this exact f32 value, so the retained
 // >= comparison keeps its shipped live-side behavior bit-for-bit.
 const DEAD_BAND_POWER: f32 = 0.0225;
-// Gaussian OTF confidence changes gradually rather than at a dead-band edge.
-// Interpolate lambda itself from the dead posture through this power interval.
-const GAUSSIAN_GATE_LOW_POWER: f32 = 0.01;  // 0.10²
-const GAUSSIAN_GATE_HIGH_POWER: f32 = 0.04; // 0.20²
 
 // ============================================================================
 // Complex Number Operations
@@ -80,8 +76,8 @@ struct WienerParams {
     strength: f32,         // Blend factor (0 = original, 1 = full deconvolution)
     noise_floor: f32,      // Minimum denominator value
     adaptive: u32,         // 0 = fixed lambda, 1 = adaptive
-    gaussian_active: u32,  // 1 when the compound PSF contains Gaussian
-    _pad: u32,
+    _pad0: u32,            // Keeps the struct at 32 bytes, matching the
+    _pad1: u32,            // Rust WienerParams' _pad: [u32; 2].
 }
 
 @group(0) @binding(0) var image_freq: texture_2d<f32>;    // G(u,v) - degraded image spectrum
@@ -179,20 +175,14 @@ fn wiener_adaptive(@builtin(global_invocation_id) gid: vec3<u32>) {
     let noise_estimate = max(local_power - signal_power, EPSILON);
     let snr_estimate = signal_power / noise_estimate;
 
-    // Adaptive λ: higher in low-SNR regions. Non-Gaussian modes retain the
-    // binary dead-band rule: destroyed bins may only raise λ, never drop it
-    // below base. A Gaussian has no dead band, so Gaussian-active compounds
-    // smoothly interpolate λ across the tail's 0.10-0.20 confidence range.
+    // Adaptive λ: higher in low-SNR regions. Both surviving modes have a dead
+    // band, so the binary rule always applies: destroyed bins may only raise λ,
+    // never drop it below base.
     let base_lambda = max(params.lambda, 0.0001);
     let snr_clamped = clamp(snr_estimate, 0.1, 10.0);
     let h2 = c_mag_sq(H);
     let lambda_divisor = select(min(snr_clamped, 1.0), snr_clamped, h2 >= DEAD_BAND_POWER);
-    let binary_lambda = base_lambda / lambda_divisor;
-    let lambda_dead = base_lambda / min(snr_clamped, 1.0);
-    let lambda_live = base_lambda / snr_clamped;
-    let trust = smoothstep(GAUSSIAN_GATE_LOW_POWER, GAUSSIAN_GATE_HIGH_POWER, h2);
-    let gaussian_lambda = mix(lambda_dead, lambda_live, trust);
-    let adaptive_lambda = select(binary_lambda, gaussian_lambda, params.gaussian_active != 0u);
+    let adaptive_lambda = base_lambda / lambda_divisor;
 
     // Standard Wiener filter with adaptive λ
     let H_conj = c_conj(H);

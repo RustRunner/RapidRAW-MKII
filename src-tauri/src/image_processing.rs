@@ -3684,12 +3684,10 @@ mod tests {
         let initial = serde_json::json!({
             "rapidMotionEnabled": false,
             "rapidDefocusEnabled": false,
-            "rapidGaussianEnabled": false,
             "rapidBlurType": "motion",
             "rapidLength": 0.0,
             "rapidAngle": 0.0,
             "rapidRadius": 0.0,
-            "rapidSigma": 0.0,
             "rapidLambda": 0.01,
             "rapidHardness": 50.0,
             "rapidStrength": 50.0,

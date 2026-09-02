@@ -28,20 +28,13 @@ interface DefocusEstimate {
   lambda: number;
 }
 
-interface GaussianEstimate {
-  sigma: number;
-  confidence: number;
-  confident: boolean;
-  lambda: number;
-}
-
 interface BlurRecoveryPanelProps {
   adjustments: Adjustments;
   setAdjustments(adjustments: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)): any;
   onDragStateChange?(dragging: boolean): void;
 }
 
-const BLUR_TYPES = ['motion', 'defocus', 'gaussian'] as const;
+const BLUR_TYPES = ['motion', 'defocus'] as const;
 type BlurType = (typeof BLUR_TYPES)[number];
 const MOTION_LENGTH_PRESETS = [50, 100, 150, 200];
 const DEFOCUS_RADIUS_PRESETS = [5, 10, 15, 20];
@@ -121,7 +114,6 @@ interface DefocusEstimateRequest {
 const MODE_TOGGLE_KEYS = {
   motion: BlurRecoveryAdjustment.RapidMotionEnabled,
   defocus: BlurRecoveryAdjustment.RapidDefocusEnabled,
-  gaussian: BlurRecoveryAdjustment.RapidGaussianEnabled,
 } as const;
 
 const estimateButtonClass = (busy: boolean) =>
@@ -163,13 +155,13 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
   const contributes: Record<BlurType, boolean> = {
     motion: adjustments.rapidMotionEnabled && adjustments.rapidLength > 0,
     defocus: adjustments.rapidDefocusEnabled && adjustments.rapidRadius > 0,
-    gaussian: adjustments.rapidGaussianEnabled && adjustments.rapidSigma > 0,
   };
-  // lastBlurMode is user-editable JSON on disk - whitelist it so a
-  // malformed value cannot leave the panel with no tab and no body.
-  const storedMode = appSettings?.lastBlurMode;
+  // lastBlurMode is user-editable JSON on disk and may still name the retired
+  // 'gaussian' mode, so the whitelist stays despite the narrower type: a value
+  // outside BLUR_TYPES must not leave the panel with no tab and no body.
+  const storedMode: string | undefined = appSettings?.lastBlurMode;
   const displayedMode: BlurType =
-    storedMode && (BLUR_TYPES as readonly string[]).includes(storedMode) ? storedMode : 'motion';
+    storedMode && (BLUR_TYPES as readonly string[]).includes(storedMode) ? (storedMode as BlurType) : 'motion';
 
   const handleTabClick = (type: BlurType) => {
     if (appSettings) {
@@ -295,37 +287,6 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
       if (defocusRequestRef.current?.requestId === requestId) {
         setIsEstimating(false);
       }
-    }
-  };
-
-  const handleEstimateGaussian = async () => {
-    if (isEstimating) {
-      return;
-    }
-    setIsEstimating(true);
-    const pathAtStart = imagePath();
-    try {
-      const estimate = await invoke<GaussianEstimate>(Invokes.EstimateGaussianKernel);
-      if (imagePath() !== pathAtStart) {
-        return;
-      }
-      if (!estimate?.confident) {
-        toast.error(t('editor.adjustments.blurRecovery.estimateFailedGaussian'));
-        return;
-      }
-      // Top clamp 8: the PSF caps effective sigma there, so applying more
-      // would lie about what renders. Snap to the slider's 0.1 step.
-      const sigma = Math.min(8, Math.max(0.5, Math.round(estimate.sigma * 10) / 10));
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        [BlurRecoveryAdjustment.RapidSigma]: sigma,
-        [BlurRecoveryAdjustment.RapidGaussianEnabled]: true,
-      }));
-      toast.success(t('editor.adjustments.blurRecovery.estimateSuccessGaussian', { sigma: sigma.toFixed(1) }));
-    } catch (err) {
-      toast.error(`${t('editor.adjustments.blurRecovery.estimateFailedGaussian')} (${err})`);
-    } finally {
-      setIsEstimating(false);
     }
   };
 
@@ -485,26 +446,6 @@ export default function BlurRecoveryPanel({ adjustments, setAdjustments, onDragS
                     onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidRadius, e)}
                     step={0.1}
                     value={adjustments.rapidRadius}
-                    onDragStateChange={onDragStateChange}
-                  />
-                </div>
-              )}
-            </>
-          )}
-
-          {displayedMode === 'gaussian' && (
-            <>
-              {modeSwitchRow('gaussian')}
-              {adjustments.rapidGaussianEnabled && (
-                <div className="space-y-2 pt-2 border-t border-bg-secondary">
-                  {estimateButton(handleEstimateGaussian)}
-                  <Slider
-                    label={t('editor.adjustments.blurRecovery.sigma')}
-                    max={8}
-                    min={0}
-                    onChange={(e: any) => handleValueChange(BlurRecoveryAdjustment.RapidSigma, e)}
-                    step={0.1}
-                    value={adjustments.rapidSigma}
                     onDragStateChange={onDragStateChange}
                   />
                 </div>

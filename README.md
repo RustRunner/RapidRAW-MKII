@@ -39,7 +39,7 @@ Mark II is engineered for degraded source material where positive identification
       <p>Built around a true accordion UI, the adjustment panel preserves familiar photographic controls while introducing a dedicated recovery stack. These specialized tools are arranged in a methodical sequence, promoting a disciplined, step-by-step approach to image restoration.</p>
       <ul>
         <li><strong>Artifact Suppression:</strong> Suppress sensor noise and hot pixels to recover baseline detail from low-light, high-ISO environments.</li>
-        <li><strong>Blur Correction:</strong> Correct motion, defocus, or Gaussian blur in the frequency domain to stabilize dynamic or rushed captures.</li>
+        <li><strong>Blur Correction:</strong> Correct motion or defocus blur in the frequency domain to stabilize dynamic or rushed captures.</li>
         <li><strong>Environmental Mitigation:</strong> Estimate and reduce veiling glare caused by harsh lighting or shooting through glass barriers.</li>
         <li><strong>Actionable Export:</strong> Validate changes using split-screen inspection, then export with embedded operational notes and precise location data.</li>
       </ul>
@@ -58,7 +58,7 @@ Mark II is engineered for degraded source material where positive identification
 | Area                    | MKII-specific direction                                                                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Low-Light Recovery**  | Live hot-pixel removal and denoising driven by measured image noise, with separate chroma smoothing and detail preservation.                                        |
-| **Blur Recovery**       | FFT Wiener deconvolution for motion, defocus, and Gaussian blur; includes blur estimation, interactive direction control, presets, and artifact suppression.        |
+| **Blur Recovery**       | FFT Wiener deconvolution for motion and defocus blur; includes blur estimation, interactive direction control, presets, and artifact suppression.        |
 | **Glare Recovery**      | Estimates and subtracts smooth veiling glare while limiting local contrast boost; the estimated veil can be displayed for inspection.                               |
 | **Inspection workflow** | A true accordion adjustment panel with Basic open by default, plus a split-view comparison mode for checking processed detail against the source.                   |
 | **Contextual export**   | Configurable callout boxes with notes, metadata prefill, optional MGRS coordinates, saved templates, placement, spacing, and opacity controls.                      |

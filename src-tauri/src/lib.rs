@@ -2164,7 +2164,6 @@ pub fn run() {
             apply_adjustments,
             rapid_processing::estimate_blur_kernel,
             rapid_processing::estimate_defocus_kernel,
-            rapid_processing::estimate_gaussian_kernel,
             glare_recovery::estimate_glare_veil,
             generate_preview_for_path,
             generate_original_transformed_preview,

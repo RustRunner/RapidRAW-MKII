@@ -8,7 +8,6 @@
 // Supported blur types:
 // - Motion blur: sinc function along motion direction
 // - Defocus blur: jinc function (Bessel J1)
-// - Gaussian blur: Gaussian (self-similar under Fourier transform)
 //
 // Author: RapidRAW Mod1 Team
 // Date: January 2026
@@ -30,13 +29,13 @@ const MAGNITUDE_FLOOR: f32 = 0.15;
 struct PSFParams {
     width: u32,
     height: u32,
-    active_modes: u32,   // Bitmask: bit0 = motion, bit1 = defocus, bit2 = gaussian
+    active_modes: u32,   // Bitmask: bit0 = motion, bit1 = defocus
     motion_length: f32,  // In pixels
     motion_angle: f32,   // Degrees
     defocus_radius: f32, // In pixels
-    gaussian_sigma: f32, // In pixels
     hardness: f32,       // OTF shape. Motion: 0 = Gaussian envelope, 1 = hard line.
                          // Defocus: 0 = floored jinc, 1 = raw jinc (true zeros).
+    _pad: u32,           // Keeps the struct at 32 bytes / 16-byte alignment.
 }
 
 // Note on frequency scaling:
@@ -179,25 +178,6 @@ fn defocus_blur_spectrum(u: f32, v: f32, radius: f32, hardness: f32) -> vec2<f32
     return vec2<f32>(magnitude, 0.0);
 }
 
-/// Gaussian blur PSF in frequency domain
-/// H(u,v) = exp(-2*pi^2*sigma^2*(u^2 + v^2))
-///
-/// A Gaussian is self-similar under Fourier transform and has no zeros, so
-/// its transfer function decays smoothly without a fabricated magnitude
-/// floor. Wiener regularization bounds the inverse; Gaussian-active adaptive
-/// modes use the smooth confidence policy in wiener_filter.wgsl.
-fn gaussian_blur_spectrum(u: f32, v: f32, sigma: f32) -> vec2<f32> {
-    let freq_sq = u * u + v * v;
-
-    // Limit effective sigma - very large sigma attenuates high frequencies too much
-    let effective_sigma = min(sigma, 8.0);
-
-    // H(u,v) = exp(-2*pi^2*sigma^2*(u^2 + v^2))
-    let magnitude = exp(-2.0 * PI * PI * effective_sigma * effective_sigma * freq_sq);
-
-    return vec2<f32>(magnitude, 0.0);
-}
-
 // ============================================================================
 // Main PSF Generation Kernel
 // ============================================================================
@@ -252,9 +232,6 @@ fn generate_psf_spectrum(@builtin(global_invocation_id) gid: vec3<u32>) {
             // uniform can serve motion's slider and this pin simultaneously
             // when both modes are active.
             mag *= defocus_blur_spectrum(u, v, params.defocus_radius, 1.0).x;
-        }
-        if ((params.active_modes & 4u) != 0u) {
-            mag *= gaussian_blur_spectrum(u, v, params.gaussian_sigma).x;
         }
         H = vec2<f32>(mag, 0.0);
     }
