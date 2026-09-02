@@ -2583,9 +2583,10 @@ pub fn get_all_adjustments_from_json(
         .and_then(|m| serde_json::from_value(m.clone()).ok())
         .unwrap_or_default();
 
+    // Must match the producers' filter exactly - see MaskDefinition::produces_bitmap.
     for (i, mask_def) in mask_definitions
         .iter()
-        .filter(|m| m.visible)
+        .filter(|m| m.produces_bitmap())
         .enumerate()
         .take(MAX_MASKS)
     {
@@ -3731,5 +3732,74 @@ mod tests {
             "glareVeilSize": 80.0,
         });
         assert!(!is_image_edited(&parked, false, None));
+    }
+
+    /// Atlas layer `i` carries `mask_adjustments[i]`, so the filter that assigns
+    /// adjustment slots must match the one the bitmap producers use. A mask that
+    /// takes a slot without rendering a layer shifts every later mask's
+    /// adjustments onto its neighbour's shape. The reachable case is a container
+    /// whose last sub-mask was deleted: still visible, no longer renderable.
+    #[test]
+    fn test_mask_adjustment_slots_track_bitmap_layers() {
+        let mask = |id: &str, visible: bool, has_sub_masks: bool, exposure: f64| {
+            let sub_masks = if has_sub_masks {
+                serde_json::json!([{
+                    "id": format!("{id}-sub"),
+                    "type": "radial",
+                    "visible": true,
+                    "invert": false,
+                    "opacity": 100.0,
+                    "mode": "additive",
+                    "parameters": {
+                        "centerX": 0.5, "centerY": 0.5,
+                        "radiusX": 0.25, "radiusY": 0.25,
+                        "rotation": 0.0, "feather": 0.5
+                    }
+                }])
+            } else {
+                serde_json::json!([])
+            };
+            serde_json::json!({
+                "id": id,
+                "name": id,
+                "visible": visible,
+                "invert": false,
+                "opacity": 100.0,
+                "adjustments": { "exposure": exposure },
+                "subMasks": sub_masks,
+            })
+        };
+
+        // B is visible but emptied of sub-masks; D is hidden. Both must be
+        // skipped by *both* sides, leaving A on layer 0 and C on layer 1.
+        let adjustments = serde_json::json!({
+            "masks": [
+                mask("A", true, true, 0.8),
+                mask("B", true, false, 1.6),
+                mask("C", true, true, 2.4),
+                mask("D", false, true, 3.2),
+            ]
+        });
+
+        let definitions: Vec<MaskDefinition> =
+            serde_json::from_value(adjustments["masks"].clone()).unwrap();
+
+        // Producer side: ask the real generator which masks yield a layer.
+        let rendered: Vec<&str> = definitions
+            .iter()
+            .filter(|d| {
+                crate::mask_generation::generate_mask_bitmap(d, 16, 16, 1.0, (0.0, 0.0), None)
+                    .is_some()
+            })
+            .map(|d| d.id.as_str())
+            .collect();
+        assert_eq!(rendered, ["A", "C"]);
+
+        // Consumer side: the same masks, in the same order.
+        let all = get_all_adjustments_from_json(&adjustments, false, None);
+        assert_eq!(all.mask_count as usize, rendered.len());
+        let expected = |slider: f32| slider / SCALES.exposure;
+        assert!((all.mask_adjustments[0].exposure - expected(0.8)).abs() < 1e-5);
+        assert!((all.mask_adjustments[1].exposure - expected(2.4)).abs() < 1e-5);
     }
 }

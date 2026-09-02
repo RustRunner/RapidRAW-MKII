@@ -59,6 +59,18 @@ pub struct MaskDefinition {
 }
 
 impl MaskDefinition {
+    /// Whether this mask occupies a layer in the GPU mask atlas.
+    ///
+    /// Every mask-bitmap producer filters on this via `generate_mask_bitmap`
+    /// returning `None`, and `get_all_adjustments_from_json` assigns
+    /// `mask_adjustments[i]` by position in the *same* filter. The two must
+    /// never diverge: a mask that gets an adjustment slot but no bitmap shifts
+    /// every later mask's adjustments onto the wrong atlas layer. Keep this the
+    /// only definition of the predicate.
+    pub fn produces_bitmap(&self) -> bool {
+        self.visible && !self.sub_masks.is_empty()
+    }
+
     pub fn requires_warped_image(&self) -> bool {
         self.sub_masks
             .iter()
@@ -1325,7 +1337,7 @@ pub fn generate_mask_bitmap(
     crop_offset: (f32, f32),
     warped_image: Option<&DynamicImage>,
 ) -> Option<GrayImage> {
-    if !mask_def.visible || mask_def.sub_masks.is_empty() {
+    if !mask_def.produces_bitmap() {
         return None;
     }
 
