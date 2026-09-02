@@ -485,6 +485,7 @@
       }
     },
     "crop": {
+      "apply": "Aplicar",
       "aspectRatioHeading": "Proporção de Tela",
       "custom": {
         "hPlaceholder": "A",

@@ -463,6 +463,7 @@
       }
     },
     "crop": {
+      "apply": "適用",
       "aspectRatioHeading": "アスペクト比",
       "custom": {
         "hPlaceholder": "H",

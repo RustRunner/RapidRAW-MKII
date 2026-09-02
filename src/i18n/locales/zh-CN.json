@@ -463,6 +463,7 @@
       }
     },
     "crop": {
+      "apply": "应用",
       "aspectRatioHeading": "宽高比",
       "custom": {
         "hPlaceholder": "高",

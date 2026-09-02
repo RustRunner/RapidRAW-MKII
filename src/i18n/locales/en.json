@@ -465,6 +465,7 @@
       }
     },
     "crop": {
+      "apply": "Apply",
       "aspectRatioHeading": "Aspect Ratio",
       "custom": {
         "hPlaceholder": "H",

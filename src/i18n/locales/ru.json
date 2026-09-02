@@ -505,6 +505,7 @@
       }
     },
     "crop": {
+      "apply": "Применить",
       "aspectRatioHeading": "Соотношение сторон",
       "custom": {
         "hPlaceholder": "В",

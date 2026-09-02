@@ -485,6 +485,7 @@
       }
     },
     "crop": {
+      "apply": "Applica",
       "aspectRatioHeading": "Proporzioni",
       "custom": {
         "hPlaceholder": "A",

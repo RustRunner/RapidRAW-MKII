@@ -505,6 +505,7 @@
       }
     },
     "crop": {
+      "apply": "Zastosuj",
       "aspectRatioHeading": "Proporcje",
       "custom": {
         "hPlaceholder": "Wys.",

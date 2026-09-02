@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Aperture,
+  Check,
   FlipHorizontal,
   FlipVertical,
   Grid3x3,
@@ -19,6 +20,7 @@ import { Orientation } from '../../ui/AppProperties';
 import TransformModal from '../../modals/TransformModal';
 import LensCorrectionModal from '../../modals/LensCorrectionModal';
 import { motion } from 'framer-motion';
+import Button from '../../ui/Button';
 import Text from '../../ui/Text';
 import Slider from '../../ui/Slider';
 import { TEXT_COLOR_KEYS, TextColors, TextVariants, TextWeights } from '../../../types/typography';
@@ -51,6 +53,7 @@ export default function CropPanel() {
   const adjustments = useEditorStore((s) => s.adjustments);
   const isStraightenActive = useEditorStore((s) => s.isStraightenActive);
   const activeOverlay = useEditorStore((s) => s.overlayMode);
+  const draftCrop = useEditorStore((s) => s.draftCrop);
   const setEditor = useEditorStore((s) => s.setEditor);
   // Every adjustments write in this panel is a geometry or transform change,
   // so they all fold a pending drag in first. The fold is a no-op when there
@@ -58,6 +61,7 @@ export default function CropPanel() {
   // geometric.
   const {
     setAdjustmentsFoldingDraft: setAdjustments,
+    commitDraftCrop,
     draftToPixelCrop,
     handleRotate,
   } = useEditorActions();
@@ -473,13 +477,21 @@ export default function CropPanel() {
     <div className="flex flex-col h-full">
       <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
         <Text variant={TextVariants.title}>{t('editor.crop.title')}</Text>
-        <button
-          className="p-2 rounded-full hover:bg-surface transition-colors"
-          onClick={handleReset}
-          data-tooltip={t('editor.crop.resetTooltip')}
-        >
-          <RotateCcw size={18} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Enabled exactly when there is unapplied crop work, so the button's
+              own state is the "you have something to apply" signal. */}
+          <Button onClick={commitDraftCrop} disabled={draftCrop === null}>
+            <Check size={16} />
+            {t('editor.crop.apply')}
+          </Button>
+          <button
+            className="p-2 rounded-full hover:bg-surface transition-colors"
+            onClick={handleReset}
+            data-tooltip={t('editor.crop.resetTooltip')}
+          >
+            <RotateCcw size={18} />
+          </button>
+        </div>
       </div>
 
       <div className="grow overflow-y-auto p-4 space-y-8">

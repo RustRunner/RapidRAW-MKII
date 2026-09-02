@@ -6,6 +6,7 @@ import { useEditorStore } from '../store/useEditorStore';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useProcessStore } from '../store/useProcessStore';
+import { useUIStore } from '../store/useUIStore';
 import {
   Adjustments,
   INITIAL_ADJUSTMENTS,
@@ -23,7 +24,7 @@ import {
   rotatePixelCrop90,
 } from '../utils/cropUtils';
 import { Crop, PercentCrop } from 'react-image-crop';
-import { Invokes, SelectedImage } from '../components/ui/AppProperties';
+import { Invokes, Panel, SelectedImage } from '../components/ui/AppProperties';
 import { globalImageCache } from '../utils/ImageLRUCache';
 
 // Scheduled with the snapshot version that was current when the edit was made.
@@ -40,6 +41,11 @@ export const debouncedSetHistory = debounce((newAdj: Adjustments, snapshotVersio
  * to `null` (D7). Returns `prev` unchanged when there is no draft, so callers
  * can fold unconditionally.
  */
+function cropsAreEqual(a: Crop | null | undefined, b: Crop | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
 function foldDraftCrop(prev: Adjustments, draftCrop: PercentCrop | null, selectedImage: SelectedImage | null) {
   if (!draftCrop || !selectedImage?.width || !selectedImage?.height) return prev;
 
@@ -132,6 +138,44 @@ export function useEditorActions() {
       adjustments.orientationSteps || 0,
     );
   }, []);
+
+  /**
+   * Apply: commit the drafted rectangle and leave the panel.
+   *
+   * With no draft this is a pure, write-free exit -- which is what makes Enter
+   * on an untouched panel free. A full-frame draft commits as `crop: null`
+   * (D7), and a draft equal to what is already committed writes nothing and
+   * adds no history entry.
+   */
+  const commitDraftCrop = useCallback(() => {
+    const { selectedImage, adjustments, draftCrop } = useEditorStore.getState();
+    const draftPx = draftToPixelCrop();
+
+    if (draftPx && selectedImage?.width && selectedImage?.height) {
+      const { width: W, height: H } = getOrientedDimensions(
+        selectedImage.width,
+        selectedImage.height,
+        adjustments.orientationSteps || 0,
+      );
+      const canonicalDraft = isFullFrameCrop(draftPx, W, H) ? null : draftPx;
+
+      commitAdjustmentsImmediately((prev) =>
+        cropsAreEqual(prev.crop, canonicalDraft) ? prev : { ...prev, crop: canonicalDraft },
+      );
+    }
+
+    if (draftCrop !== null) {
+      useEditorStore.getState().setEditor({ draftCrop: null });
+    }
+
+    // setRightPanel toggles the panel closed when handed the active one, so
+    // only switch while Crop is still open. That keeps a second activation
+    // (button plus Enter, say) idempotent.
+    const { activeRightPanel, setRightPanel } = useUIStore.getState();
+    if (activeRightPanel === Panel.Crop) {
+      setRightPanel(Panel.Adjustments);
+    }
+  }, [commitAdjustmentsImmediately, draftToPixelCrop]);
 
   // History navigation flushes the pending edit first, so it becomes its own
   // entry and the move lands where the user expects.
@@ -451,6 +495,7 @@ export function useEditorActions() {
     setAdjustmentsFoldingDraft,
     commitAdjustmentsImmediately,
     draftToPixelCrop,
+    commitDraftCrop,
     undoAdjustments,
     redoAdjustments,
     goToAdjustmentsHistoryIndex,
