@@ -134,13 +134,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   // useEditorActions. Editor used to keep a private debounce instance that no
   // navigation path ever cancelled, so an in-flight edit could push the
   // previous image's adjustments onto the next image's freshly reset history.
-  const {
-    setAdjustments,
-    setAdjustmentsFoldingDraft,
-    undoAdjustments,
-    redoAdjustments,
-    goToAdjustmentsHistoryIndex,
-  } = useEditorActions();
+  const { setAdjustments, setAdjustmentsFoldingDraft, undoAdjustments, redoAdjustments, goToAdjustmentsHistoryIndex } =
+    useEditorActions();
 
   const { handleGenerateAiMask, handleQuickErase, handleManualCleanup } = useAiMasking();
 
@@ -1638,8 +1633,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         // spending a history entry, a metadata save, and two GPU renders on a
         // no-op. A centred fit that is not full frame (locked ratio, non-zero
         // rotation) is a real crop and still writes.
-        const wouldBeFullFrame =
-          committedCrop === null && isFullFrameCrop(nextPixelCrop, W, H, CROP_EDGE_TOLERANCE_PX);
+        const wouldBeFullFrame = committedCrop === null && isFullFrameCrop(nextPixelCrop, W, H, CROP_EDGE_TOLERANCE_PX);
 
         if (wouldBeFullFrame && nextPixelCrop) {
           const pct: PercentCrop = {

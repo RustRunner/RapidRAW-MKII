@@ -491,8 +491,7 @@ export const useKeyboardShortcuts = ({
           else if (s.ui.activeRightPanel === Panel.Crop) {
             s.editor.setEditor({ draftCrop: null });
             s.ui.setRightPanel(Panel.Adjustments);
-          }
-          else if (s.ui.isFullScreen) handleToggleFullScreen();
+          } else if (s.ui.isFullScreen) handleToggleFullScreen();
           else if (s.editor.selectedImage) handleBackToLibrary();
         },
       },

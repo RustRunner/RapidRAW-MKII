@@ -36,16 +36,17 @@ export const debouncedSetHistory = debounce((newAdj: Adjustments, snapshotVersio
   state.pushHistory(newAdj);
 }, 500);
 
-/**
- * Fold a pending crop draft into `prev`, canonicalising a full-frame rectangle
- * to `null` (D7). Returns `prev` unchanged when there is no draft, so callers
- * can fold unconditionally.
- */
+/** Geometric equality, ignoring the `unit` tag. */
 function cropsAreEqual(a: Crop | null | undefined, b: Crop | null | undefined): boolean {
   if (!a || !b) return !a && !b;
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
+/**
+ * Fold a pending crop draft into `prev`, canonicalising a full-frame rectangle
+ * to `null` (D7). Returns `prev` unchanged when there is no draft, so callers
+ * can fold unconditionally.
+ */
 function foldDraftCrop(prev: Adjustments, draftCrop: PercentCrop | null, selectedImage: SelectedImage | null) {
   if (!draftCrop || !selectedImage?.width || !selectedImage?.height) return prev;
 
@@ -131,12 +132,7 @@ export function useEditorActions() {
   const draftToPixelCrop = useCallback((): Crop | null => {
     const { draftCrop, selectedImage, adjustments } = useEditorStore.getState();
     if (!draftCrop || !selectedImage?.width || !selectedImage?.height) return null;
-    return percentToPixelCrop(
-      draftCrop,
-      selectedImage.width,
-      selectedImage.height,
-      adjustments.orientationSteps || 0,
-    );
+    return percentToPixelCrop(draftCrop, selectedImage.width, selectedImage.height, adjustments.orientationSteps || 0);
   }, []);
 
   /**
@@ -217,11 +213,7 @@ export function useEditorActions() {
         if (selectedImage?.width && selectedImage?.height) {
           // `prev` is the folded state, so prev.crop already carries the drag.
           if (hadDraft && prev.crop) {
-            const from = getOrientedDimensions(
-              selectedImage.width,
-              selectedImage.height,
-              prev.orientationSteps || 0,
-            );
+            const from = getOrientedDimensions(selectedImage.width, selectedImage.height, prev.orientationSteps || 0);
             const to = getOrientedDimensions(selectedImage.width, selectedImage.height, newOrientationSteps);
             const mapped = rotatePixelCrop90(prev.crop, from.width, from.height, direction);
             newCrop = isFullFrameCrop(mapped, to.width, to.height) ? null : mapped;
@@ -301,31 +293,28 @@ export function useEditorActions() {
     [setEditor],
   );
 
-  const handleResetAdjustments = useCallback(
-    (paths?: string[]) => {
-      const { multiSelectedPaths, libraryActivePath, setLibrary } = useLibraryStore.getState();
-      const { selectedImage, resetHistory } = useEditorStore.getState();
-      const pathsToReset = paths || multiSelectedPaths;
-      if (pathsToReset.length === 0) return;
+  const handleResetAdjustments = useCallback((paths?: string[]) => {
+    const { multiSelectedPaths, libraryActivePath, setLibrary } = useLibraryStore.getState();
+    const { selectedImage, resetHistory } = useEditorStore.getState();
+    const pathsToReset = paths || multiSelectedPaths;
+    if (pathsToReset.length === 0) return;
 
-      pathsToReset.forEach((p) => globalImageCache.delete(p));
-      debouncedSetHistory.cancel();
+    pathsToReset.forEach((p) => globalImageCache.delete(p));
+    debouncedSetHistory.cancel();
 
-      invoke(Invokes.ResetAdjustmentsForPaths, { paths: pathsToReset })
-        .then(() => {
-          if (libraryActivePath && pathsToReset.includes(libraryActivePath))
-            setLibrary({ libraryActiveAdjustments: { ...INITIAL_ADJUSTMENTS } });
-          if (selectedImage && pathsToReset.includes(selectedImage.path)) {
-            const aspect =
-              selectedImage.width && selectedImage.height ? selectedImage.width / selectedImage.height : null;
-            const resetData = { ...INITIAL_ADJUSTMENTS, aspectRatio: aspect, aiPatches: [] };
-            resetHistory(resetData);
-          }
-        })
-        .catch((err) => toast.error(`Failed to reset adjustments: ${err}`));
-    },
-    [],
-  );
+    invoke(Invokes.ResetAdjustmentsForPaths, { paths: pathsToReset })
+      .then(() => {
+        if (libraryActivePath && pathsToReset.includes(libraryActivePath))
+          setLibrary({ libraryActiveAdjustments: { ...INITIAL_ADJUSTMENTS } });
+        if (selectedImage && pathsToReset.includes(selectedImage.path)) {
+          const aspect =
+            selectedImage.width && selectedImage.height ? selectedImage.width / selectedImage.height : null;
+          const resetData = { ...INITIAL_ADJUSTMENTS, aspectRatio: aspect, aiPatches: [] };
+          resetHistory(resetData);
+        }
+      })
+      .catch((err) => toast.error(`Failed to reset adjustments: ${err}`));
+  }, []);
 
   const handleCopyAdjustments = useCallback(async (pathOrEvent?: string | any) => {
     const pathOverride = typeof pathOrEvent === 'string' ? pathOrEvent : undefined;
