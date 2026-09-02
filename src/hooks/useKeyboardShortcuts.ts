@@ -28,8 +28,14 @@ export const useKeyboardShortcuts = ({
   handleToggleFullScreen,
   handleZoomChange,
 }: KeyboardShortcutsProps) => {
-  const { handleRotate, handleCopyAdjustments, handlePasteAdjustments, undoAdjustments, redoAdjustments } =
-    useEditorActions();
+  const {
+    handleRotate,
+    handleCopyAdjustments,
+    handlePasteAdjustments,
+    undoAdjustments,
+    redoAdjustments,
+    commitDraftCrop,
+  } = useEditorActions();
   const { handleRate, handleSetColorLabel } = useLibraryActions();
 
   const sortedListRef = useRef(sortedImageList);
@@ -482,9 +488,29 @@ export const useKeyboardShortcuts = ({
           else if (s.editor.activeAiPatchContainerId) s.editor.setEditor({ activeAiPatchContainerId: null });
           else if (s.editor.activeMaskId) s.editor.setEditor({ activeMaskId: null });
           else if (s.editor.activeMaskContainerId) s.editor.setEditor({ activeMaskContainerId: null });
-          else if (s.ui.activeRightPanel === Panel.Crop) s.ui.setRightPanel(Panel.Adjustments);
+          else if (s.ui.activeRightPanel === Panel.Crop) {
+            s.editor.setEditor({ draftCrop: null });
+            s.ui.setRightPanel(Panel.Adjustments);
+          }
           else if (s.ui.isFullScreen) handleToggleFullScreen();
           else if (s.editor.selectedImage) handleBackToLibrary();
+        },
+      },
+      {
+        // Numpad Enter included via e.key. A focused button owns its own Enter
+        // activation, so exclude those rather than stealing the keypress from
+        // Reset/Apply or double-running Apply.
+        match: (e: KeyboardEvent, s: any) =>
+          e.key === 'Enter' &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.isComposing &&
+          s.ui.activeRightPanel === Panel.Crop &&
+          !(e.target instanceof HTMLButtonElement),
+        execute: (e: KeyboardEvent) => {
+          e.preventDefault();
+          commitDraftCrop();
         },
       },
       {
@@ -545,6 +571,7 @@ export const useKeyboardShortcuts = ({
         state.ui.isRenameFileModalOpen ||
         state.ui.isImportModalOpen ||
         state.ui.isCopyPasteSettingsModalOpen ||
+        state.ui.isCropToolModalOpen ||
         state.ui.confirmModalState.isOpen ||
         state.ui.panoramaModalState.isOpen ||
         state.ui.cullingModalState.isOpen ||
@@ -562,8 +589,17 @@ export const useKeyboardShortcuts = ({
         return;
       }
 
+      // activeElement alone is not enough: a field can blur itself in its own
+      // handler (the custom aspect-ratio input does, on both Enter and Escape)
+      // and those handlers run at the React root, upstream of this window
+      // listener. The keydown target is the element that had focus when the
+      // key went down, so it survives the blur.
+      const targetTag = (event.target as HTMLElement | null)?.tagName;
       const isInputFocused =
-        document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA' ||
+        targetTag === 'INPUT' ||
+        targetTag === 'TEXTAREA';
       if (isInputFocused) return;
 
       for (const builtin of builtinShortcuts) {
@@ -601,6 +637,7 @@ export const useKeyboardShortcuts = ({
     handlePasteAdjustments,
     undoAdjustments,
     redoAdjustments,
+    commitDraftCrop,
     handleRate,
     handleSetColorLabel,
   ]);

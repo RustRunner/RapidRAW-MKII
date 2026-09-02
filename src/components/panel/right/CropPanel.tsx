@@ -25,6 +25,7 @@ import Text from '../../ui/Text';
 import Slider from '../../ui/Slider';
 import { TEXT_COLOR_KEYS, TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { useEditorStore } from '../../../store/useEditorStore';
+import { useUIStore } from '../../../store/useUIStore';
 import { useEditorActions } from '../../../hooks/useEditorActions';
 import { calculateAreaPreservingCrop, calculateCenteredCrop } from '../../../utils/cropUtils';
 import { Crop } from 'react-image-crop';
@@ -54,6 +55,7 @@ export default function CropPanel() {
   const isStraightenActive = useEditorStore((s) => s.isStraightenActive);
   const activeOverlay = useEditorStore((s) => s.overlayMode);
   const draftCrop = useEditorStore((s) => s.draftCrop);
+  const setUI = useUIStore((s) => s.setUI);
   const setEditor = useEditorStore((s) => s.setEditor);
   // Every adjustments write in this panel is a geometry or transform change,
   // so they all fold a pending drag in first. The fold is a no-op when there
@@ -184,6 +186,14 @@ export default function CropPanel() {
       setEditor({ liveRotation: null });
     };
   }, [setEditor]);
+
+  // Neither modal handles keydown or stops propagation, so without this the
+  // global shortcut loop runs underneath them -- Enter would commit the crop
+  // and unmount the modal mid-edit.
+  useEffect(() => {
+    setUI({ isCropToolModalOpen: isTransformModalOpen || isLensModalOpen });
+    return () => setUI({ isCropToolModalOpen: false });
+  }, [isTransformModalOpen, isLensModalOpen, setUI]);
 
   const getEffectiveOriginalRatio = useCallback(() => {
     if (!selectedImage?.width || !selectedImage?.height) {

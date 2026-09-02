@@ -109,6 +109,9 @@ interface UIState {
   renameTargetPaths: Array<string>;
   isImportModalOpen: boolean;
   isCopyPasteSettingsModalOpen: boolean;
+  // Transform / Lens modals are local state inside CropPanel, which the global
+  // shortcut loop cannot see. Mirrored here so the modal guard covers them.
+  isCropToolModalOpen: boolean;
   importTargetFolder: string | null;
   importSourcePaths: Array<string>;
   folderActionTarget: string | null;
@@ -164,6 +167,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   renameTargetPaths: [],
   isImportModalOpen: false,
   isCopyPasteSettingsModalOpen: false,
+  isCropToolModalOpen: false,
   importTargetFolder: null,
   importSourcePaths: [],
   folderActionTarget: null,
