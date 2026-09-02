@@ -141,12 +141,11 @@ export function useEditorActions() {
               selectedImage.width && selectedImage.height ? selectedImage.width / selectedImage.height : null;
             const resetData = { ...INITIAL_ADJUSTMENTS, aspectRatio: aspect, aiPatches: [] };
             resetHistory(resetData);
-            setEditor({ adjustments: resetData });
           }
         })
         .catch((err) => toast.error(`Failed to reset adjustments: ${err}`));
     },
-    [setEditor],
+    [],
   );
 
   const handleCopyAdjustments = useCallback(async (pathOrEvent?: string | any) => {

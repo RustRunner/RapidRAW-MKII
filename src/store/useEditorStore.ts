@@ -5,6 +5,7 @@ import { ChannelConfig } from '../components/adjustments/Curves';
 import { ImageDimensions } from '../hooks/useImageRenderSize';
 import { ToolType } from '../components/panel/right/Masks';
 import { OverlayMode } from '../components/panel/right/CropPanel';
+import { PercentCrop } from 'react-image-crop';
 
 export interface InteractivePatch {
   url: string;
@@ -30,6 +31,9 @@ interface EditorState {
   // History State
   history: Adjustments[];
   historyIndex: number;
+  // Bumped on every whole-snapshot replacement (undo/redo/reset/goTo) so the
+  // crop geometry effect can tell a restored pair from an incremental edit.
+  adjustmentsSnapshotVersion: number;
 
   // Previews & Overlays
   finalPreviewUrl: string | null;
@@ -59,6 +63,9 @@ interface EditorState {
   overlayMode: OverlayMode;
   overlayRotation: number;
   isStraightenActive: boolean;
+  // Uncommitted crop rectangle from a drag gesture. Only handleCropComplete
+  // writes it; Apply/Enter commit it, Escape and geometry folds clear it.
+  draftCrop: PercentCrop | null;
   isBlurAngleAdjusting: boolean;
   blurOverlayAngle: number;
   isWbPickerActive: boolean;
@@ -96,6 +103,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   previewOverride: null,
   history: [INITIAL_ADJUSTMENTS],
   historyIndex: 0,
+  adjustmentsSnapshotVersion: 0,
 
   finalPreviewUrl: null,
   uncroppedAdjustedPreviewUrl: null,
@@ -125,6 +133,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   overlayRotation: 0,
   transformedOriginalUrl: null,
   isStraightenActive: false,
+  draftCrop: null,
   isBlurAngleAdjusting: false,
   blurOverlayAngle: 0,
   isWbPickerActive: false,
@@ -155,7 +164,12 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => {
       if (state.historyIndex > 0) {
         const newIndex = state.historyIndex - 1;
-        return { historyIndex: newIndex, adjustments: state.history[newIndex] };
+        return {
+          historyIndex: newIndex,
+          adjustments: state.history[newIndex],
+          draftCrop: null,
+          adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
+        };
       }
       return state;
     }),
@@ -164,22 +178,34 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => {
       if (state.historyIndex < state.history.length - 1) {
         const newIndex = state.historyIndex + 1;
-        return { historyIndex: newIndex, adjustments: state.history[newIndex] };
+        return {
+          historyIndex: newIndex,
+          adjustments: state.history[newIndex],
+          draftCrop: null,
+          adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
+        };
       }
       return state;
     }),
 
   resetHistory: (initialState) =>
-    set({
+    set((state) => ({
       history: [initialState],
       historyIndex: 0,
       adjustments: initialState,
-    }),
+      draftCrop: null,
+      adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
+    })),
 
   goToHistoryIndex: (index) =>
     set((state) => {
       if (index >= 0 && index < state.history.length) {
-        return { historyIndex: index, adjustments: state.history[index] };
+        return {
+          historyIndex: index,
+          adjustments: state.history[index],
+          draftCrop: null,
+          adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
+        };
       }
       return state;
     }),

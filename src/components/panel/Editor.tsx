@@ -8,7 +8,13 @@ import debounce from 'lodash.debounce';
 
 import { ImageDimensions, RenderSize, useImageRenderSize } from '../../hooks/useImageRenderSize';
 import { Adjustments, AiPatch, MaskContainer } from '../../utils/adjustments';
-import { calculateCenteredCrop, rotateCropCenter } from '../../utils/cropUtils';
+import {
+  CROP_EDGE_TOLERANCE_PX,
+  calculateCenteredCrop,
+  isFullFrameCrop,
+  percentToPixelCrop,
+  rotateCropCenter,
+} from '../../utils/cropUtils';
 import EditorToolbar from './editor/EditorToolbar';
 import ImageCanvas from './editor/ImageCanvas';
 import ProcessingRing from './editor/overlays/ProcessingRing';
@@ -121,6 +127,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const redo = useEditorStore((s) => s.redo);
   const goToHistoryIndex = useEditorStore((s) => s.goToHistoryIndex);
   const pushHistory = useEditorStore((s) => s.pushHistory);
+  const draftCrop = useEditorStore((s) => s.draftCrop);
+  const adjustmentsSnapshotVersion = useEditorStore((s) => s.adjustmentsSnapshotVersion);
   const canUndo = adjustmentsHistoryIndex > 0;
   const canRedo = adjustmentsHistoryIndex < adjustmentsHistory.length - 1;
 
@@ -145,6 +153,10 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const [crop, setCrop] = useState<Crop | null>(null);
   const prevCropParams = useRef<any>(null);
   const lastValidCropRef = useRef<PercentCrop | null>(null);
+  // react-image-crop calls onComplete from componentDidUpdate whenever its crop
+  // prop goes falsy -> truthy. Only a real pointer gesture may create a draft,
+  // so handleCropChange arms this and handleCropComplete consumes it.
+  const cropGestureRef = useRef(false);
 
   const [isMaskHovered, setIsMaskHovered] = useState(false);
   const [isMaskTouchInteracting, setIsMaskTouchInteracting] = useState(false);
@@ -1416,15 +1428,52 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
       return;
     }
 
-    const { aspectRatio, orientationSteps = 0, crop: currentAdjCrop, rotation = 0 } = adjustments;
+    const { aspectRatio, orientationSteps = 0, crop: committedCrop, rotation = 0 } = adjustments;
     const effectiveRotation = liveRotation !== null && liveRotation !== undefined ? liveRotation : rotation;
+    const isDraggingRotation = liveRotation !== null && liveRotation !== undefined;
+
+    // While a drag is pending, project the rectangle the user is actually
+    // editing rather than the stale committed one.
+    const draftPx = percentToPixelCrop(draftCrop, selectedImage.width, selectedImage.height, orientationSteps);
+    const currentAdjCrop = draftPx ?? committedCrop;
+
+    // A whole-snapshot replacement (image switch, undo/redo, metadata refresh)
+    // is not an incremental geometry edit. Re-baseline onto it instead of
+    // rotating, re-centring, or re-writing an already-consistent pair.
+    const identityChanged =
+      prevCropParams.current?.imagePath !== selectedImage.path ||
+      prevCropParams.current?.snapshotVersion !== adjustmentsSnapshotVersion;
+
+    if (identityChanged) {
+      prevCropParams.current = {
+        imagePath: selectedImage.path,
+        snapshotVersion: adjustmentsSnapshotVersion,
+        rotation,
+        aspectRatio,
+        orientationSteps,
+      };
+      cropGestureRef.current = false;
+      if (committedCrop) {
+        // Trust the restored pair; the percent-sync effect displays it.
+        return;
+      }
+      // A null committed crop still needs its initial fit below.
+    }
 
     const geometryChanged =
       prevCropParams.current?.rotation !== rotation ||
       prevCropParams.current?.aspectRatio !== aspectRatio ||
       prevCropParams.current?.orientationSteps !== orientationSteps;
 
-    const isDraggingRotation = liveRotation !== null && liveRotation !== undefined;
+    // Every in-panel writer folds and clears the draft in one transition, so a
+    // draft surviving a committed geometry change means an unanticipated
+    // external writer. Drop it rather than heal from it; the effect re-runs on
+    // the resulting draftCrop change and heals normally.
+    if (draftCrop && geometryChanged && !isDraggingRotation) {
+      setEditor({ draftCrop: null });
+      return;
+    }
+
     const needsRecalc = currentAdjCrop === null || geometryChanged || isDraggingRotation;
 
     if (needsRecalc) {
@@ -1581,9 +1630,34 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           lastValidCropRef.current = pc;
         }
       } else {
-        prevCropParams.current = { rotation, aspectRatio, orientationSteps };
+        prevCropParams.current = {
+          imagePath: selectedImage.path,
+          snapshotVersion: adjustmentsSnapshotVersion,
+          rotation,
+          aspectRatio,
+          orientationSteps,
+        };
 
-        if (
+        // Panel entry on an uncropped image lands here with a centred fit that
+        // *is* the whole frame. A full-frame crop and null are the same crop,
+        // so populate the overlay and leave `crop: null` committed rather than
+        // spending a history entry, a metadata save, and two GPU renders on a
+        // no-op. A centred fit that is not full frame (locked ratio, non-zero
+        // rotation) is a real crop and still writes.
+        const wouldBeFullFrame =
+          committedCrop === null && isFullFrameCrop(nextPixelCrop, W, H, CROP_EDGE_TOLERANCE_PX);
+
+        if (wouldBeFullFrame && nextPixelCrop) {
+          const pct: PercentCrop = {
+            unit: '%',
+            x: (nextPixelCrop.x / W) * 100,
+            y: (nextPixelCrop.y / H) * 100,
+            width: (nextPixelCrop.width / W) * 100,
+            height: (nextPixelCrop.height / H) * 100,
+          };
+          setCrop(pct);
+          lastValidCropRef.current = pct;
+        } else if (
           nextPixelCrop &&
           (!currentAdjCrop ||
             Math.abs(currentAdjCrop.x - nextPixelCrop.x) > 1 ||
@@ -1600,11 +1674,25 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     adjustments.crop,
     adjustments.orientationSteps,
     adjustments.rotation,
+    adjustmentsSnapshotVersion,
+    draftCrop,
     liveRotation,
     isCropping,
     selectedImage,
     setAdjustments,
+    setEditor,
   ]);
+
+  // Leaving crop mode always discards an unapplied drag: Apply and Enter commit
+  // before the panel changes, Escape and a direct panel switch discard by
+  // design (D3), and a gesture abandoned before onComplete leaves the ref armed.
+  useEffect(() => {
+    if (isCropping) {
+      return;
+    }
+    cropGestureRef.current = false;
+    setEditor({ draftCrop: null });
+  }, [isCropping, setEditor]);
 
   useEffect(() => {
     if (!isCropping || !selectedImage?.width) {
@@ -1638,6 +1726,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
 
   const handleCropChange = useCallback(
     (_pixelCrop: Crop, percentCrop: PercentCrop) => {
+      cropGestureRef.current = true;
       if (!selectedImage) return;
 
       const orientationSteps = adjustments.orientationSteps || 0;
@@ -1907,6 +1996,14 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
 
   const handleCropComplete = useCallback(
     (_: any, pc: PercentCrop) => {
+      // Consume the gesture ref before any early return: an invalid or
+      // interrupted completion must not leave the ref armed for a later
+      // programmatic onComplete.
+      const wasGesture = cropGestureRef.current;
+      cropGestureRef.current = false;
+      if (!wasGesture) {
+        return;
+      }
       if (!pc.width || !pc.height || !selectedImage?.width) {
         return;
       }
@@ -1914,28 +2011,11 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         return;
       }
 
-      const orientationSteps = adjustments.orientationSteps || 0;
-      const isSwapped = orientationSteps === 1 || orientationSteps === 3;
-
-      const baseW = isSwapped ? selectedImage.height : selectedImage.width;
-      const baseH = isSwapped ? selectedImage.width : selectedImage.height;
-
-      const newPixelCrop: Crop = {
-        unit: 'px',
-        x: Math.ceil((pc.x / 100) * baseW),
-        y: Math.ceil((pc.y / 100) * baseH),
-        width: Math.floor((pc.width / 100) * baseW),
-        height: Math.floor((pc.height / 100) * baseH),
-      };
-
-      setAdjustments((prev: Adjustments) => {
-        if (JSON.stringify(newPixelCrop) !== JSON.stringify(prev.crop)) {
-          return { ...prev, crop: newPixelCrop };
-        }
-        return prev;
-      });
+      // Draft only. adjustments.crop is written by Apply/Enter, or by a
+      // geometry control folding this draft in.
+      setEditor({ draftCrop: pc });
     },
-    [selectedImage, adjustments.orientationSteps, setAdjustments, liveRotation],
+    [selectedImage?.width, setEditor, liveRotation],
   );
 
   if (!selectedImage) {

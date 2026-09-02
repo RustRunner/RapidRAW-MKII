@@ -87,6 +87,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       isWbPickerActive: false,
       activeAiSubMaskId: null,
       transformedOriginalUrl: null,
+      draftCrop: null,
     });
 
     selectedImagePathRef.current = null;
@@ -94,7 +95,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
     setLibrary({ libraryActivePath: lastActivePath });
     setUI({ slideDirection: 1 });
 
-    setEditor({ adjustments: INITIAL_ADJUSTMENTS });
     resetHistory(INITIAL_ADJUSTMENTS);
     useEditorStore.getState().patchesSentToBackend.clear();
 
@@ -112,6 +112,13 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const { setUI } = useUIStore.getState();
 
       if (selectedImage?.path === path) return;
+
+      // Drop any pending crop draft before the first await below. The crop
+      // panel stays open across image switches, so deferring this would leave
+      // the old image's rectangle committable while the cache check is in
+      // flight. The later resetHistory bumps adjustmentsSnapshotVersion, which
+      // lets the geometry effect re-baseline onto the new image safely.
+      setEditor({ draftCrop: null });
 
       useEditorStore.getState().patchesSentToBackend.clear();
       debouncedSave.flush();
@@ -176,7 +183,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           uncroppedAdjustedPreviewUrl: cached.uncroppedPreviewUrl,
         });
 
-        setEditor({ adjustments: cached.adjustments });
         resetHistory(cached.adjustments);
         prevAdjustmentsRef.current = { path, adjustments: cached.adjustments };
 
@@ -210,7 +216,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
               freshAdjustments = { ...INITIAL_ADJUSTMENTS };
             }
             if (!isSliderDragging && JSON.stringify(cached.adjustments) !== JSON.stringify(freshAdjustments)) {
-              setEditor({ adjustments: freshAdjustments });
               resetHistory(freshAdjustments);
               prevAdjustmentsRef.current = { path, adjustments: freshAdjustments };
               globalImageCache.set(path, { ...cached, adjustments: freshAdjustments });
@@ -334,7 +339,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           debouncedSave.flush();
           debouncedSetHistory.cancel();
           setEditor({ selectedImage: null, finalPreviewUrl: null, uncroppedAdjustedPreviewUrl: null, histogram: null });
-          setEditor({ adjustments: INITIAL_ADJUSTMENTS });
           resetHistory(INITIAL_ADJUSTMENTS);
           useEditorStore.getState().patchesSentToBackend.clear();
         }

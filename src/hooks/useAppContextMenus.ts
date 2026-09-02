@@ -161,7 +161,7 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
       event.preventDefault();
       event.stopPropagation();
 
-      const { selectedImage, history, historyIndex, undo, redo, resetHistory, copiedAdjustments, setEditor } =
+      const { selectedImage, history, historyIndex, undo, redo, resetHistory, copiedAdjustments } =
         useEditorStore.getState();
       const { appSettings } = useSettingsStore.getState();
       const { setRightPanel, setUI } = useUIStore.getState();
@@ -298,7 +298,6 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
                   aspectRatio: originalAspectRatio,
                   aiPatches: [],
                 });
-                setEditor({ adjustments: { ...INITIAL_ADJUSTMENTS, aspectRatio: originalAspectRatio, aiPatches: [] } });
               },
             },
           ],
@@ -324,7 +323,7 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
       event.preventDefault();
       event.stopPropagation();
 
-      const { selectedImage, copiedAdjustments, setEditor } = useEditorStore.getState();
+      const { selectedImage, copiedAdjustments } = useEditorStore.getState();
       const { multiSelectedPaths, imageList, libraryActivePath, albumTree, activeAlbumId, setLibrary } =
         useLibraryStore.getState();
       const { appSettings } = useSettingsStore.getState();
@@ -452,7 +451,6 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
               const metadata: any = await invoke(Invokes.LoadMetadata, { path: selectedImage.path });
               if (metadata.adjustments && !metadata.adjustments.is_null) {
                 const normalized = normalizeLoadedAdjustments(metadata.adjustments);
-                setEditor({ adjustments: normalized });
                 useEditorStore.getState().resetHistory(normalized);
               }
             }
