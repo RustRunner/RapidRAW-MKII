@@ -696,6 +696,20 @@ const FLARE_MAP_SIZE: u32 = 512;
 
 impl GpuProcessor {
     pub fn new(context: GpuContext, max_width: u32, max_height: u32) -> Result<Self, String> {
+        Self::with_shader(
+            context,
+            max_width,
+            max_height,
+            include_str!("shaders/shader.wgsl"),
+        )
+    }
+
+    fn with_shader(
+        context: GpuContext,
+        max_width: u32,
+        max_height: u32,
+        shader: &str,
+    ) -> Result<Self, String> {
         let device = &context.device;
         const MAX_MASK_BINDINGS: u32 = 1;
 
@@ -917,7 +931,7 @@ impl GpuProcessor {
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Image Processing Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader.into()),
         });
 
         let mut bind_group_layout_entries = vec![
@@ -2331,7 +2345,7 @@ mod tests {
     /// Requests an adapter and builds a compute-only GpuContext, or returns
     /// None (after logging) so GPU tests skip gracefully on machines with no
     /// adapter.
-    fn test_gpu_context(label: &str) -> Option<crate::image_processing::GpuContext> {
+    pub(super) fn test_gpu_context(label: &str) -> Option<crate::image_processing::GpuContext> {
         use std::sync::Arc;
 
         let instance =
@@ -2342,17 +2356,22 @@ mod tests {
         })) {
             Ok(a) => a,
             Err(e) => {
+                assert!(
+                    std::env::var_os("REQUIRE_GPU_TESTS").is_none(),
+                    "{label}: GPU required but no adapter ({e})"
+                );
                 eprintln!("skipping {label}: no adapter ({e})");
                 return None;
             }
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some(label),
-            required_features: wgpu::Features::empty(),
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: adapter.limits(),
             ..Default::default()
         }))
         .expect("failed to create device");
+        eprintln!("{label}: {:?}", adapter.get_info());
         Some(crate::image_processing::GpuContext {
             device: Arc::new(device),
             queue: Arc::new(queue),
@@ -2375,7 +2394,7 @@ mod tests {
         }))
     }
 
-    fn upload_rgba16f(
+    pub(super) fn upload_rgba16f(
         context: &crate::image_processing::GpuContext,
         img: &image::DynamicImage,
     ) -> wgpu::TextureView {
@@ -3014,3 +3033,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod denoise_tests;

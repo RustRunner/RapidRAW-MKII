@@ -1601,14 +1601,50 @@ fn bilateral_filter_luma(
     return weighted_sum / max(weight_sum, 0.0001);
 }
 
-// Stronger smoothing for chroma channels (less perceptually important)
+// Extended sRGB guide: the linear toe includes negative values, and the
+// power branch has a nonnegative argument even when select evaluates both.
+// Highlights remain above 1; this guide never clips the averaged linear RGB.
+fn denoise_guide(rgb: vec3<f32>) -> vec3<f32> {
+    let high = 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    let encoded = select(high, 12.92 * rgb, rgb <= vec3<f32>(0.0031308));
+    return rgb_to_ycbcr(encoded);
+}
+
+fn denoise_median3(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+    return max(min(a, b), min(max(a, b), c));
+}
+
+// A separable 3x3 median stabilizes the range guide without averaging across
+// a clean color step. Spacing follows the chroma kernel so the guide also
+// suppresses correlated demosaicing noise at full resolution. The filter
+// averages original linear chroma, not these guide samples.
+fn denoise_local_guide(coord: vec2<i32>, step: i32, is_raw: u32) -> vec3<f32> {
+    let upper = denoise_median3(
+        load_linear_sample(coord + vec2<i32>(-step, -step), is_raw),
+        load_linear_sample(coord + vec2<i32>(0, -step), is_raw),
+        load_linear_sample(coord + vec2<i32>(step, -step), is_raw));
+    let middle = denoise_median3(
+        load_linear_sample(coord + vec2<i32>(-step, 0), is_raw),
+        load_linear_sample(coord, is_raw),
+        load_linear_sample(coord + vec2<i32>(step, 0), is_raw));
+    let lower = denoise_median3(
+        load_linear_sample(coord + vec2<i32>(-step, step), is_raw),
+        load_linear_sample(coord + vec2<i32>(0, step), is_raw),
+        load_linear_sample(coord + vec2<i32>(step, step), is_raw));
+    return denoise_guide(denoise_median3(upper, middle, lower));
+}
+
+// Chroma is averaged in linear light, with encoded contrast as the guide.
 fn smooth_chroma(
     coord: vec2<i32>,
     spatial_sigma: f32,
+    range_tolerance: f32,
     radius: i32,
     step: i32,
     is_raw: u32
 ) -> vec2<f32> {
+    let center_guide = denoise_local_guide(coord, step, is_raw);
+    let center_luma_guide = denoise_guide(load_linear_sample(coord, is_raw)).x;
     var cb_sum: f32 = 0.0;
     var cr_sum: f32 = 0.0;
     var weight_sum: f32 = 0.0;
@@ -1619,11 +1655,23 @@ fn smooth_chroma(
     // identical at every resolution.
     for (var dy = -radius; dy <= radius; dy++) {
         for (var dx = -radius; dx <= radius; dx++) {
-            let sample_ycbcr =
-                rgb_to_ycbcr(load_linear_sample(coord + vec2<i32>(dx * step, dy * step), is_raw));
-
+            let sample_rgb = load_linear_sample(coord + vec2<i32>(dx * step, dy * step), is_raw);
+            let sample_ycbcr = rgb_to_ycbcr(sample_rgb);
+            let guide_diff = denoise_local_guide(coord + vec2<i32>(dx * step, dy * step), step, is_raw) - center_guide;
+            let chroma_distance_sq = dot(guide_diff.yz, guide_diff.yz);
+            let normalized_chroma_sq = chroma_distance_sq / (range_tolerance * range_tolerance);
+            let normalized_chroma_fourth = normalized_chroma_sq * normalized_chroma_sq;
+            let w_chroma = exp(-normalized_chroma_fourth * normalized_chroma_fourth);
+            // With saturated colors, changing linear chroma while retaining
+            // noisy luminance can clip a low channel on reconstruction. Keep
+            // closer original-luma neighbors there; near neutrals, stabilize
+            // the guide so luminance noise cannot defeat chroma smoothing.
+            let saturation_guard = smoothstep(0.04, 0.16, length(center_guide.yz));
+            let stable_luma_weight = denoise_range_weight(guide_diff.x, 2.0 * range_tolerance);
+            let original_luma_weight = denoise_range_weight(denoise_guide(sample_rgb).x - center_luma_guide, 0.4 * range_tolerance);
+            let w_luma = mix(stable_luma_weight, original_luma_weight, saturation_guard);
             let dist_sq = f32(dx * dx + dy * dy);
-            let w = denoise_spatial_weight(dist_sq, spatial_sigma);
+            let w = denoise_spatial_weight(dist_sq, spatial_sigma) * w_chroma * w_luma;
 
             cb_sum += sample_ycbcr.y * w;
             cr_sum += sample_ycbcr.z * w;
@@ -1687,12 +1735,14 @@ fn apply_denoise(
 
     if (effective_chroma > 0.1) {
         let chroma_sigma = mix(1.0, 4.0, effective_chroma / 100.0);
-        let chroma_radius = max(radius, 2);
+        let chroma_radius = i32(mix(2.0, 4.0, effective_chroma / 100.0));
+        // Tolerance is encoded Cb/Cr distance, in normalized (0-1) units.
+        let chroma_range = mix(4.0, 14.0, effective_chroma / 100.0) / 255.0;
         // Dilate with resolution so the footprint tracks chroma blob size;
         // a fixed 2-4px kernel does nothing on full-resolution images.
         let chroma_step = max(1, i32(round(scale)));
 
-        let smoothed_chroma = smooth_chroma(coord, chroma_sigma, chroma_radius, chroma_step, is_raw);
+        let smoothed_chroma = smooth_chroma(coord, chroma_sigma, chroma_range, chroma_radius, chroma_step, is_raw);
 
         let chroma_blend = effective_chroma / 100.0;
         new_cb = mix(ycbcr.y, smoothed_chroma.x, chroma_blend);
