@@ -10,6 +10,7 @@ import { TextColors, TextVariants, TextWeights } from '../../../types/typography
 import { useLibraryStore } from '../../../store/useLibraryStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
 import { findGroupVariants, getVariantLabel } from '../../../utils/imageGrouping';
+import type { ImageDimensions } from '../../../hooks/useImageRenderSize';
 
 interface EditorToolbarProps {
   canRedo: boolean;
@@ -24,6 +25,7 @@ interface EditorToolbarProps {
   onToggleSplitView(): void;
   onUndo(): void;
   selectedImage: SelectedImage;
+  croppedDimensions: ImageDimensions | null;
   showOriginal: boolean;
   splitView: boolean;
   showDateView: boolean;
@@ -47,6 +49,7 @@ const EditorToolbar = memo(
     onToggleSplitView,
     onUndo,
     selectedImage,
+    croppedDimensions,
     showOriginal,
     splitView,
     showDateView,
@@ -68,7 +71,9 @@ const EditorToolbar = memo(
     const historyContainerRef = useRef<HTMLDivElement>(null);
     const historyButtonRef = useRef<HTMLDivElement>(null);
 
-    const showResolution = !isAndroid && selectedImage.width > 0 && selectedImage.height > 0;
+    const resolutionWidth = croppedDimensions?.width ?? selectedImage.width;
+    const resolutionHeight = croppedDimensions?.height ?? selectedImage.height;
+    const showResolution = !isAndroid && resolutionWidth > 0 && resolutionHeight > 0;
     const [displayedResolution, setDisplayedResolution] = useState('');
 
     const imageList = useLibraryStore((s) => s.imageList);
@@ -130,9 +135,9 @@ const EditorToolbar = memo(
 
     useEffect(() => {
       if (showResolution) {
-        setDisplayedResolution(` - ${selectedImage.width} × ${selectedImage.height}`);
+        setDisplayedResolution(` - ${resolutionWidth} × ${resolutionHeight}`);
       }
-    }, [showResolution, selectedImage.width, selectedImage.height]);
+    }, [showResolution, resolutionWidth, resolutionHeight]);
 
     useEffect(() => {
       const wasLoadingResolution = prevIsLoadingRef.current && !isLoading;

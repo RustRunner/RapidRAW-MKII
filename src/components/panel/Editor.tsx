@@ -2061,6 +2061,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           onToggleSplitView={toggleSplitView}
           onUndo={undoAdjustments}
           selectedImage={selectedImage}
+          croppedDimensions={croppedDimensions}
           showOriginal={showOriginal}
           splitView={splitView}
           showDateView={showExifDateView}
