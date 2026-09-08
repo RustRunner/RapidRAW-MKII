@@ -299,7 +299,7 @@ fn audit_real_raw_measurements() {
     let mut report = Vec::new();
     for path in std::env::split_paths(&paths) {
         let bytes = std::fs::read(&path).unwrap();
-        let mut img = crate::raw_processing::develop_raw_image(
+        let decoded = crate::raw_processing::develop_raw_image(
             &bytes,
             false,
             2.5,
@@ -307,18 +307,55 @@ fn audit_real_raw_measurements() {
             None,
         )
         .unwrap();
+        let mut record = |img: &DynamicImage, is_linear: bool, variant: &str| {
+            let started = std::time::Instant::now();
+            let analysis = analyze_source(img, is_linear);
+            let elapsed = started.elapsed().as_millis();
+            eprintln!("RAW {} variant={variant} usable={} ms={elapsed} clipped={:.2}% patch_range={:.2}%..{:.2}% bins={:?}",
+                path.display(), analysis.measurement.is_usable(), 100.0 * analysis.measurement.quality.clipped_pixel_fraction,
+                100.0 * analysis.measurement.quality.min_patch_clipped_fraction, 100.0 * analysis.measurement.quality.max_patch_clipped_fraction,
+                analysis.measurement.quality.qualified_by_bin);
+            report.push(serde_json::json!({"path":path,"variant":variant,"is_linear":is_linear,"width":img.width(),"height":img.height(),"analysis_ms":elapsed,"legacy_source":analysis.legacy_source,"measurement":analysis.measurement}));
+        };
+        let mut img = decoded.clone();
         crate::image_processing::remove_raw_artifacts_and_enhance(&mut img, 14.0, 0.35);
-        let started = std::time::Instant::now();
-        let analysis = analyze_source(&img, true);
-        eprintln!(
-            "RAW {} usable={} analysis_ms={} quality={:?} bins={:?}",
-            path.display(),
-            analysis.measurement.is_usable(),
-            started.elapsed().as_millis(),
-            analysis.measurement.quality,
-            analysis.measurement.bins
-        );
-        report.push(serde_json::json!({"path":path,"width":img.width(),"height":img.height(),"legacy_source":analysis.legacy_source,"measurement":analysis.measurement}));
+        record(&img, true, "default");
+        if std::env::var_os("DENOISE_RAW_VARIANTS").is_some() {
+            record(&decoded, true, "develop_only");
+            for (nr, sharp, label) in [(14.0, 0.0, "color_nr_only"), (0.0, 0.35, "sharpen_only")] {
+                let mut variant = decoded.clone();
+                crate::image_processing::remove_raw_artifacts_and_enhance(&mut variant, nr, sharp);
+                record(&variant, true, label);
+            }
+            let rgb = img.to_rgb32f();
+            let rgb8 = RgbImage::from_fn(rgb.width(), rgb.height(), |x, y| {
+                Rgb(rgb
+                    .get_pixel(x, y)
+                    .0
+                    .map(|c| (encode(c).clamp(0.0, 1.0) * 255.0).round() as u8))
+            });
+            record(
+                &DynamicImage::ImageRgb8(rgb8.clone()),
+                false,
+                "encoded_8bit",
+            );
+            let rgb16 = image::ImageBuffer::from_fn(rgb.width(), rgb.height(), |x, y| {
+                Rgb(rgb
+                    .get_pixel(x, y)
+                    .0
+                    .map(|c| (encode(c).clamp(0.0, 1.0) * 65535.0).round() as u16))
+            });
+            record(&DynamicImage::ImageRgb16(rgb16), false, "encoded_16bit");
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+                .encode_image(&DynamicImage::ImageRgb8(rgb8))
+                .unwrap();
+            record(
+                &image::load_from_memory(&jpeg).unwrap(),
+                false,
+                "jpeg_quality90",
+            );
+        }
     }
     if let Ok(path) = std::env::var("DENOISE_MEASUREMENT_REPORT") {
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
@@ -366,7 +403,6 @@ fn half_float_upload_precision_is_measured_separately() {
 // Run explicitly before fitting; failures must not be converted into relaxed
 // tolerances or treated as a successful release gate.
 #[test]
-#[ignore = "known failing calibration gate; emits all failures before asserting"]
 fn audit_proposed_domain_accuracy_grid() {
     let mut failures = Vec::new();
     let mut comparisons = 0;
@@ -432,4 +468,77 @@ fn a_populated_bin_with_too_few_patches_is_not_silently_discarded() {
     assert!(!m.is_usable());
     assert_eq!(m.quality.insufficient_bins, 1);
     assert_eq!(m.bins.len(), 1);
+}
+
+#[test]
+fn encoded_injection_high_noise_and_saturated_colors_match_realized_variance() {
+    for seed in [19763, 88069] {
+        for base in [
+            [0.063; 3],
+            [0.118; 3],
+            [0.251; 3],
+            [0.502; 3],
+            [0.941; 3],
+            [0.05, 0.5, 0.8],
+            [0.9, 0.08, 0.3],
+        ] {
+            for sigma in [0.008, 0.032, 0.064] {
+                let mut rng = Gaussian(seed);
+                let source =
+                    Rgb32FImage::from_fn(
+                        512,
+                        512,
+                        |_, _| Rgb(base.map(|c| c + sigma * rng.next())),
+                    );
+                let linear = Rgb32FImage::from_fn(512, 512, |x, y| {
+                    Rgb(source.get_pixel(x, y).0.map(decode))
+                });
+                let m = measure(&source, false, 0.0);
+                let b = measured(&m);
+                for (domain, got, truth) in [
+                    ("linear", b.linear, sigmas(&linear, |_, _| base.map(decode))),
+                    ("encoded", b.encoded, sigmas(&source, |_, _| base)),
+                ] {
+                    for (a, t) in [got.sigma_y, got.sigma_cb, got.sigma_cr]
+                        .into_iter()
+                        .zip(truth)
+                    {
+                        assert_sigma(a,t,0.1,1e-4,&format!("{domain} encoded injection base={base:?} sigma={sigma} seed={seed}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_resampling_uses_independent_pixels_and_recovers_sparse_regions() {
+    let rgb = Rgb32FImage::from_fn(2048, 2048, |x, y| {
+        Rgb([if x < 128 && y < 128 { 0.8 } else { 0.2 }; 3])
+    });
+    let a = measure(&rgb, true, 0.0);
+    let b = measure(&rgb, true, 0.0);
+    assert!(a.is_usable(), "{a:?}");
+    assert!(a.quality.resampled_patches > 0);
+    assert!(a.quality.sampled_patches <= 256);
+    assert_eq!(a.quality.sampled_origins, b.quality.sampled_origins);
+    for (i, p) in a.quality.sampled_origins.iter().enumerate() {
+        for q in &a.quality.sampled_origins[..i] {
+            assert!(p[0].abs_diff(q[0]) >= SIDE as u32 || p[1].abs_diff(q[1]) >= SIDE as u32);
+        }
+    }
+    assert!(a.bins.iter().all(|b| b.accepted_patches >= 4));
+}
+
+#[test]
+fn float_black_clipping_is_reported_instead_of_qualifying_censored_noise() {
+    let mut img = fixture(0.005, 0.02, false, 9137);
+    for p in img.pixels_mut() {
+        p.0 = p.0.map(|v| v.max(0.0));
+    }
+    let m = measure(&img, true, 0.0);
+    assert!(!m.is_usable());
+    assert_eq!(m.quality.rejected_clipped, m.quality.sampled_patches);
+    assert!(m.quality.min_patch_clipped_fraction > 0.5);
+    assert!(m.bins.is_empty());
 }

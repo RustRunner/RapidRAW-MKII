@@ -1,4 +1,6 @@
-# Estimator measurement experiment — 8 September 2026
+# Historical estimator measurement experiment — 8 September 2026
+
+This records version 1 at `ffd99746`. Its failed grid and RAW reports are retained as evidence. [Version 2](estimator-variance-validation.md) replaces the MAD variance estimate and fixes sparse sampling; the commands and known-failing test status below describe version 1.
 
 **Not accepted for production.** The approved measurement method fails its wider encoded-domain accuracy gate and does not provide sufficient brightness coverage on both supplied RAWs. Per the [design gate](estimator-calibration-design.md), fitting stops here pending a measurement-design revision. No slider tables were fitted or enabled.
 

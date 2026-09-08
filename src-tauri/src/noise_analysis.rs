@@ -1,12 +1,12 @@
-//! Experimental explicit-domain measurements, compiled only for tests.
-//! The proposed MAD estimator fails the full transformed-domain accuracy gate;
-//! see bench/estimator-calibration-validation.md before using these values.
-//! Production commands/cache remain on the unchanged legacy measurement.
+//! Experimental developed-image measurements, compiled only for tests.
+//! Version 2 passes the unclipped domain gates using centered residual
+//! variance. Default high-ISO RAWs exceed the initial clipping limit; see
+//! bench/estimator-variance-validation.md before enabling a production path.
 use image::{DynamicImage, Rgb32FImage};
 use rayon::prelude::*;
 use serde::Serialize;
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const BRIGHTNESS: [f32; 6] = [
     16.0 / 255.0,
     30.0 / 255.0,
@@ -41,6 +41,8 @@ pub struct BrightnessBin {
     pub mean_encoded_y: f32,
     pub linear: DomainNoise,
     pub encoded: DomainNoise,
+    pub encoded_mad_scale: DomainNoise,
+    pub linear_mad_scale: DomainNoise,
     pub sampled_patches: usize,
     pub accepted_patches: usize,
     pub accepted_pixels: usize,
@@ -55,10 +57,15 @@ pub struct BrightnessBin {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Quality {
     pub sampled_patches: usize,
+    pub resampled_patches: usize,
+    pub sampled_origins: Vec<[u32; 2]>,
     pub sampled_by_bin: [usize; 6],
     pub qualified_by_bin: [usize; 6],
     pub rejected_nonfinite: usize,
     pub rejected_clipped: usize,
+    pub clipped_pixel_fraction: f32,
+    pub min_patch_clipped_fraction: f32,
+    pub max_patch_clipped_fraction: f32,
     pub rejected_structure: usize,
     pub rejected_long_correlation: usize,
     pub source_code_step: f32,
@@ -237,6 +244,8 @@ struct Patch {
     mean: f64,
     linear: [f64; 3],
     encoded: [f64; 3],
+    encoded_mad_scale: [f64; 3],
+    linear_mad_scale: [f64; 3],
     valid: usize,
     clipped: usize,
     structure: f64,
@@ -246,6 +255,7 @@ struct Patch {
 }
 fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -> Patch {
     let mut out = Patch::default();
+    let mut linear_sum = [0.0f64; 3];
     let mut domains: [Vec<[f64; 3]>; 2] = [
         Vec::with_capacity(SIDE * SIDE),
         Vec::with_capacity(SIDE * SIDE),
@@ -269,10 +279,19 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             let finite = linear.iter().chain(&encoded).all(|c| c.is_finite());
             if finite {
                 out.valid += 1;
+                for c in 0..3 {
+                    linear_sum[c] += linear[c] as f64;
+                }
             }
-            // Integer endpoints are known clipping/quantization limits. Float
-            // negatives and headroom remain valid; do not infer sensor white.
-            if finite && code_step > 0.0 && source.iter().any(|&c| c == 0.0 || c == 1.0) {
+            // RAW development clamps the lower endpoint to zero, and integer
+            // endpoints are known quantization limits. Record exact zero
+            // plateaus in float sources too. Negative/headroom values remain
+            // valid; 1.0 in a float source does not establish sensor white.
+            if finite
+                && source
+                    .iter()
+                    .any(|&c| c == 0.0 || (code_step > 0.0 && c == 1.0))
+            {
                 out.clipped += 1;
             }
             domains[0].push(if finite { ycbcr(linear) } else { [f64::NAN; 3] });
@@ -283,13 +302,10 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             });
         }
     }
-    out.mean = median(
-        domains[1]
-            .iter()
-            .map(|p| p[0])
-            .filter(|x| x.is_finite())
-            .collect(),
-    );
+    // Encode the spatial mean of linear RGB, rather than a noisy encoded
+    // sample median. A plane's mean is its center; this avoids transfer-curve
+    // skew and reduces brightness bucket jitter in high-noise shadows.
+    out.mean = ycbcr(linear_sum.map(|v| encode((v / out.valid.max(1) as f64) as f32)))[0];
     if out.valid < SIDE * SIDE * 3 / 4 || out.clipped > SIDE * SIDE / 100 {
         return out;
     }
@@ -299,10 +315,16 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             let residual = residuals(&values);
             let finite: Vec<_> = residual.iter().copied().filter(|x| x.is_finite()).collect();
             let sigma = mad(&finite);
+            let center = finite.iter().sum::<f64>() / finite.len() as f64;
+            let marginal = (finite.iter().map(|v| (v - center).powi(2)).sum::<f64>()
+                / finite.len() as f64)
+                .sqrt();
             if d == 0 {
-                out.linear[c] = sigma;
+                out.linear[c] = marginal;
+                out.linear_mad_scale[c] = sigma;
             } else {
-                out.encoded[c] = sigma;
+                out.encoded[c] = marginal;
+                out.encoded_mad_scale[c] = sigma;
             }
             if d != 0 || sigma < 1e-10 {
                 continue;
@@ -338,9 +360,25 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
     out
 }
 
+fn brightness_bin(p: &Patch) -> usize {
+    (0..6)
+        .min_by(|&a, &b| {
+            (p.mean - BRIGHTNESS[a] as f64)
+                .abs()
+                .total_cmp(&(p.mean - BRIGHTNESS[b] as f64).abs())
+        })
+        .unwrap()
+}
+fn qualifies(p: &Patch) -> bool {
+    p.valid >= SIDE * SIDE * 3 / 4
+        && p.clipped <= SIDE * SIDE / 100
+        && p.lag8 <= MAX_LAG8
+        && p.structure <= MAX_STRUCTURE_RATIO
+}
+
 pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasurement {
     let nx = (rgb.width() as usize / SIDE).min(16);
-    let ny = (rgb.height() as usize / SIDE).min(16);
+    let ny = (rgb.height() as usize / SIDE).min(12);
     let origin = |i: usize, n: usize, extent: u32| {
         if n <= 1 {
             0
@@ -348,30 +386,88 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             (i * (extent as usize - SIDE) / (n - 1)) as u32
         }
     };
-    let coords: Vec<_> = (0..ny)
+    let mut coords: Vec<_> = (0..ny)
         .flat_map(|y| {
             (0..nx).map(move |x| (origin(x, nx, rgb.width()), origin(y, ny, rgb.height())))
         })
         .collect();
-    let patches: Vec<_> = coords
+    let mut patches: Vec<_> = coords
         .par_iter()
         .map(|&(x, y)| patch(rgb, x, y, is_linear, code_step))
         .collect();
+    let initial_count = patches.len();
+    // Reserve the remainder of the 256-patch budget for nonoverlapping
+    // neighbors of sparsely represented brightness regions. No sampled bin
+    // is discarded, and rejected neighbors never count as qualified coverage.
+    let mut visited = std::collections::HashSet::new();
+    while patches.len() < 256 {
+        let mut counts = [0usize; 6];
+        let mut qualified = [0usize; 6];
+        for p in &patches {
+            counts[brightness_bin(p)] += 1;
+            if qualifies(p) {
+                qualified[brightness_bin(p)] += 1;
+            }
+        }
+        let mut next = None;
+        'search: for (i, p) in patches.iter().enumerate() {
+            let bin = brightness_bin(p);
+            if counts[bin] == 0 || qualified[bin] >= 4 {
+                continue;
+            }
+            for ring in 1i64..=4 {
+                for dy in -ring..=ring {
+                    for dx in -ring..=ring {
+                        if dx.abs().max(dy.abs()) != ring {
+                            continue;
+                        }
+                        let x = coords[i].0 as i64 + dx * SIDE as i64;
+                        let y = coords[i].1 as i64 + dy * SIDE as i64;
+                        if x < 0
+                            || y < 0
+                            || x + SIDE as i64 > rgb.width() as i64
+                            || y + SIDE as i64 > rgb.height() as i64
+                        {
+                            continue;
+                        }
+                        let point = (x as u32, y as u32);
+                        if !visited.insert(point) {
+                            continue;
+                        }
+                        if coords.iter().any(|&(a, b)| {
+                            a.abs_diff(point.0) < SIDE as u32 && b.abs_diff(point.1) < SIDE as u32
+                        }) {
+                            continue;
+                        }
+                        next = Some(point);
+                        break 'search;
+                    }
+                }
+            }
+        }
+        let Some((x, y)) = next else {
+            break;
+        };
+        coords.push((x, y));
+        patches.push(patch(rgb, x, y, is_linear, code_step));
+    }
     let mut quality = Quality {
         sampled_patches: patches.len(),
+        resampled_patches: patches.len() - initial_count,
+        sampled_origins: coords.iter().map(|&(x, y)| [x, y]).collect(),
+        clipped_pixel_fraction: patches.iter().map(|p| p.clipped).sum::<usize>() as f32
+            / (patches.len().max(1) * SIDE * SIDE) as f32,
+        min_patch_clipped_fraction: patches.iter().map(|p| p.clipped).min().unwrap_or(0) as f32
+            / (SIDE * SIDE) as f32,
+        max_patch_clipped_fraction: patches.iter().map(|p| p.clipped).max().unwrap_or(0) as f32
+            / (SIDE * SIDE) as f32,
         source_code_step: code_step,
         ..Default::default()
     };
     let mut groups: [Vec<&Patch>; 6] = Default::default();
     let mut counts = [0; 6];
     for p in &patches {
-        let bin = (0..6)
-            .min_by(|&a, &b| {
-                (p.mean - BRIGHTNESS[a] as f64)
-                    .abs()
-                    .total_cmp(&(p.mean - BRIGHTNESS[b] as f64).abs())
-            })
-            .unwrap();
+        let bin = brightness_bin(p);
         counts[bin] += 1;
         if p.valid < SIDE * SIDE * 3 / 4 {
             quality.rejected_nonfinite += 1;
@@ -403,7 +499,13 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             median(
                 group
                     .iter()
-                    .map(|p| if is_linear { p.linear[c] } else { p.encoded[c] })
+                    .map(|p| {
+                        if is_linear {
+                            p.linear_mad_scale[c]
+                        } else {
+                            p.encoded_mad_scale[c]
+                        }
+                    })
                     .collect(),
             )
         });
@@ -418,6 +520,12 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             })),
             encoded: DomainNoise::from_array(std::array::from_fn(|c| {
                 median(group.iter().map(|p| p.encoded[c]).collect())
+            })),
+            encoded_mad_scale: DomainNoise::from_array(std::array::from_fn(|c| {
+                median(group.iter().map(|p| p.encoded_mad_scale[c]).collect())
+            })),
+            linear_mad_scale: DomainNoise::from_array(std::array::from_fn(|c| {
+                median(group.iter().map(|p| p.linear_mad_scale[c]).collect())
             })),
             sampled_patches: counts[i],
             accepted_patches: group.len(),
