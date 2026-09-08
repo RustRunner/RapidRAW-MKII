@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { readyImageIdentity, sameImage } from '../utils/imageIdentity';
+import { EstimateRequests, VeilFlash, estimateKeys } from '../utils/estimateState';
 import { Adjustments, INITIAL_ADJUSTMENTS, MaskContainer, AiPatch } from '../utils/adjustments';
 import { SelectedImage, WaveformData, BrushSettings } from '../components/ui/AppProperties';
 import { ChannelConfig } from '../components/adjustments/Curves';
@@ -27,6 +29,10 @@ interface EditorState {
   selectedImage: SelectedImage | null;
   adjustments: Adjustments;
   previewOverride: Adjustments | null;
+
+  // Runtime analysis state; never part of photo adjustments.
+  estimateRequests: EstimateRequests;
+  veilFlash: VeilFlash | null;
 
   // History State
   history: Adjustments[];
@@ -101,6 +107,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedImage: null,
   adjustments: INITIAL_ADJUSTMENTS,
   previewOverride: null,
+  estimateRequests: {},
+  veilFlash: null,
   history: [INITIAL_ADJUSTMENTS],
   historyIndex: 0,
   adjustmentsSnapshotVersion: 0,
@@ -152,11 +160,30 @@ export const useEditorStore = create<EditorState>((set) => ({
 
   setEditor: (updater) =>
     set((state) => {
-      const update = typeof updater === 'function' ? updater(state) : updater;
+      const update = { ...(typeof updater === 'function' ? updater(state) : updater) };
       if (update.selectedImage && !update.selectedImage.isReady) {
-        return { ...update, selectedImage: { ...update.selectedImage, identity: undefined } };
+        update.selectedImage = { ...update.selectedImage, identity: undefined };
       }
-      return update;
+      const imageChanged =
+        'selectedImage' in update &&
+        !sameImage(readyImageIdentity(state.selectedImage), readyImageIdentity(update.selectedImage ?? null));
+      if (imageChanged) {
+        return { ...update, estimateRequests: {}, veilFlash: null };
+      }
+      // Removing the current token is the tool's edit revision: returning a
+      // slider to its previous value cannot resurrect an invalidated request.
+      const requests = { ...state.estimateRequests };
+      let veilFlash = state.veilFlash;
+      for (const tool of ['denoise', 'glare'] as const) {
+        if (
+          update.adjustments &&
+          estimateKeys[tool].some((key) => update.adjustments![key] !== state.adjustments[key])
+        ) {
+          delete requests[tool];
+          if (tool === 'glare') veilFlash = null;
+        }
+      }
+      return { estimateRequests: requests, veilFlash, ...update };
     }),
 
   pushHistory: (newAdj) =>
@@ -174,6 +201,8 @@ export const useEditorStore = create<EditorState>((set) => ({
         return {
           historyIndex: newIndex,
           adjustments: state.history[newIndex],
+          estimateRequests: {},
+          veilFlash: null,
           draftCrop: null,
           adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
         };
@@ -188,6 +217,8 @@ export const useEditorStore = create<EditorState>((set) => ({
         return {
           historyIndex: newIndex,
           adjustments: state.history[newIndex],
+          estimateRequests: {},
+          veilFlash: null,
           draftCrop: null,
           adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
         };
@@ -200,6 +231,8 @@ export const useEditorStore = create<EditorState>((set) => ({
       history: [initialState],
       historyIndex: 0,
       adjustments: initialState,
+      estimateRequests: {},
+      veilFlash: null,
       draftCrop: null,
       adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
     })),
@@ -210,6 +243,8 @@ export const useEditorStore = create<EditorState>((set) => ({
         return {
           historyIndex: index,
           adjustments: state.history[index],
+          estimateRequests: {},
+          veilFlash: null,
           draftCrop: null,
           adjustmentsSnapshotVersion: state.adjustmentsSnapshotVersion + 1,
         };

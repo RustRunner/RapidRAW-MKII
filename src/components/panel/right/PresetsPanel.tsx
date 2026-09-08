@@ -40,12 +40,7 @@ import Button from '../../ui/Button';
 import Text from '../../ui/Text';
 import Slider from '../../ui/Slider';
 import { TextColors, TextVariants, TextWeights } from '../../../types/typography';
-import {
-  Adjustments,
-  INITIAL_ADJUSTMENTS,
-  ADJUSTMENT_GROUPS,
-  migrateRecoveryPatch,
-} from '../../../utils/adjustments';
+import { Adjustments, INITIAL_ADJUSTMENTS, ADJUSTMENT_GROUPS, migrateRecoveryPatch } from '../../../utils/adjustments';
 import { Invokes, OPTION_SEPARATOR, Panel, Preset, SelectedImage } from '../../ui/AppProperties';
 import { useEditorStore } from '../../../store/useEditorStore';
 import { useUIStore } from '../../../store/useUIStore';
@@ -830,20 +825,14 @@ export default function PresetsPanel({}: PresetsPanelProps) {
     // Pre-revamp presets carry rapidEnabled (and the old kernel defaults);
     // spread raw, an explicit false would ride into live adjustments and
     // veto blur edits with no switch left to clear it.
-    setAdjustments((prevAdjustments: Adjustments) => ({
-      ...prevAdjustments,
-      ...migrateRecoveryPatch(preset.adjustments),
-    }));
+    setAdjustments(migrateRecoveryPatch(preset.adjustments));
   };
 
   const handleIntensityChange = useCallback(
     (preset: Preset, intensity: number) => {
       setPresetIntensity(intensity);
       const mixed = mixAdjustments(migrateRecoveryPatch(preset.adjustments), intensity);
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        ...mixed,
-      }));
+      setAdjustments(mixed);
     },
     [setAdjustments],
   );

@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
@@ -9,8 +9,9 @@ import { useUIStore } from '../store/useUIStore';
 import { useProcessStore } from '../store/useProcessStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { Invokes, LibraryViewMode, ImageFile } from '../components/ui/AppProperties';
-import { INITIAL_ADJUSTMENTS, normalizeLoadedAdjustments } from '../utils/adjustments';
+import { INITIAL_ADJUSTMENTS } from '../utils/adjustments';
 import { globalImageCache } from '../utils/ImageLRUCache';
+import { cancelEstimate } from '../store/estimateRequests';
 import { debouncedSave, debouncedSetHistory } from './useEditorActions';
 
 export interface AppNavigationProps {
@@ -41,6 +42,8 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
     prevAdjustmentsRef,
   } = refs;
 
+  const selectionEpoch = useRef(0);
+
   const handleGoHome = useCallback(() => {
     useLibraryStore.getState().setLibrary({
       rootPaths: [],
@@ -57,6 +60,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
   }, []);
 
   const handleBackToLibrary = useCallback(() => {
+    selectionEpoch.current += 1;
     const { selectedImage, resetHistory, setEditor } = useEditorStore.getState();
     const { setLibrary } = useLibraryStore.getState();
     const { setUI } = useUIStore.getState();
@@ -107,11 +111,14 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
   const handleImageSelect = useCallback(
     async (path: string) => {
-      const { selectedImage, isSliderDragging, resetHistory, setEditor } = useEditorStore.getState();
+      const { selectedImage, resetHistory, setEditor } = useEditorStore.getState();
       const { setLibrary, multiSelectedPaths } = useLibraryStore.getState();
       const { setUI } = useUIStore.getState();
 
+      const epoch = ++selectionEpoch.current;
       if (selectedImage?.path === path) return;
+      cancelEstimate('denoise');
+      cancelEstimate('glare');
 
       // Drop any pending crop draft before the first await below. The crop
       // panel stays open across image switches, so deferring this would leave
@@ -133,6 +140,8 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const isCachedInBackend = isFrontendCached
         ? await invoke<boolean>('is_image_cached', { path }).catch(() => false)
         : false;
+
+      if (selectionEpoch.current !== epoch) return;
 
       const hasDifferentResolution =
         cached &&
@@ -169,10 +178,11 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         compactEditorPanelHeightOverride: null,
       });
 
-      if (isFrontendCached) {
+      if (isFrontendCached && cached) {
         setEditor({
           selectedImage: {
             ...cached.selectedImage,
+            isReady: false,
             thumbnailUrl: useProcessStore.getState().thumbnails[path] || cached.selectedImage.thumbnailUrl,
           },
           originalSize: cached.originalSize,
@@ -189,39 +199,10 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         setLibrary({ isViewLoading: false });
 
         latestRenderedJobIdRef.current = previewJobIdRef.current;
-        isBackendReadyRef.current = false;
-        currentResRef.current = Infinity;
-
-        invoke(Invokes.LoadImage, { path })
-          .then((_result: any) => {
-            if (selectedImagePathRef.current !== path) return;
-            isBackendReadyRef.current = true;
-            currentResRef.current = 0;
-            setEditor({ originalSize: { width: _result.width, height: _result.height } });
-          })
-          .catch((err: any) => {
-            if (String(err).includes('cancelled')) return;
-            console.error('Background load_image failed on cache hit:', err);
-            isBackendReadyRef.current = true;
-            currentResRef.current = 0;
-          });
-
-        invoke(Invokes.LoadMetadata, { path })
-          .then((metadata: any) => {
-            if (selectedImagePathRef.current !== path) return;
-            let freshAdjustments: any;
-            if (metadata.adjustments && !metadata.adjustments.is_null) {
-              freshAdjustments = normalizeLoadedAdjustments(metadata.adjustments);
-            } else {
-              freshAdjustments = { ...INITIAL_ADJUSTMENTS };
-            }
-            if (!isSliderDragging && JSON.stringify(cached.adjustments) !== JSON.stringify(freshAdjustments)) {
-              resetHistory(freshAdjustments);
-              prevAdjustmentsRef.current = { path, adjustments: freshAdjustments };
-              globalImageCache.set(path, { ...cached, adjustments: freshAdjustments });
-            }
-          })
-          .catch((err) => console.error('Failed background metadata sync on cache hit:', err));
+        // Keep the cached preview visible, but let the common loader publish
+        // fresh metadata and identity before rendering or estimating again.
+        isBackendReadyRef.current = true;
+        currentResRef.current = 0;
 
         return;
       }

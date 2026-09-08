@@ -8,7 +8,9 @@ import { useLibraryStore } from '../store/useLibraryStore';
 import { useRenderStatusStore } from '../store/useRenderStatusStore';
 import { Adjustments, COPYABLE_ADJUSTMENT_KEYS, completeRecoveryGroups } from '../utils/adjustments';
 import { Invokes, Panel } from '../components/ui/AppProperties';
-import { debouncedSave } from './useEditorActions';
+import { debouncedSave } from '../store/editorPersistence';
+import { withVeilFlash } from '../utils/estimateState';
+import { readyImageIdentity } from '../utils/imageIdentity';
 import { globalImageCache } from '../utils/ImageLRUCache';
 
 export function useImageProcessing(
@@ -25,6 +27,11 @@ export function useImageProcessing(
   const selectedImage = useEditorStore((state) => state.selectedImage);
   const adjustments = useEditorStore((state) => state.adjustments);
   const previewOverride = useEditorStore((state) => state.previewOverride);
+  const veilFlash = useEditorStore((state) => state.veilFlash);
+  const renderAdjustments = useMemo(
+    () => withVeilFlash(previewOverride ?? adjustments, veilFlash, readyImageIdentity(selectedImage)),
+    [previewOverride, adjustments, veilFlash, selectedImage],
+  );
   const isWaveformVisible = useEditorStore((state) => state.isWaveformVisible);
   const activeWaveformChannel = useEditorStore((state) => state.activeWaveformChannel);
   const displaySize = useEditorStore((state) => state.displaySize);
@@ -409,7 +416,7 @@ export function useImageProcessing(
       const finalRes = Math.round(baseRes);
 
       if (finalRes > currentResRef.current) {
-        requestHiFiZoom(adjustments, finalRes);
+        requestHiFiZoom(renderAdjustments, finalRes);
       }
     }
     return () => {
@@ -423,6 +430,7 @@ export function useImageProcessing(
     selectedImage?.isReady,
     isSliderDragging,
     requestHiFiZoom,
+    renderAdjustments,
     originalSize,
   ]);
 
@@ -432,7 +440,6 @@ export function useImageProcessing(
     if (dragIdleTimer.current) clearTimeout(dragIdleTimer.current);
 
     const targetRes = calculateTargetRes();
-    const renderAdjustments = previewOverride ?? adjustments;
 
     if (isSliderDragging) {
       if (appSettings?.enableLivePreviews !== false) {
@@ -446,7 +453,11 @@ export function useImageProcessing(
 
         if (previewOverride) return;
 
-        debouncedSave(selectedImage.path, adjustments);
+        // A flash beginning/ending rerenders the preview without resaving the
+        // same photo settings or participating in multi-image synchronization.
+        const previous = prevAdjustmentsRef.current;
+        if (previous?.path === selectedImage.path && previous.adjustments === adjustments) return;
+        debouncedSave(selectedImage.path, adjustments, readyImageIdentity(selectedImage));
 
         const otherPaths = multiSelectedPaths.filter((p) => p !== selectedImage.path);
         if (appSettings?.copyPasteSettings?.autoSync && otherPaths.length > 0) {
@@ -483,6 +494,7 @@ export function useImageProcessing(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     adjustments,
+    renderAdjustments,
     previewOverride,
     selectedImage?.path,
     selectedImage?.isReady,
@@ -548,7 +560,15 @@ export function useImageProcessing(
     return () => {
       isEffectActive = false;
     };
-  }, [showOriginal, splitView, selectedImage?.path, adjustments, transformedOriginalUrl, calculateTargetRes, setEditor]);
+  }, [
+    showOriginal,
+    splitView,
+    selectedImage?.path,
+    adjustments,
+    transformedOriginalUrl,
+    calculateTargetRes,
+    setEditor,
+  ]);
 
   return {
     applyAdjustments,

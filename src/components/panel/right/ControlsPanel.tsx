@@ -145,10 +145,7 @@ export default function Controls() {
       if (!copiedSectionAdjustments || copiedSectionAdjustments.section !== sectionName) {
         return;
       }
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        ...copiedSectionAdjustments.values,
-      }));
+      setAdjustments(copiedSectionAdjustments.values);
     };
 
     const handleReset = () => {
@@ -156,10 +153,7 @@ export default function Controls() {
       for (const key of sectionKeys) {
         resetValues[key] = JSON.parse(JSON.stringify(INITIAL_ADJUSTMENTS[key as keyof Adjustments]));
       }
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        ...resetValues,
-      }));
+      setAdjustments(resetValues);
     };
 
     const isPasteAllowed = copiedSectionAdjustments && copiedSectionAdjustments.section === sectionName;
@@ -276,6 +270,7 @@ export default function Controls() {
                 title={title}
               >
                 <SectionComponent
+                  isVisible={collapsibleSectionsState[sectionName as keyof typeof collapsibleSectionsState]}
                   adjustments={adjustments}
                   setAdjustments={setAdjustments}
                   histogram={histogram}

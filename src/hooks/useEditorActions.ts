@@ -1,6 +1,5 @@
 import { useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import debounce from 'lodash.debounce';
 import { toast } from 'react-toastify';
 import { useEditorStore } from '../store/useEditorStore';
 import { useLibraryStore } from '../store/useLibraryStore';
@@ -25,16 +24,11 @@ import {
 } from '../utils/cropUtils';
 import { Crop, PercentCrop } from 'react-image-crop';
 import { Invokes, Panel, SelectedImage } from '../components/ui/AppProperties';
+import { debouncedSetHistory, debouncedSave } from '../store/editorPersistence';
+import { cancelEstimate, supersedeEstimateEdits } from '../store/estimateRequests';
+import { readyImageIdentity, sameImage } from '../utils/imageIdentity';
+export { debouncedSetHistory, debouncedSave } from '../store/editorPersistence';
 import { globalImageCache } from '../utils/ImageLRUCache';
-
-// Scheduled with the snapshot version that was current when the edit was made.
-// A later image load, reset, undo/redo or metadata replacement invalidates the
-// queued push even if the caller forgot an eager .cancel().
-export const debouncedSetHistory = debounce((newAdj: Adjustments, snapshotVersion: number) => {
-  const state = useEditorStore.getState();
-  if (state.adjustmentsSnapshotVersion !== snapshotVersion) return;
-  state.pushHistory(newAdj);
-}, 500);
 
 /** Geometric equality, ignoring the `unit` tag. */
 function cropsAreEqual(a: Crop | null | undefined, b: Crop | null | undefined): boolean {
@@ -57,18 +51,12 @@ function foldDraftCrop(prev: Adjustments, draftCrop: PercentCrop | null, selecte
   return { ...prev, crop: pixelCrop && isFullFrameCrop(pixelCrop, W, H) ? null : pixelCrop };
 }
 
-export const debouncedSave = debounce((path: string, adjustmentsToSave: Adjustments) => {
-  invoke(Invokes.SaveMetadataAndUpdateThumbnail, { path, adjustments: adjustmentsToSave }).catch((err) => {
-    console.error('Auto-save failed:', err);
-    toast.error(`Failed to save changes: ${err}`);
-  });
-}, 300);
-
 export function useEditorActions() {
   const setEditor = useEditorStore((s) => s.setEditor);
 
   const setAdjustments = useCallback(
     (value: Partial<Adjustments> | ((prev: Adjustments) => Adjustments)) => {
+      if (typeof value !== 'function') supersedeEstimateEdits(value);
       setEditor((state) => {
         const prev = state.adjustments;
         const newAdjustments = typeof value === 'function' ? value(prev) : { ...prev, ...value };
@@ -92,6 +80,7 @@ export function useEditorActions() {
    */
   const setAdjustmentsFoldingDraft = useCallback(
     (value: Partial<Adjustments> | ((prev: Adjustments) => Adjustments)) => {
+      if (typeof value !== 'function') supersedeEstimateEdits(value);
       setEditor((state) => {
         const prev = state.adjustments;
         const folded = foldDraftCrop(prev, state.draftCrop, state.selectedImage);
@@ -258,9 +247,10 @@ export function useEditorActions() {
       const isAndroid = useSettingsStore.getState().osPlatform === 'android';
       try {
         const result: { size: number } = await invoke('load_and_parse_lut', { path });
-        let name = isAndroid && path.startsWith('content://')
-          ? await invoke<string>('resolve_android_content_uri_name', { uriStr: path })
-          : path.split(/[\\/]/).pop() || 'LUT';
+        let name =
+          isAndroid && path.startsWith('content://')
+            ? await invoke<string>('resolve_android_content_uri_name', { uriStr: path })
+            : path.split(/[\\/]/).pop() || 'LUT';
         setAdjustments((prev: Adjustments) => ({
           ...prev,
           lutPath: path,
@@ -299,6 +289,12 @@ export function useEditorActions() {
     const pathsToReset = paths || multiSelectedPaths;
     if (pathsToReset.length === 0) return;
 
+    const resetIdentity = readyImageIdentity(selectedImage);
+    if (selectedImage && pathsToReset.includes(selectedImage.path)) {
+      cancelEstimate('denoise');
+      cancelEstimate('glare');
+      debouncedSave.cancel();
+    }
     pathsToReset.forEach((p) => globalImageCache.delete(p));
     debouncedSetHistory.cancel();
 
@@ -306,7 +302,11 @@ export function useEditorActions() {
       .then(() => {
         if (libraryActivePath && pathsToReset.includes(libraryActivePath))
           setLibrary({ libraryActiveAdjustments: { ...INITIAL_ADJUSTMENTS } });
-        if (selectedImage && pathsToReset.includes(selectedImage.path)) {
+        if (
+          selectedImage &&
+          pathsToReset.includes(selectedImage.path) &&
+          sameImage(resetIdentity, readyImageIdentity(useEditorStore.getState().selectedImage))
+        ) {
           const aspect =
             selectedImage.width && selectedImage.height ? selectedImage.width / selectedImage.height : null;
           const resetData = { ...INITIAL_ADJUSTMENTS, aspectRatio: aspect, aiPatches: [] };

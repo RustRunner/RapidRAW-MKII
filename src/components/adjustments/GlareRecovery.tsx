@@ -1,108 +1,35 @@
-import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
 import { Info } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, GlareRecoveryAdjustment } from '../../utils/adjustments';
-import { Invokes } from '../ui/AppProperties';
-import { useEditorStore } from '../../store/useEditorStore';
-import {
-  GlareEstimate,
-  OwnedEstimate,
-  readyImageIdentity,
-  sameImage,
-  isStaleEstimateError,
-  estimateErrorMessage,
-} from '../../utils/imageIdentity';
+import { useEstimate } from '../../hooks/useEstimate';
 
 interface GlareRecoveryPanelProps {
   adjustments: Adjustments;
+  isVisible?: boolean;
   setAdjustments(adjustments: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)): any;
   onDragStateChange?(dragging: boolean): void;
 }
-
-const VEIL_FLASH_MS = 1200;
 
 export default function GlareRecoveryPanel({
   adjustments,
   setAdjustments,
   onDragStateChange,
+  isVisible,
 }: GlareRecoveryPanelProps) {
   const { t } = useTranslation();
-  const [isEstimating, setIsEstimating] = useState(false);
-  const selectedImage = useEditorStore((s) => s.selectedImage);
-  useEffect(() => setIsEstimating(false), [selectedImage?.path, selectedImage?.identity?.generation]);
-  const flashTimeoutRef = useRef<number | null>(null);
-
-  useEffect(
-    () => () => {
-      if (flashTimeoutRef.current !== null) {
-        clearTimeout(flashTimeoutRef.current);
-      }
-    },
-    [],
+  const { isEstimating, isFlashing, estimate, dismissFlash } = useEstimate(
+    'glare',
+    (message) => toast.error(`${t('editor.adjustments.glareRecovery.estimateFailed')} (${message})`),
+    isVisible,
   );
 
   const handleValueChange = (key: GlareRecoveryAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
     setAdjustments((prev: Adjustments) => ({ ...prev, [key]: numericValue }));
-  };
-
-  const handleEstimateGlare = async () => {
-    const expectedIdentity = readyImageIdentity(useEditorStore.getState().selectedImage);
-    if (isEstimating || !expectedIdentity) {
-      return;
-    }
-    setIsEstimating(true);
-    try {
-      const result = await invoke<OwnedEstimate<GlareEstimate>>(Invokes.EstimateGlareVeil, { expectedIdentity });
-      if (
-        !sameImage(result.identity, expectedIdentity) ||
-        !sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)
-      )
-        return;
-      const estimate = result.estimate;
-      if (!estimate?.confident) {
-        toast.error(t('editor.adjustments.glareRecovery.estimateFailed'));
-        return;
-      }
-      const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
-      // Apply the suggestion and flash the veil so the user sees the gray
-      // field about to be subtracted. A landed estimate must never leave
-      // the stage off.
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        [GlareRecoveryAdjustment.GlareEnabled]: true,
-        [GlareRecoveryAdjustment.GlareAmount]: clamp(estimate.amount),
-        [GlareRecoveryAdjustment.GlareVeilSize]: clamp(estimate.veilSize),
-        [GlareRecoveryAdjustment.GlareMaxBoost]: clamp(estimate.maxBoost),
-        [GlareRecoveryAdjustment.GlareShowVeil]: true,
-      }));
-      if (flashTimeoutRef.current !== null) {
-        clearTimeout(flashTimeoutRef.current);
-      }
-      flashTimeoutRef.current = window.setTimeout(() => {
-        flashTimeoutRef.current = null;
-        if (!sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)) return;
-        setAdjustments((prev: Adjustments) => ({
-          ...prev,
-          [GlareRecoveryAdjustment.GlareShowVeil]: false,
-        }));
-      }, VEIL_FLASH_MS);
-    } catch (err) {
-      if (
-        sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity) &&
-        !isStaleEstimateError(err)
-      ) {
-        toast.error(`${t('editor.adjustments.glareRecovery.estimateFailed')} (${estimateErrorMessage(err)})`);
-      }
-    } finally {
-      if (sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity))
-        setIsEstimating(false);
-    }
   };
 
   return (
@@ -135,7 +62,7 @@ export default function GlareRecoveryPanel({
                   ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
                   : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
               }`}
-              onClick={handleEstimateGlare}
+              onClick={estimate}
               disabled={isEstimating}
             >
               {isEstimating
@@ -176,13 +103,14 @@ export default function GlareRecoveryPanel({
               <Switch
                 id="glare-show-veil-toggle"
                 label=""
-                checked={!!adjustments.glareShowVeil}
-                onChange={(checked: boolean) =>
+                checked={!!adjustments.glareShowVeil || isFlashing}
+                onChange={(checked: boolean) => {
+                  dismissFlash();
                   setAdjustments((prev: Adjustments) => ({
                     ...prev,
                     [GlareRecoveryAdjustment.GlareShowVeil]: checked,
-                  }))
-                }
+                  }));
+                }}
               />
             </div>
           </div>

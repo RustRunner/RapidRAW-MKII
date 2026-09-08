@@ -1,41 +1,33 @@
-import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
 import { Info } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, LowLightAdjustment } from '../../utils/adjustments';
-import { Invokes } from '../ui/AppProperties';
-import { useEditorStore } from '../../store/useEditorStore';
-import {
-  NoiseEstimate,
-  OwnedEstimate,
-  readyImageIdentity,
-  sameImage,
-  isStaleEstimateError,
-  estimateErrorMessage,
-} from '../../utils/imageIdentity';
+import { useEstimate } from '../../hooks/useEstimate';
+import type { NoiseEstimate } from '../../utils/imageIdentity';
 
 interface LowLightPanelProps {
   adjustments: Adjustments;
+  isVisible?: boolean;
   setAdjustments(adjustments: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)): any;
   onDragStateChange?(dragging: boolean): void;
 }
 
-export default function LowLightPanel({ adjustments, setAdjustments, onDragStateChange }: LowLightPanelProps) {
+export default function LowLightPanel({
+  adjustments,
+  setAdjustments,
+  onDragStateChange,
+  isVisible,
+}: LowLightPanelProps) {
   const { t } = useTranslation();
-  const selectedImage = useEditorStore((state: any) => state.selectedImage);
-  const [isEstimating, setIsEstimating] = useState(false);
-  const [noiseEstimate, setNoiseEstimate] = useState<NoiseEstimate | null>(null);
-
-  const path: string | null = selectedImage?.path ?? null;
-
-  useEffect(() => {
-    setNoiseEstimate(null);
-    setIsEstimating(false);
-  }, [path, selectedImage?.identity?.generation]);
+  const { isEstimating, result, estimate } = useEstimate(
+    'denoise',
+    (message) => toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${message})`),
+    isVisible,
+  );
+  const noiseEstimate = result as NoiseEstimate | undefined;
 
   const handleValueChange = (key: LowLightAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
@@ -44,41 +36,6 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
 
   const handleCheckedChange = (key: LowLightAdjustment, checked: boolean) => {
     setAdjustments((prev: Adjustments) => ({ ...prev, [key]: checked }));
-  };
-
-  const handleEstimateNoise = async () => {
-    const expectedIdentity = readyImageIdentity(useEditorStore.getState().selectedImage);
-    if (isEstimating || !expectedIdentity) {
-      return;
-    }
-    setIsEstimating(true);
-    try {
-      const result = await invoke<OwnedEstimate<NoiseEstimate>>(Invokes.EstimateNoiseLevel, { expectedIdentity });
-      if (
-        !sameImage(result.identity, expectedIdentity) ||
-        !sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)
-      )
-        return;
-      const estimate = result.estimate;
-      const strength = Math.round(estimate.strength);
-      const chroma = Math.round(estimate.chroma);
-      setNoiseEstimate(estimate);
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        [LowLightAdjustment.DenoiseStrength]: strength,
-        [LowLightAdjustment.DenoiseChroma]: chroma,
-      }));
-    } catch (err) {
-      if (
-        sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity) &&
-        !isStaleEstimateError(err)
-      ) {
-        toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${estimateErrorMessage(err)})`);
-      }
-    } finally {
-      if (sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity))
-        setIsEstimating(false);
-    }
   };
 
   return (
@@ -143,7 +100,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
                   ? 'bg-gray-500/20 text-gray-300 border-gray-500 cursor-wait'
                   : 'bg-transparent text-primary border-primary hover:bg-primary hover:text-white'
               }`}
-              onClick={handleEstimateNoise}
+              onClick={estimate}
               disabled={isEstimating}
             >
               {isEstimating ? t('editor.adjustments.lowlight.estimating') : t('editor.adjustments.lowlight.estimate')}
