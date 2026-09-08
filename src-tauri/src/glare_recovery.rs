@@ -251,7 +251,7 @@ pub async fn estimate_glare_veil(
     let noise = crate::denoising::measured_noise_for_snapshot(&state, &snapshot).await?;
     let image = snapshot.image.clone();
     let is_raw = snapshot.is_raw;
-    let computation = tokio::task::spawn_blocking(move || estimate_glare(&image, is_raw, noise.sigma_luma)).await;
+    let computation = tokio::task::spawn_blocking(move || estimate_glare(&image, is_raw, noise.legacy_source.sigma_luma)).await;
     session.snapshot(&snapshot.identity())?;
     let estimate = computation.map_err(|e| EstimateError::Failed(format!("Glare estimation task failed: {e}")))?;
     session.finish(&snapshot, estimate)

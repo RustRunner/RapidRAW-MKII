@@ -2,9 +2,10 @@
 //! ownership boundary. Lock order: original_image, then an individual cache.
 //! No decoding, analysis, or await belongs inside that boundary.
 use crate::app_state::{AppState, LoadedImage};
-use crate::denoising::NoiseEstimate;
-use std::sync::Mutex;
+use crate::noise_analysis::SourceNoiseAnalysis;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ImageIdentity {
@@ -35,7 +36,7 @@ pub enum EstimateError {
     Failed(String),
 }
 
-pub type NoiseCache = Option<(ImageIdentity, NoiseEstimate)>;
+pub type NoiseCache = Option<(ImageIdentity, Arc<SourceNoiseAnalysis>)>;
 
 pub struct ImageSession<'a> {
     ready: &'a Mutex<Option<LoadedImage>>,
@@ -104,7 +105,7 @@ impl<'a> ImageSession<'a> {
     pub fn cached_noise(
         &self,
         snapshot: &LoadedImage,
-    ) -> Result<Option<NoiseEstimate>, EstimateError> {
+    ) -> Result<Option<Arc<SourceNoiseAnalysis>>, EstimateError> {
         let identity = snapshot.identity();
         self.with_current(&identity, |_| {
             self.noise_cache
@@ -112,14 +113,14 @@ impl<'a> ImageSession<'a> {
                 .unwrap()
                 .as_ref()
                 .filter(|(key, _)| *key == identity)
-                .map(|(_, value)| *value)
+                .map(|(_, value)| value.clone())
         })
     }
 
     pub fn publish_noise(
         &self,
         snapshot: &LoadedImage,
-        estimate: NoiseEstimate,
+        estimate: Arc<SourceNoiseAnalysis>,
     ) -> Result<(), EstimateError> {
         let identity = snapshot.identity();
         self.with_current(&identity, |_| {
@@ -168,13 +169,20 @@ mod tests {
             image: Arc::new(image::DynamicImage::new_rgb8(8, 8)),
         }
     }
-    fn noise(value: f32) -> NoiseEstimate {
-        NoiseEstimate {
-            sigma_luma: value,
-            sigma_chroma: value,
-            strength: value,
-            chroma: value,
-        }
+    fn noise(value: f32) -> Arc<SourceNoiseAnalysis> {
+        Arc::new(SourceNoiseAnalysis {
+            legacy_source: crate::denoising::NoiseEstimate {
+                sigma_luma: value,
+                sigma_chroma: value,
+                strength: value,
+                chroma: value,
+            },
+            measurement: crate::noise_analysis::NoiseMeasurement {
+                version: crate::noise_analysis::VERSION,
+                bins: vec![],
+                quality: Default::default(),
+            },
+        })
     }
 
     #[test]
@@ -189,11 +197,9 @@ mod tests {
             Err(EstimateError::Stale)
         );
         assert_eq!(session.snapshot(&id_b).unwrap().generation, b);
-        assert!(
-            session
-                .with_generation(a, || panic!("old cache write"))
-                .is_err()
-        );
+        assert!(session
+            .with_generation(a, || panic!("old cache write"))
+            .is_err());
     }
 
     #[test]
@@ -203,9 +209,19 @@ mod tests {
         let a = session.begin_load();
         let id_a = session.commit_load(image("A", a, false)).unwrap();
         let snapshot_a = session.snapshot(&id_a).unwrap();
-        session.publish_noise(&snapshot_a, noise(1.0)).unwrap();
+        let shared = noise(1.0);
+        session.publish_noise(&snapshot_a, shared.clone()).unwrap();
+        assert!(Arc::ptr_eq(
+            &session.cached_noise(&snapshot_a).unwrap().unwrap(),
+            &shared
+        ));
         assert_eq!(
-            session.cached_noise(&snapshot_a).unwrap().unwrap().strength,
+            session
+                .cached_noise(&snapshot_a)
+                .unwrap()
+                .unwrap()
+                .legacy_source
+                .strength,
             1.0
         );
         let b = session.begin_load();
@@ -219,7 +235,12 @@ mod tests {
             Err(EstimateError::Stale)
         );
         assert_eq!(
-            session.cached_noise(&snapshot_b).unwrap().unwrap().strength,
+            session
+                .cached_noise(&snapshot_b)
+                .unwrap()
+                .unwrap()
+                .legacy_source
+                .strength,
             2.0
         );
         assert!(!snapshot_a.is_raw && snapshot_b.is_raw);

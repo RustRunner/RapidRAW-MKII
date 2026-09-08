@@ -311,6 +311,13 @@ fn audit_real_raw_measurements() {
             let started = std::time::Instant::now();
             let analysis = analyze_source(img, is_linear);
             let elapsed = started.elapsed().as_millis();
+            if variant == "default" && std::env::var_os("DENOISE_REQUIRE_RAW_COVERAGE").is_some() {
+                assert!(
+                    analysis.measurement.is_usable(),
+                    "default RAW lacks qualified coverage: {:?}",
+                    analysis.measurement.quality
+                );
+            }
             eprintln!("RAW {} variant={variant} usable={} ms={elapsed} clipped={:.2}% patch_range={:.2}%..{:.2}% bins={:?}",
                 path.display(), analysis.measurement.is_usable(), 100.0 * analysis.measurement.quality.clipped_pixel_fraction,
                 100.0 * analysis.measurement.quality.min_patch_clipped_fraction, 100.0 * analysis.measurement.quality.max_patch_clipped_fraction,
@@ -542,3 +549,5 @@ fn float_black_clipping_is_reported_instead_of_qualifying_censored_noise() {
     assert!(m.quality.min_patch_clipped_fraction > 0.5);
     assert!(m.bins.is_empty());
 }
+
+mod clipped;

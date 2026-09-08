@@ -1,6 +1,6 @@
 # Estimator calibration proposal
 
-8 September 2026. **Measurement revision approved and implemented as a test-only candidate. Version 2 passes the unclipped domain grid; RAW clipping eligibility remains unresolved. Production numerical behavior is unchanged.** Follows the shader and ownership fixes through `94ced8f4` and TypeScript cleanup `4fa180f3`. The local source specification's separate calibration design gate applies.
+8 September 2026. **Measurement revision approved and implemented as a test-only candidate. Version 3 includes the approved clipped-noise class and passes its reference gates; slider fitting follows separately. Production numerical behavior is unchanged.** Follows the shader and ownership fixes through `94ced8f4` and TypeScript cleanup `4fa180f3`. The local source specification's separate calibration design gate applies.
 
 ## Current outcome after the approved revision
 
@@ -8,7 +8,7 @@
 
 Correctly recording float zero endpoints exposes a distinct release blocker: every sampled patch in both default RAWs exceeds the existing 1% clipping limit. Development/preprocessing code clamps those endpoints. The prior version incorrectly omitted them because the storage was float. Tests now reject these samples and record their fractions rather than silently claiming unclipped coverage. Native decoded, NR/sharpening, encoded 8/16-bit, and JPEG variants have been audited.
 
-A [bounded extension for clipped developed noise](estimator-clipped-noise-design.md) is prepared for the eligibility decision. Until that decision and its validation, the original 1% rule stays in force. No production cache/commands, fitted tables, shaders, Glare budget, or saved settings have changed.
+The user approved the [bounded clipped-noise extension](estimator-clipped-noise-design.md). [Version 3 evidence](estimator-clipped-validation.md) validates its separate class and integrates domain measurements into the generation-owned shared cache. The original unclipped class remains limited to 1%; the new black-clipped class is bounded at 60% with structure/correlation guards. Denoise still returns legacy slider values until fitting and release checks pass. Shaders, Glare budget, and saved settings are unchanged.
 
 ## Measurement gate outcome and proposed revision
 

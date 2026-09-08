@@ -1,12 +1,12 @@
-//! Experimental developed-image measurements, compiled only for tests.
-//! Version 2 passes the unclipped domain gates using centered residual
-//! variance. Default high-ISO RAWs exceed the initial clipping limit; see
-//! bench/estimator-variance-validation.md before enabling a production path.
+//! Developed-image source measurements in explicit linear and encoded domains.
+//! Version 3 includes separately qualified black-clipped residuals. It estimates
+//! developed noise, not sensor variance before clipping. Legacy Glare analysis
+//! remains a separate unchanged full-image measurement.
 use image::{DynamicImage, Rgb32FImage};
 use rayon::prelude::*;
 use serde::Serialize;
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const BRIGHTNESS: [f32; 6] = [
     16.0 / 255.0,
     30.0 / 255.0,
@@ -20,6 +20,7 @@ const MAD_NORMAL: f64 = 0.6744897501960817;
 // Qualification parameters are pinned by white/correlated/structure fixtures.
 const MAX_STRUCTURE_RATIO: f64 = 0.85;
 const MAX_LAG8: f64 = 0.8;
+const MAX_CLIPPED_STRUCTURE_RATIO: f64 = 0.9;
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct DomainNoise {
@@ -45,6 +46,9 @@ pub struct BrightnessBin {
     pub linear_mad_scale: DomainNoise,
     pub sampled_patches: usize,
     pub accepted_patches: usize,
+    pub accepted_unclipped_patches: usize,
+    pub accepted_black_clipped_patches: usize,
+    pub black_clipped_fraction: f32,
     pub accepted_pixels: usize,
     /// Below two source code steps per RGB component, a MAD scale can lock
     /// to discrete residual levels. These channels are unresolved, not zero.
@@ -53,6 +57,7 @@ pub struct BrightnessBin {
     pub lag1: f32,
     pub lag8: f32,
     pub highpass_to_marginal: f32,
+    pub increment_disagreement: f32,
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Quality {
@@ -63,6 +68,8 @@ pub struct Quality {
     pub qualified_by_bin: [usize; 6],
     pub rejected_nonfinite: usize,
     pub rejected_clipped: usize,
+    pub qualified_unclipped_patches: usize,
+    pub qualified_black_clipped_patches: usize,
     pub clipped_pixel_fraction: f32,
     pub min_patch_clipped_fraction: f32,
     pub max_patch_clipped_fraction: f32,
@@ -239,6 +246,35 @@ fn highpass(values: &[f64]) -> f64 {
     }
     median(response) / (6.0 * MAD_NORMAL)
 }
+// A centered long-separation increment removes a planar signal without
+// removing all three fitted noise modes. At separations beyond the declared
+// short-range correlation support, Var(X[i+d]-X[i])/2 estimates marginal
+// variance. Keep this diagnostic separate from white-noise highpass gain.
+fn difference_sigma(values: &[f64], distance: usize) -> f64 {
+    let mut variances = Vec::new();
+    for (dx, dy) in [(distance, 0), (0, distance)] {
+        let mut differences = Vec::new();
+        for y in 0..SIDE - dy {
+            for x in 0..SIDE - dx {
+                let d = values[(y + dy) * SIDE + x + dx] - values[y * SIDE + x];
+                if d.is_finite() {
+                    differences.push(d);
+                }
+            }
+        }
+        if differences.is_empty() {
+            continue;
+        }
+        let mean = differences.iter().sum::<f64>() / differences.len() as f64;
+        variances.push(
+            differences.iter().map(|d| (d - mean).powi(2)).sum::<f64>()
+                / differences.len() as f64
+                / 2.0,
+        );
+    }
+    (variances.iter().sum::<f64>() / variances.len().max(1) as f64).sqrt()
+}
+
 #[derive(Default)]
 struct Patch {
     mean: f64,
@@ -248,12 +284,15 @@ struct Patch {
     linear_mad_scale: [f64; 3],
     valid: usize,
     clipped: usize,
+    black_clipped: usize,
+    upper_clipped: usize,
     structure: f64,
     lag1: f64,
     lag8: f64,
     highpass_ratio: f64,
+    increment_disagreement: f64,
 }
-fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -> Patch {
+fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, _code_step: f32) -> Patch {
     let mut out = Patch::default();
     let mut linear_sum = [0.0f64; 3];
     let mut domains: [Vec<[f64; 3]>; 2] = [
@@ -286,13 +325,14 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             // RAW development clamps the lower endpoint to zero, and integer
             // endpoints are known quantization limits. Record exact zero
             // plateaus in float sources too. Negative/headroom values remain
-            // valid; 1.0 in a float source does not establish sensor white.
-            if finite
-                && source
-                    .iter()
-                    .any(|&c| c == 0.0 || (code_step > 0.0 && c == 1.0))
-            {
-                out.clipped += 1;
+            // valid. An exact 1.0 plateau is an upper-endpoint diagnostic,
+            // including float preprocessing clamps; it is not sensor white.
+            if finite {
+                let black = source.contains(&0.0);
+                let upper = source.contains(&1.0);
+                out.black_clipped += usize::from(black);
+                out.upper_clipped += usize::from(upper);
+                out.clipped += usize::from(black || upper);
             }
             domains[0].push(if finite { ycbcr(linear) } else { [f64::NAN; 3] });
             domains[1].push(if finite {
@@ -306,7 +346,7 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
     // sample median. A plane's mean is its center; this avoids transfer-curve
     // skew and reduces brightness bucket jitter in high-noise shadows.
     out.mean = ycbcr(linear_sum.map(|v| encode((v / out.valid.max(1) as f64) as f32)))[0];
-    if out.valid < SIDE * SIDE * 3 / 4 || out.clipped > SIDE * SIDE / 100 {
+    if out.valid < SIDE * SIDE * 3 / 4 || clipping_class(&out).is_none() {
         return out;
     }
     for (d, domain) in domains.iter().enumerate() {
@@ -316,9 +356,22 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             let finite: Vec<_> = residual.iter().copied().filter(|x| x.is_finite()).collect();
             let sigma = mad(&finite);
             let center = finite.iter().sum::<f64>() / finite.len() as f64;
-            let marginal = (finite.iter().map(|v| (v - center).powi(2)).sum::<f64>()
+            let mut marginal = (finite.iter().map(|v| (v - center).powi(2)).sum::<f64>()
                 / finite.len() as f64)
                 .sqrt();
+            let local_marginal = marginal;
+            let residual: Vec<_> = residual.iter().map(|v| v - center).collect();
+            if clipping_class(&out) == Some(ClippingClass::BlackClipped)
+                && marginal > 1e-10
+                && lag(&residual, 1) > 0.3
+            {
+                let far = difference_sigma(&values, 32);
+                let near = difference_sigma(&values, 24);
+                out.increment_disagreement = out
+                    .increment_disagreement
+                    .max((far - near).abs() / far.max(1e-10));
+                marginal = marginal.max(far);
+            }
             if d == 0 {
                 out.linear[c] = marginal;
                 out.linear_mad_scale[c] = sigma;
@@ -326,9 +379,18 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
                 out.encoded[c] = marginal;
                 out.encoded_mad_scale[c] = sigma;
             }
-            if d != 0 || sigma < 1e-10 {
+            let diagnostic_scale = if clipping_class(&out) == Some(ClippingClass::BlackClipped) {
+                // Structure is local residual energy. A long-separation
+                // variance estimate must not make smooth curvature look flat.
+                local_marginal
+            } else {
+                sigma
+            };
+            if d != 0 || diagnostic_scale < 1e-10 {
                 continue;
             }
+            // Robust location need not equal the mean after clipping. Lag
+            // and block structure describe centered fluctuations, not bias.
             let mut block_means = Vec::new();
             for by in 0..8 {
                 for bx in 0..8 {
@@ -345,14 +407,14 @@ fn patch(rgb: &Rgb32FImage, x0: u32, y0: u32, is_linear: bool, code_step: f32) -
             let structure = (block_means.iter().map(|v| v * v).sum::<f64>()
                 / block_means.len().max(1) as f64)
                 .sqrt()
-                / sigma;
+                / diagnostic_scale;
             out.structure = out.structure.max(structure);
             out.lag1 = out.lag1.max(lag(&residual, 1));
             out.lag8 = out.lag8.max(lag(&residual, 8));
-            out.highpass_ratio = out.highpass_ratio.max(highpass(&values) / sigma);
+            out.highpass_ratio = out.highpass_ratio.max(highpass(&values) / diagnostic_scale);
             // Negative lag correlations or large highpass gain are also
             // structure signals (e.g. repetitive stripes), not white noise.
-            if lag(&residual, 1) < -0.15 || out.highpass_ratio > 1.6 {
+            if [1, 4, 8].iter().any(|&d| lag(&residual, d) < -0.15) || out.highpass_ratio > 1.6 {
                 out.structure = f64::MAX;
             }
         }
@@ -369,11 +431,35 @@ fn brightness_bin(p: &Patch) -> usize {
         })
         .unwrap()
 }
+#[derive(Debug, PartialEq, Eq)]
+enum ClippingClass {
+    Unclipped,
+    BlackClipped,
+}
+fn clipping_class(p: &Patch) -> Option<ClippingClass> {
+    if p.clipped <= SIDE * SIDE / 100 {
+        Some(ClippingClass::Unclipped)
+    } else if p.upper_clipped <= SIDE * SIDE / 100 && p.black_clipped <= SIDE * SIDE * 60 / 100 {
+        Some(ClippingClass::BlackClipped)
+    } else {
+        None
+    }
+}
+
+fn structure_limit(p: &Patch) -> f64 {
+    if clipping_class(p) == Some(ClippingClass::BlackClipped) {
+        MAX_CLIPPED_STRUCTURE_RATIO
+    } else {
+        MAX_STRUCTURE_RATIO
+    }
+}
+
 fn qualifies(p: &Patch) -> bool {
     p.valid >= SIDE * SIDE * 3 / 4
-        && p.clipped <= SIDE * SIDE / 100
+        && clipping_class(p).is_some()
         && p.lag8 <= MAX_LAG8
-        && p.structure <= MAX_STRUCTURE_RATIO
+        && p.increment_disagreement <= 0.2
+        && p.structure <= structure_limit(p)
 }
 
 pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasurement {
@@ -471,13 +557,17 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
         counts[bin] += 1;
         if p.valid < SIDE * SIDE * 3 / 4 {
             quality.rejected_nonfinite += 1;
-        } else if p.clipped > SIDE * SIDE / 100 {
+        } else if clipping_class(p).is_none() {
             quality.rejected_clipped += 1;
-        } else if p.lag8 > MAX_LAG8 {
+        } else if p.lag8 > MAX_LAG8 || p.increment_disagreement > 0.2 {
             quality.rejected_long_correlation += 1;
-        } else if p.structure > MAX_STRUCTURE_RATIO {
+        } else if p.structure > structure_limit(p) {
             quality.rejected_structure += 1;
         } else {
+            match clipping_class(p).unwrap() {
+                ClippingClass::Unclipped => quality.qualified_unclipped_patches += 1,
+                ClippingClass::BlackClipped => quality.qualified_black_clipped_patches += 1,
+            }
             groups[bin].push(p);
         }
     }
@@ -492,8 +582,30 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             quality.insufficient_bins += 1;
             continue;
         }
-        group.sort_by(|a, b| a.structure.total_cmp(&b.structure));
-        group.truncate(group.len().div_ceil(4).max(4));
+        let has_black_clipping = group
+            .iter()
+            .any(|p| clipping_class(p) == Some(ClippingClass::BlackClipped));
+        // Rare clipped excursions carry real variance. Ranking away those
+        // patches, or taking a median of their scales, selects away noise.
+        // Keep all absolutely qualified patches in the clipped class.
+        if !has_black_clipping {
+            group.sort_by(|a, b| a.structure.total_cmp(&b.structure));
+            group.truncate(group.len().div_ceil(4).max(4));
+        }
+        let scale = |get: fn(&Patch) -> [f64; 3]| {
+            DomainNoise::from_array(std::array::from_fn(|c| {
+                if has_black_clipping {
+                    (group
+                        .iter()
+                        .map(|p| get(p)[c].powi(2) * p.valid as f64)
+                        .sum::<f64>()
+                        / group.iter().map(|p| p.valid).sum::<usize>() as f64)
+                        .sqrt()
+                } else {
+                    median(group.iter().map(|p| get(p)[c]).collect())
+                }
+            }))
+        };
         let med = |get: fn(&Patch) -> f64| median(group.iter().map(|p| get(p)).collect()) as f32;
         let source_sigmas: [f64; 3] = std::array::from_fn(|c| {
             median(
@@ -515,12 +627,8 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
                 code_step > 0.0 && source_sigmas[c] < 2.0 * code_step as f64 * gains[c]
             }),
             mean_encoded_y: med(|p| p.mean),
-            linear: DomainNoise::from_array(std::array::from_fn(|c| {
-                median(group.iter().map(|p| p.linear[c]).collect())
-            })),
-            encoded: DomainNoise::from_array(std::array::from_fn(|c| {
-                median(group.iter().map(|p| p.encoded[c]).collect())
-            })),
+            linear: scale(|p| p.linear),
+            encoded: scale(|p| p.encoded),
             encoded_mad_scale: DomainNoise::from_array(std::array::from_fn(|c| {
                 median(group.iter().map(|p| p.encoded_mad_scale[c]).collect())
             })),
@@ -529,11 +637,21 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             })),
             sampled_patches: counts[i],
             accepted_patches: group.len(),
+            accepted_unclipped_patches: group
+                .iter()
+                .filter(|p| clipping_class(p) == Some(ClippingClass::Unclipped))
+                .count(),
+            accepted_black_clipped_patches: group
+                .iter()
+                .filter(|p| clipping_class(p) == Some(ClippingClass::BlackClipped))
+                .count(),
+            black_clipped_fraction: med(|p| p.black_clipped as f64 / (SIDE * SIDE) as f64),
             accepted_pixels: group.iter().map(|p| p.valid).sum(),
             structure_ratio: med(|p| p.structure),
             lag1: med(|p| p.lag1),
             lag8: med(|p| p.lag8),
             highpass_to_marginal: med(|p| p.highpass_ratio),
+            increment_disagreement: med(|p| p.increment_disagreement),
         });
     }
     NoiseMeasurement {

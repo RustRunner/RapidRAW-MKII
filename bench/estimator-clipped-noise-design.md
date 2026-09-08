@@ -1,6 +1,6 @@
 # Clipped developed-noise calibration extension
 
-8 September 2026. Proposed after the measurement revision; not enabled in production.
+8 September 2026. **Approved by the user.** Measurement implementation and evidence are in [the clipped-noise validation](estimator-clipped-validation.md); calibrated slider suggestions are not yet enabled.
 
 ## Why this extension is needed
 
@@ -21,4 +21,4 @@ This changes measurement eligibility and its validation scope. It does not chang
 
 ## Decision
 
-Recommended: validate this additional class, then resume fitting only if it passes. The alternative is to retain calibration for the original unclipped class; under that scope neither supplied RAW can receive a qualified calibrated suggestion. Current production estimates remain available until a replacement completes its release gates.
+Approved: validate this additional class, then resume fitting only if it passes. The alternative is to retain calibration for the original unclipped class; under that scope neither supplied RAW can receive a qualified calibrated suggestion. Current production estimates remain available until a replacement completes its release gates.

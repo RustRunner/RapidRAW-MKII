@@ -356,16 +356,17 @@ pub(crate) fn estimate_noise_rgb(rgb: &Rgb32FImage) -> NoiseEstimate {
 pub async fn measured_noise_for_snapshot(
     state: &AppState,
     snapshot: &LoadedImage,
-) -> Result<NoiseEstimate, EstimateError> {
+) -> Result<Arc<crate::noise_analysis::SourceNoiseAnalysis>, EstimateError> {
     let session = ImageSession::new(state);
     if let Some(estimate) = session.cached_noise(snapshot)? { return Ok(estimate); }
     let start = std::time::Instant::now();
     let image = snapshot.image.clone();
-    let computation = tokio::task::spawn_blocking(move || estimate_noise(&image)).await;
+    let is_linear = snapshot.is_raw;
+    let computation = tokio::task::spawn_blocking(move || Arc::new(crate::noise_analysis::analyze_source(&image, is_linear))).await;
     // A switch supersedes failures too, not just successful computations.
     session.snapshot(&snapshot.identity())?;
     let estimate = computation.map_err(|e| EstimateError::Failed(format!("Noise estimation task failed: {e}")))?;
-    session.publish_noise(snapshot, estimate)?;
+    session.publish_noise(snapshot, estimate.clone())?;
     log::info!("DENOISE: estimate for {:?} in {:?}", snapshot.identity(), start.elapsed());
     Ok(estimate)
 }
@@ -377,7 +378,7 @@ pub async fn estimate_noise_level(
 ) -> Result<OwnedEstimate<NoiseEstimate>, EstimateError> {
     let snapshot = ImageSession::new(&state).snapshot(&expected_identity)?;
     let estimate = measured_noise_for_snapshot(&state, &snapshot).await?;
-    ImageSession::new(&state).finish(&snapshot, estimate)
+    ImageSession::new(&state).finish(&snapshot, estimate.legacy_source)
 }
 
 fn run_bm3d(
