@@ -27,7 +27,7 @@ import {
   ThumbnailSize,
   ThumbnailAspectRatio,
 } from '../../ui/AppProperties';
-import { COLOR_LABELS, Color } from '../../../utils/adjustments';
+import { COLOR_LABELS } from '../../../utils/adjustments';
 import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights, TEXT_COLOR_KEYS } from '../../../types/typography';
 import Button from '../../ui/Button';
@@ -531,7 +531,7 @@ export function ViewOptionsDropdown({
     (filterCriteria.colors && filterCriteria.colors.length > 0);
 
   const [lastClickedColor, setLastClickedColor] = useState<string | null>(null);
-  const allColors = useMemo(() => [...COLOR_LABELS, { name: 'none', color: '#9ca3af' }], []);
+  const allColors = useMemo(() => [...COLOR_LABELS, { name: 'none' as const, color: '#9ca3af' }], []);
 
   const metadataOptions = useMemo(
     () => [
@@ -553,7 +553,7 @@ export function ViewOptionsDropdown({
       if (lastIndex !== -1 && currentIndex !== -1) {
         const start = Math.min(lastIndex, currentIndex);
         const end = Math.max(lastIndex, currentIndex);
-        const range = allColors.slice(start, end + 1).map((c: Color) => c.name);
+        const range = allColors.slice(start, end + 1).map((c) => c.name);
         const baseSelection = isCtrlPressed ? currentColors : [lastClickedColor];
         const newColors = Array.from(new Set([...baseSelection, ...range]));
         setFilterCriteria((prev: FilterCriteria) => ({ ...prev, colors: newColors }));
@@ -767,7 +767,7 @@ export function ViewOptionsDropdown({
               {t('library.header.viewOptions.filterByColorLabel')}
             </Text>
             <div className="flex flex-wrap gap-2.5 px-3 py-1.5">
-              {allColors.map((color: Color) => {
+              {allColors.map((color) => {
                 const isSelected = (filterCriteria.colors || []).includes(color.name);
                 const title =
                   color.name === 'none'

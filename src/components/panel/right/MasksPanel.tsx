@@ -61,7 +61,9 @@ import {
   SubMask,
   MASK_PANEL_CREATION_TYPES,
   OTHERS_MASK_TYPES,
+  getMaskIcon,
   MASK_ICON_MAP,
+  MaskControlConfig,
   SubMaskMode,
   ToolType,
   formatMaskTypeName,
@@ -74,6 +76,7 @@ import {
   INITIAL_MASK_CONTAINER,
   MaskContainer,
   ADJUSTMENT_SECTIONS,
+  Sections,
 } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR, Orientation } from '../../ui/AppProperties';
@@ -95,7 +98,7 @@ interface DragData {
   parentId?: string;
 }
 
-const SUB_MASK_CONFIG: Record<Mask, any> = {
+const SUB_MASK_CONFIG: Partial<Record<Mask, MaskControlConfig>> = {
   [Mask.Radial]: {
     parameters: [{ key: 'feather', min: 0, max: 100, step: 1, multiplier: 100, defaultValue: 50 }],
   },
@@ -140,6 +143,8 @@ const SUB_MASK_CONFIG: Record<Mask, any> = {
   },
   [Mask.QuickEraser]: { parameters: [] },
 };
+
+const getSubMaskConfig = (type: Mask): MaskControlConfig => SUB_MASK_CONFIG[type] ?? {};
 
 const BrushTools = ({
   settings,
@@ -787,11 +792,11 @@ export default function MasksPanel() {
       const creationFn = () => {
         if (overData?.type === 'Container') {
           handleAddSubMask(overData.item!.id, dragData.maskType!);
-        } else if (overData?.type === 'SubMask') {
+        } else if (over && overData?.type === 'SubMask') {
           const container = adjustments.masks.find((m) => m.id === overData.parentId);
           if (container) {
             const targetIndex = container.subMasks.findIndex((sm) => sm.id === over.id);
-            handleAddSubMask(overData.parentId!, dragData.maskType!, targetIndex);
+            handleAddSubMask(overData.parentId!, dragData.maskType!, SubMaskMode.Additive, targetIndex);
           }
         } else {
           handleAddMaskContainer(dragData.maskType!);
@@ -824,7 +829,7 @@ export default function MasksPanel() {
           newIndex = prev.masks.length - 1;
         } else if (overData?.type === 'Container') {
           newIndex = prev.masks.findIndex((m) => m.id === overId);
-        } else if (overData?.type === 'SubMask') {
+        } else if (over && overData?.type === 'SubMask') {
           newIndex = prev.masks.findIndex((m) => m.id === overData.parentId);
         }
 
@@ -1616,7 +1621,7 @@ function SubMaskRow({
     setNodeRef(node);
     setDroppableRef(node);
   };
-  const MaskIcon = MASK_ICON_MAP[subMask.type] || Circle;
+  const MaskIcon = getMaskIcon(subMask.type);
   const { showContextMenu } = useContextMenu();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1926,7 +1931,7 @@ function SettingsPanel({
     updateSubMask(activeSubMask.id, { parameters: newParams });
   };
 
-  const subMaskConfig = activeSubMask ? SUB_MASK_CONFIG[activeSubMask.type] || {} : {};
+  const subMaskConfig = activeSubMask ? getSubMaskConfig(activeSubMask.type) : {};
   const isAiMask = activeSubMask && ['ai-subject', 'ai-foreground', 'ai-sky', 'ai-depth'].includes(activeSubMask.type);
   const isComponentMode = !!activeSubMask;
 
@@ -1955,7 +1960,7 @@ function SettingsPanel({
     });
   };
 
-  const handleSectionContextMenu = (event: any, sectionName: string) => {
+  const handleSectionContextMenu = (event: any, sectionName: keyof Sections) => {
     if (!isActive) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2103,13 +2108,13 @@ function SettingsPanel({
                 />
               )}
 
-              {subMaskConfig.parameters?.map((param: any) => (
+              {subMaskConfig.parameters?.map((param) => (
                 <Slider
                   key={param.key}
                   label={
                     param.key === 'feather' && activeSubMask.type === Mask.AiDepth
                       ? t('editor.masks.params.globalFeather')
-                      : t('editor.masks.params.' + param.key)
+                      : t(`editor.masks.params.${param.key}`)
                   }
                   min={param.min}
                   max={param.max}
@@ -2151,13 +2156,18 @@ function SettingsPanel({
         onMouseLeave={() => setIsMaskControlHovered(false)}
         className="flex flex-col gap-2"
       >
-        {Object.keys(ADJUSTMENT_SECTIONS).map((sectionName) => {
+        {(Object.keys(ADJUSTMENT_SECTIONS) as (keyof Sections)[]).map((sectionName) => {
           const SectionComponent: any = {
             basic: BasicAdjustments,
             curves: CurveGraph,
             color: ColorPanel,
             details: DetailsPanel,
             effects: EffectsPanel,
+            // Recovery and upscale stages apply to the whole image only.
+            lowlight: null,
+            blurRecovery: null,
+            glareRecovery: null,
+            upscale: null,
           }[sectionName];
           if (!SectionComponent) return null;
           const title = sectionName.charAt(0).toUpperCase() + sectionName.slice(1);

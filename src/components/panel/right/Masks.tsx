@@ -1,4 +1,5 @@
 import {
+  type LucideIcon,
   Brush,
   BringToFront,
   Circle,
@@ -97,7 +98,7 @@ export function getSubMaskName(subMask: Pick<SubMask, 'name' | 'type'>) {
   return subMask.name?.trim() || formatMaskTypeName(subMask.type);
 }
 
-export const MASK_ICON_MAP: Record<Mask, any> = {
+export const MASK_ICON_MAP: Record<Mask, LucideIcon> = {
   [Mask.AiDepth]: BringToFront,
   [Mask.AiForeground]: User,
   [Mask.AiSky]: Cloud,
@@ -113,6 +114,23 @@ export const MASK_ICON_MAP: Record<Mask, any> = {
   [Mask.Clone]: Stamp,
   [Mask.Heal]: Bandage,
 };
+
+export function getMaskIcon(type: Mask): LucideIcon {
+  return MASK_ICON_MAP[type] || Circle;
+}
+
+export interface MaskControlConfig<Key extends string = 'feather' | 'grow' | 'tolerance'> {
+  parameters?: {
+    key: Key;
+    min: number;
+    max: number;
+    step: number;
+    multiplier?: number;
+    defaultValue: number;
+  }[];
+  showBrushTools?: boolean;
+  showFlowControl?: boolean;
+}
 
 export const MASK_PANEL_CREATION_TYPES: Array<MaskType> = [
   {

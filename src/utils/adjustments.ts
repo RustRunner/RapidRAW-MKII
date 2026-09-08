@@ -1,3 +1,4 @@
+import type { ParseKeys } from 'i18next';
 import { Crop } from 'react-image-crop';
 import { v4 as uuidv4 } from 'uuid';
 import { SubMask, SubMaskMode } from '../components/panel/right/Masks';
@@ -313,7 +314,7 @@ export interface AiPatch {
 
 export interface Color {
   color: string;
-  name: string;
+  name: 'red' | 'yellow' | 'green' | 'blue' | 'purple';
 }
 
 interface ColorGradingProps {
@@ -401,7 +402,6 @@ export interface MaskContainer {
 }
 
 export interface Sections {
-  [index: string]: Array<string>;
   basic: Array<string>;
   curves: Array<string>;
   color: Array<string>;
@@ -963,7 +963,7 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
 };
 
 export interface AdjustmentGroup {
-  label: string;
+  label: ParseKeys;
   keys: string[];
 }
 

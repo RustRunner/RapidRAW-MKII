@@ -1,3 +1,4 @@
+import type { ParseKeys } from 'i18next';
 import { motion, LayoutGroup } from 'framer-motion';
 import {
   SlidersHorizontal,
@@ -15,7 +16,7 @@ import { Panel } from '../../ui/AppProperties';
 interface PanelOptions {
   icon: LucideIcon;
   id: Panel;
-  title: string;
+  title: ParseKeys;
 }
 
 interface RightPanelSwitcherProps {

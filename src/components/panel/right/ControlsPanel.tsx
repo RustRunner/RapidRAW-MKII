@@ -15,7 +15,7 @@ import UpscalePanel from '../../adjustments/Upscale';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import Waveform from '../editor/Waveform';
 import Resizer from '../../ui/Resizer';
-import { Adjustments, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
+import { Adjustments, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS, Sections } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR, Orientation } from '../../ui/AppProperties';
 import Text from '../../ui/Text';
@@ -100,8 +100,8 @@ export default function Controls() {
   const handleResetAdjustments = () => {
     setAdjustments((prev: Adjustments) => ({
       ...prev,
-      ...Object.keys(ADJUSTMENT_SECTIONS)
-        .flatMap((s) => ADJUSTMENT_SECTIONS[s])
+      ...Object.values(ADJUSTMENT_SECTIONS)
+        .flat()
         .reduce((acc: any, key: string) => {
           acc[key] = INITIAL_ADJUSTMENTS[key as keyof Adjustments];
           return acc;
@@ -122,7 +122,7 @@ export default function Controls() {
     });
   };
 
-  const handleSectionContextMenu = (event: any, sectionName: string) => {
+  const handleSectionContextMenu = (event: any, sectionName: keyof Sections) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -246,7 +246,7 @@ export default function Controls() {
       </AnimatePresence>
 
       <div className="grow overflow-y-scroll p-4 flex flex-col gap-2">
-        {Object.keys(ADJUSTMENT_SECTIONS).map((sectionName: string) => {
+        {(Object.keys(ADJUSTMENT_SECTIONS) as (keyof Sections)[]).map((sectionName) => {
           const SectionComponent: any = {
             basic: BasicAdjustments,
             curves: CurveGraph,

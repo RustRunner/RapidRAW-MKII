@@ -912,4 +912,5 @@ const RowComponent = ({
   );
 };
 
-export const Row = React.memo(RowComponent);
+// react-window owns row memoization and expects a function component.
+export const Row = RowComponent;

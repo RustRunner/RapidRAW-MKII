@@ -1,9 +1,10 @@
+import type { CullingModalState } from '../../store/useUIStore';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, XCircle, Loader2, Users, Trash2, Star, Tag } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CullingSettings, CullingSuggestions, Invokes, Progress } from '../ui/AppProperties';
+import { CullingSettings, CullingSuggestions, Invokes } from '../ui/AppProperties';
 import Button from '../ui/Button';
 import Switch from '../ui/Switch';
 import Slider from '../ui/Slider';
@@ -14,7 +15,7 @@ import { TextColors, TextVariants } from '../../types/typography';
 interface CullingModalProps {
   isOpen: boolean;
   onClose(): void;
-  progress: Progress | null;
+  progress: CullingModalState['progress'];
   suggestions: CullingSuggestions | null;
   error: string | null;
   imagePaths: string[];

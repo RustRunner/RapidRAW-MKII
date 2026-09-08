@@ -46,7 +46,9 @@ import {
   SubMask,
   SubMaskMode,
   ToolType,
+  getMaskIcon,
   MASK_ICON_MAP,
+  MaskControlConfig,
   AI_MANUAL_CLEANUP_TYPES,
   AI_GENERATIVE_CREATION_TYPES,
   AI_SUB_MASK_COMPONENT_TYPES,
@@ -82,7 +84,7 @@ const PLACEHOLDER_PATCH: AiPatch = {
   patchData: null,
 };
 
-const SUB_MASK_CONFIG: any = {
+const SUB_MASK_CONFIG: Partial<Record<Mask, MaskControlConfig<'feather' | 'grow'>>> = {
   [Mask.Radial]: {
     parameters: [{ key: 'feather', min: 0, max: 100, step: 1, multiplier: 100, defaultValue: 50 }],
   },
@@ -115,6 +117,8 @@ const SUB_MASK_CONFIG: any = {
     ],
   },
 };
+
+const getSubMaskConfig = (type: Mask): MaskControlConfig<'feather' | 'grow'> => SUB_MASK_CONFIG[type] ?? {};
 
 const BrushTools = ({ settings, onSettingsChange }: { settings: any; onSettingsChange: any }) => {
   const { t } = useTranslation();
@@ -380,7 +384,7 @@ export default function AIPanel() {
 
     const config = SUB_MASK_CONFIG[type];
     if (config && config.parameters) {
-      config.parameters.forEach((param: any) => {
+      config.parameters.forEach((param) => {
         if (param.defaultValue !== undefined) {
           subMask.parameters[param.key] = param.defaultValue / (param.multiplier || 1);
         }
@@ -1384,7 +1388,7 @@ function ContainerRow({
         >
           {isStandalone ? (
             (() => {
-              const StandaloneIcon = MASK_ICON_MAP[firstSubMask.type] || Circle;
+              const StandaloneIcon = getMaskIcon(firstSubMask.type);
               return <StandaloneIcon size={18} />;
             })()
           ) : isExpanded ? (
@@ -1553,7 +1557,7 @@ function SubMaskRow({
     setNodeRef(node);
     setDroppableRef(node);
   };
-  const MaskIcon = MASK_ICON_MAP[subMask.type] || Circle;
+  const MaskIcon = getMaskIcon(subMask.type);
   const { showContextMenu } = useContextMenu();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1765,7 +1769,7 @@ function SettingsPanel({
   const isStandalone =
     displayContainer?.subMasks?.length === 1 && [Mask.Clone, Mask.Heal].includes(displayContainer.subMasks[0].type);
 
-  const subMaskConfig = activeSubMask ? SUB_MASK_CONFIG[activeSubMask.type] || {} : {};
+  const subMaskConfig = activeSubMask ? getSubMaskConfig(activeSubMask.type) : {};
   const isAiMask =
     activeSubMask &&
     (activeSubMask.type === Mask.AiSubject ||
@@ -1848,10 +1852,10 @@ function SettingsPanel({
 
           {isComponentMode && (
             <>
-              {subMaskConfig.parameters?.map((param: any) => (
+              {subMaskConfig.parameters?.map((param) => (
                 <Slider
                   key={param.key}
-                  label={t('editor.ai.params.' + param.key)}
+                  label={t(`editor.ai.params.${param.key}`)}
                   min={param.min}
                   max={param.max}
                   step={param.step}

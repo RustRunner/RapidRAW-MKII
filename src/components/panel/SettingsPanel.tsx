@@ -1,3 +1,4 @@
+import type { Variants } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -691,7 +692,7 @@ export default function SettingsPanel({
     });
   };
 
-  const shortcutTagVariants = {
+  const shortcutTagVariants: Variants = {
     visible: { opacity: 1, scale: 1, transition: { type: 'spring', stiffness: 500, damping: 30 } },
     exit: { opacity: 0, scale: 0.8, transition: { duration: 0.15 } },
   };

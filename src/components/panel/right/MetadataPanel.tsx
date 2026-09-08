@@ -192,7 +192,7 @@ const EDITABLE_FIELDS = [
   { key: 'Artist', label: 'author' },
   { key: 'Copyright', label: 'copyright' },
   { key: 'UserComment', label: 'comments' },
-];
+] as const;
 
 export const KEY_CAMERA_SETTINGS_MAP: CameraSettings = {
   FNumber: {

@@ -26,7 +26,7 @@ interface ColorData {
 }
 
 interface CurveGraphProps {
-  adjustments: Adjustments | any;
+  adjustments: Pick<Adjustments, 'curves' | 'curveMode' | 'parametricCurve'>;
   histogram: ChannelConfig | null;
   isForMask?: boolean;
   setAdjustments(updater: (prev: any) => any): void;
@@ -805,7 +805,7 @@ export default function CurveGraph({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {Object.keys(channelConfig).map((channel: any) => {
+          {[ActiveChannel.Luma, ActiveChannel.Red, ActiveChannel.Green, ActiveChannel.Blue].map((channel) => {
             const selected = activeChannel === channel;
             const channelLabel = t(`adjustments.curves.channels.${channel}`);
             return (
