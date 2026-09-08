@@ -17,6 +17,7 @@ mod cpu_fft;
 mod culling;
 mod denoising;
 mod noise_analysis;
+mod noise_calibration;
 mod exif_processing;
 mod export_processing;
 mod file_management;

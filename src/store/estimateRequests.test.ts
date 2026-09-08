@@ -18,7 +18,7 @@ import { Invokes, SelectedImage } from '../components/ui/AppProperties';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 const identity = (path = 'A', generation = '1'): ImageIdentity => ({ path, generation });
 const selected = (id = identity(), isReady = true) => ({ path: id.path, identity: id, isReady }) as SelectedImage;
-const noise = { sigma_luma: 0.01, sigma_chroma: 0.02, strength: 45.4, chroma: 70.6 };
+const noise = { linear_bin_median: { sigma_y: 0.01, sigma_cb: 0.02, sigma_cr: 0.01 }, strength: 45.4, chroma: 70.6 };
 const glare = { amount: 62.4, veilSize: 35.6, maxBoost: 47.1, glareRatio: 0.2, confident: true };
 const state = () => useEditorStore.getState();
 let panel: symbol;
@@ -70,7 +70,7 @@ describe.each<EstimateTool>(['denoise', 'glare'])('%s editor ownership', (tool) 
     const job = pending(tool);
     expect(invoke).toHaveBeenLastCalledWith(
       tool === 'denoise' ? Invokes.EstimateNoiseLevel : Invokes.EstimateGlareVeil,
-      { expectedIdentity: identity() },
+      { expectedIdentity: identity(), ...(tool === 'denoise' ? { detail: INITIAL_ADJUSTMENTS.denoiseDetail } : {}) },
     );
     close();
     edit({ exposure: 1.25 });
@@ -352,4 +352,16 @@ it('a delayed save cannot write an earlier generation after same-path reload', a
   state().setEditor({ selectedImage: selected(identity('A', '2')) });
   await vi.advanceTimersByTimeAsync(350);
   expect(saved()).toHaveLength(0);
+});
+
+it('captures current Detail in the native request and discards it after a Detail edit', async () => {
+  edit({ denoiseDetail: 75 });
+  const job = pending('denoise');
+  expect(invoke).toHaveBeenLastCalledWith(Invokes.EstimateNoiseLevel, { expectedIdentity: identity(), detail: 75 });
+  edit({ denoiseDetail: 40 });
+  job.resolve();
+  await job.done;
+  expect(state().adjustments.denoiseDetail).toBe(40);
+  expect(state().adjustments.denoiseStrength).toBe(0);
+  expect(state().history).toHaveLength(1);
 });

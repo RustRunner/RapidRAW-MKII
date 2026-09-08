@@ -111,6 +111,13 @@ export default function LowLightPanel({
                   strength: Math.round(noiseEstimate.strength),
                   chroma: Math.round(noiseEstimate.chroma),
                 })}
+                <div className="mt-1">
+                  {t('editor.adjustments.lowlight.linearNoise', {
+                    y: noiseEstimate.linear_bin_median.sigma_y.toFixed(4),
+                    cb: noiseEstimate.linear_bin_median.sigma_cb.toFixed(4),
+                    cr: noiseEstimate.linear_bin_median.sigma_cr.toFixed(4),
+                  })}
+                </div>
               </div>
             )}
             <Slider

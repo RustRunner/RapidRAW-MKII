@@ -334,6 +334,7 @@
         "estimating": "Measuring...",
         "hotPixels": "Hot Pixels",
         "measured": "Measured noise → strength {{strength}}, chroma {{chroma}}",
+        "linearNoise": "Linear noise (area-weighted bin medians): Y {{y}}, Cb {{cb}}, Cr {{cr}}",
         "sensitivity": "Sensitivity",
         "strength": "Denoise Strength"
       },

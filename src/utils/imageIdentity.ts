@@ -8,9 +8,63 @@ export interface OwnedEstimate<T> {
   estimate: T;
 }
 
+export interface DomainNoise {
+  sigma_y: number;
+  sigma_cb: number;
+  sigma_cr: number;
+}
+
+export interface NoiseMeasurement {
+  version: number;
+  bins: Array<{
+    mean_encoded_y: number;
+    linear: DomainNoise;
+    encoded: DomainNoise;
+    linear_mad_scale: DomainNoise;
+    encoded_mad_scale: DomainNoise;
+    sampled_patches: number;
+    accepted_patches: number;
+    accepted_unclipped_patches: number;
+    accepted_black_clipped_patches: number;
+    black_clipped_fraction: number;
+    accepted_pixels: number;
+    represented_pixels: number;
+    quantization_limited: [boolean, boolean, boolean];
+    structure_ratio: number;
+    lag1: number;
+    lag8: number;
+    highpass_to_marginal: number;
+    increment_disagreement: number;
+  }>;
+  quality: {
+    sampled_patches: number;
+    resampled_patches: number;
+    sampled_origins: Array<[number, number]>;
+    sampled_by_bin: number[];
+    qualified_by_bin: number[];
+    rejected_nonfinite: number;
+    rejected_clipped: number;
+    qualified_unclipped_patches: number;
+    qualified_black_clipped_patches: number;
+    clipped_pixel_fraction: number;
+    min_patch_clipped_fraction: number;
+    max_patch_clipped_fraction: number;
+    rejected_structure: number;
+    rejected_long_correlation: number;
+    source_code_step: number;
+    insufficient_bins: number;
+  };
+}
+
 export interface NoiseEstimate {
-  sigma_luma: number;
-  sigma_chroma: number;
+  calibration_version: number;
+  linear_bin_median: DomainNoise;
+  encoded_bin_median: DomainNoise;
+  native_chroma_spacing: number;
+  detail: number;
+  strength_range: [number, number];
+  chroma_range: [number, number];
+  measurement: NoiseMeasurement;
   strength: number;
   chroma: number;
 }

@@ -374,11 +374,20 @@ pub async fn measured_noise_for_snapshot(
 #[tauri::command]
 pub async fn estimate_noise_level(
     expected_identity: ImageIdentity,
+    detail: f32,
     state: tauri::State<'_, AppState>,
-) -> Result<OwnedEstimate<NoiseEstimate>, EstimateError> {
-    let snapshot = ImageSession::new(&state).snapshot(&expected_identity)?;
-    let estimate = measured_noise_for_snapshot(&state, &snapshot).await?;
-    ImageSession::new(&state).finish(&snapshot, estimate.legacy_source)
+) -> Result<OwnedEstimate<crate::noise_calibration::CalibratedNoiseEstimate>, EstimateError> {
+    let session = ImageSession::new(&state);
+    let snapshot = session.snapshot(&expected_identity)?;
+    let analysis = measured_noise_for_snapshot(&state, &snapshot).await?;
+    let estimate = crate::noise_calibration::suggest(
+        &analysis.measurement,
+        detail,
+        snapshot.image.width(),
+        snapshot.image.height(),
+    )
+    .map_err(EstimateError::Failed)?;
+    session.finish(&snapshot, estimate)
 }
 
 fn run_bm3d(

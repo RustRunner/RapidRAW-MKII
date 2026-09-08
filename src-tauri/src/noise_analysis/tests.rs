@@ -322,7 +322,11 @@ fn audit_real_raw_measurements() {
                 path.display(), analysis.measurement.is_usable(), 100.0 * analysis.measurement.quality.clipped_pixel_fraction,
                 100.0 * analysis.measurement.quality.min_patch_clipped_fraction, 100.0 * analysis.measurement.quality.max_patch_clipped_fraction,
                 analysis.measurement.quality.qualified_by_bin);
-            report.push(serde_json::json!({"path":path,"variant":variant,"is_linear":is_linear,"width":img.width(),"height":img.height(),"analysis_ms":elapsed,"legacy_source":analysis.legacy_source,"measurement":analysis.measurement}));
+            let suggestion = crate::noise_calibration::suggest(&analysis.measurement,50.0,img.width(),img.height());
+            if variant == "default" && std::env::var_os("DENOISE_REQUIRE_RAW_SUGGESTIONS").is_some() {
+                assert!(suggestion.is_ok(), "default RAW has no calibrated suggestion: {suggestion:?}");
+            }
+            report.push(serde_json::json!({"path":path,"variant":variant,"is_linear":is_linear,"width":img.width(),"height":img.height(),"analysis_ms":elapsed,"legacy_source":analysis.legacy_source,"measurement":analysis.measurement,"suggestion":suggestion}));
         };
         let mut img = decoded.clone();
         crate::image_processing::remove_raw_artifacts_and_enhance(&mut img, 14.0, 0.35);

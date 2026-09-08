@@ -50,6 +50,7 @@ pub struct BrightnessBin {
     pub accepted_black_clipped_patches: usize,
     pub black_clipped_fraction: f32,
     pub accepted_pixels: usize,
+    pub represented_pixels: usize,
     /// Below two source code steps per RGB component, a MAD scale can lock
     /// to discrete residual levels. These channels are unresolved, not zero.
     pub quantization_limited: [bool; 3],
@@ -582,6 +583,7 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
             quality.insufficient_bins += 1;
             continue;
         }
+        let represented_pixels = group.iter().map(|p| p.valid).sum();
         let has_black_clipping = group
             .iter()
             .any(|p| clipping_class(p) == Some(ClippingClass::BlackClipped));
@@ -647,6 +649,7 @@ pub fn measure(rgb: &Rgb32FImage, is_linear: bool, code_step: f32) -> NoiseMeasu
                 .count(),
             black_clipped_fraction: med(|p| p.black_clipped as f64 / (SIDE * SIDE) as f64),
             accepted_pixels: group.iter().map(|p| p.valid).sum(),
+            represented_pixels,
             structure_ratio: med(|p| p.structure),
             lag1: med(|p| p.lag1),
             lag8: med(|p| p.lag8),

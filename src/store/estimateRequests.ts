@@ -69,7 +69,7 @@ export async function requestEstimate(tool: EstimateTool, panel: symbol, onError
   try {
     const result = await invoke<OwnedEstimate<NoiseEstimate | GlareEstimate>>(
       tool === 'denoise' ? Invokes.EstimateNoiseLevel : Invokes.EstimateGlareVeil,
-      { expectedIdentity: identity },
+      { expectedIdentity: identity, ...(tool === 'denoise' ? { detail: state.adjustments.denoiseDetail } : {}) },
     );
     if (!isCurrent(tool, request)) return;
     if (!sameImage(result.identity, identity)) {
