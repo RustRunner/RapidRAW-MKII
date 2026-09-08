@@ -13,7 +13,7 @@ use wgpu::{Texture, TextureView};
 
 use crate::ai_processing::AiState;
 use crate::cache_utils::DecodedImageCache;
-use crate::denoising::NoiseEstimate;
+use crate::image_identity::NoiseCache;
 use crate::gpu_processing::GpuProcessor;
 use crate::image_processing::GpuContext;
 use crate::launch_request::ExternalEditSession;
@@ -32,6 +32,7 @@ pub struct WindowState {
 
 #[derive(Clone)]
 pub struct LoadedImage {
+    pub generation: usize,
     pub path: String,
     pub image: Arc<DynamicImage>,
     pub is_raw: bool,
@@ -182,7 +183,7 @@ pub struct AppState {
     pub metadata_manager: Arc<MetadataManager>,
     pub disks_cache: Mutex<Option<Disks>>,
     pub disks_cache_refreshing: AtomicBool,
-    /// Measured noise floor of the loaded image, keyed by path - shared by
+    /// Measured noise floor, keyed by committed (path, generation), shared by
     /// the denoise and glare estimators so the full-res scan runs once.
-    pub noise_estimate_cache: Mutex<Option<(String, NoiseEstimate)>>,
+    pub noise_estimate_cache: Mutex<NoiseCache>,
 }

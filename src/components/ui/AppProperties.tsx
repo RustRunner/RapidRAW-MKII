@@ -1,3 +1,4 @@
+import type { ImageIdentity } from '../../utils/imageIdentity';
 import { ExportPreset } from './ExportImportProperties';
 import { Adjustments, CopyPasteSettings } from '../../utils/adjustments';
 import { ToolType } from '../panel/right/Masks';
@@ -303,6 +304,7 @@ export interface Progress {
 }
 
 export interface SelectedImage {
+  identity?: ImageIdentity;
   exif: any;
   group_id?: string | null;
   height: number;

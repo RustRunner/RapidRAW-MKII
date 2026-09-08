@@ -150,7 +150,14 @@ export const useEditorStore = create<EditorState>((set) => ({
   hasRenderedFirstFrame: false,
   patchesSentToBackend: new Set<string>(),
 
-  setEditor: (updater) => set((state) => (typeof updater === 'function' ? updater(state) : updater)),
+  setEditor: (updater) =>
+    set((state) => {
+      const update = typeof updater === 'function' ? updater(state) : updater;
+      if (update.selectedImage && !update.selectedImage.isReady) {
+        return { ...update, selectedImage: { ...update.selectedImage, identity: undefined } };
+      }
+      return update;
+    }),
 
   pushHistory: (newAdj) =>
     set((state) => {

@@ -9,13 +9,14 @@ import Switch from '../ui/Switch';
 import { Adjustments, LowLightAdjustment } from '../../utils/adjustments';
 import { Invokes } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
-
-interface NoiseEstimate {
-  sigma_luma: number;
-  sigma_chroma: number;
-  strength: number;
-  chroma: number;
-}
+import {
+  NoiseEstimate,
+  OwnedEstimate,
+  readyImageIdentity,
+  sameImage,
+  isStaleEstimateError,
+  estimateErrorMessage,
+} from '../../utils/imageIdentity';
 
 interface LowLightPanelProps {
   adjustments: Adjustments;
@@ -33,7 +34,8 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
 
   useEffect(() => {
     setNoiseEstimate(null);
-  }, [path]);
+    setIsEstimating(false);
+  }, [path, selectedImage?.identity?.generation]);
 
   const handleValueChange = (key: LowLightAdjustment, e: any) => {
     const numericValue = parseFloat(e.target.value);
@@ -45,12 +47,19 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
   };
 
   const handleEstimateNoise = async () => {
-    if (isEstimating) {
+    const expectedIdentity = readyImageIdentity(useEditorStore.getState().selectedImage);
+    if (isEstimating || !expectedIdentity) {
       return;
     }
     setIsEstimating(true);
     try {
-      const estimate = await invoke<NoiseEstimate>(Invokes.EstimateNoiseLevel);
+      const result = await invoke<OwnedEstimate<NoiseEstimate>>(Invokes.EstimateNoiseLevel, { expectedIdentity });
+      if (
+        !sameImage(result.identity, expectedIdentity) ||
+        !sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)
+      )
+        return;
+      const estimate = result.estimate;
       const strength = Math.round(estimate.strength);
       const chroma = Math.round(estimate.chroma);
       setNoiseEstimate(estimate);
@@ -60,9 +69,15 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
         [LowLightAdjustment.DenoiseChroma]: chroma,
       }));
     } catch (err) {
-      toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${err})`);
+      if (
+        sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity) &&
+        !isStaleEstimateError(err)
+      ) {
+        toast.error(`${t('editor.adjustments.lowlight.estimateFailed')} (${estimateErrorMessage(err)})`);
+      }
     } finally {
-      setIsEstimating(false);
+      if (sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity))
+        setIsEstimating(false);
     }
   };
 
@@ -131,9 +146,7 @@ export default function LowLightPanel({ adjustments, setAdjustments, onDragState
               onClick={handleEstimateNoise}
               disabled={isEstimating}
             >
-              {isEstimating
-                ? t('editor.adjustments.lowlight.estimating')
-                : t('editor.adjustments.lowlight.estimate')}
+              {isEstimating ? t('editor.adjustments.lowlight.estimating') : t('editor.adjustments.lowlight.estimate')}
             </button>
             {noiseEstimate && (
               <div className="p-2 bg-bg-secondary rounded text-xs text-text-secondary">

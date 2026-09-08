@@ -8,14 +8,15 @@ import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, GlareRecoveryAdjustment } from '../../utils/adjustments';
 import { Invokes } from '../ui/AppProperties';
-
-interface GlareEstimate {
-  amount: number;
-  veilSize: number;
-  maxBoost: number;
-  glareRatio: number;
-  confident: boolean;
-}
+import { useEditorStore } from '../../store/useEditorStore';
+import {
+  GlareEstimate,
+  OwnedEstimate,
+  readyImageIdentity,
+  sameImage,
+  isStaleEstimateError,
+  estimateErrorMessage,
+} from '../../utils/imageIdentity';
 
 interface GlareRecoveryPanelProps {
   adjustments: Adjustments;
@@ -32,6 +33,8 @@ export default function GlareRecoveryPanel({
 }: GlareRecoveryPanelProps) {
   const { t } = useTranslation();
   const [isEstimating, setIsEstimating] = useState(false);
+  const selectedImage = useEditorStore((s) => s.selectedImage);
+  useEffect(() => setIsEstimating(false), [selectedImage?.path, selectedImage?.identity?.generation]);
   const flashTimeoutRef = useRef<number | null>(null);
 
   useEffect(
@@ -49,12 +52,19 @@ export default function GlareRecoveryPanel({
   };
 
   const handleEstimateGlare = async () => {
-    if (isEstimating) {
+    const expectedIdentity = readyImageIdentity(useEditorStore.getState().selectedImage);
+    if (isEstimating || !expectedIdentity) {
       return;
     }
     setIsEstimating(true);
     try {
-      const estimate = await invoke<GlareEstimate>(Invokes.EstimateGlareVeil);
+      const result = await invoke<OwnedEstimate<GlareEstimate>>(Invokes.EstimateGlareVeil, { expectedIdentity });
+      if (
+        !sameImage(result.identity, expectedIdentity) ||
+        !sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)
+      )
+        return;
+      const estimate = result.estimate;
       if (!estimate?.confident) {
         toast.error(t('editor.adjustments.glareRecovery.estimateFailed'));
         return;
@@ -76,15 +86,22 @@ export default function GlareRecoveryPanel({
       }
       flashTimeoutRef.current = window.setTimeout(() => {
         flashTimeoutRef.current = null;
+        if (!sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity)) return;
         setAdjustments((prev: Adjustments) => ({
           ...prev,
           [GlareRecoveryAdjustment.GlareShowVeil]: false,
         }));
       }, VEIL_FLASH_MS);
     } catch (err) {
-      toast.error(`${t('editor.adjustments.glareRecovery.estimateFailed')} (${err})`);
+      if (
+        sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity) &&
+        !isStaleEstimateError(err)
+      ) {
+        toast.error(`${t('editor.adjustments.glareRecovery.estimateFailed')} (${estimateErrorMessage(err)})`);
+      }
     } finally {
-      setIsEstimating(false);
+      if (sameImage(readyImageIdentity(useEditorStore.getState().selectedImage), expectedIdentity))
+        setIsEstimating(false);
     }
   };
 

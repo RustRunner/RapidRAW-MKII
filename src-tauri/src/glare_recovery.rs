@@ -9,6 +9,7 @@
 use std::collections::VecDeque;
 
 use image::DynamicImage;
+use crate::image_identity::{EstimateError, ImageIdentity, ImageSession, OwnedEstimate};
 
 use crate::image_processing::downscale_f32_image;
 
@@ -242,29 +243,18 @@ pub fn estimate_glare(image: &DynamicImage, is_linear: bool, sigma_luma: f32) ->
 /// per-image cache.
 #[tauri::command]
 pub async fn estimate_glare_veil(
+    expected_identity: ImageIdentity,
     state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<GlareEstimate, String> {
-    let (image, is_raw) = {
-        let guard = state.original_image.lock().unwrap();
-        let loaded = guard.as_ref().ok_or("No image loaded")?;
-        (loaded.image.clone(), loaded.is_raw)
-    };
-    let noise = crate::denoising::measured_noise_for_loaded(&state).await?;
-    let start = std::time::Instant::now();
-    let estimate =
-        tokio::task::spawn_blocking(move || estimate_glare(&image, is_raw, noise.sigma_luma))
-            .await
-            .map_err(|e| format!("Glare estimation task failed: {e}"))?;
-    log::info!(
-        "GLARE: estimate ratio={:.3} ({}confident) → amount {:.0}, veil size {:.0}, max boost {:.0} in {:?}",
-        estimate.glare_ratio,
-        if estimate.confident { "" } else { "not " },
-        estimate.amount,
-        estimate.veil_size,
-        estimate.max_boost,
-        start.elapsed()
-    );
-    Ok(estimate)
+) -> Result<OwnedEstimate<GlareEstimate>, EstimateError> {
+    let session = ImageSession::new(&state);
+    let snapshot = session.snapshot(&expected_identity)?;
+    let noise = crate::denoising::measured_noise_for_snapshot(&state, &snapshot).await?;
+    let image = snapshot.image.clone();
+    let is_raw = snapshot.is_raw;
+    let computation = tokio::task::spawn_blocking(move || estimate_glare(&image, is_raw, noise.sigma_luma)).await;
+    session.snapshot(&snapshot.identity())?;
+    let estimate = computation.map_err(|e| EstimateError::Failed(format!("Glare estimation task failed: {e}")))?;
+    session.finish(&snapshot, estimate)
 }
 
 fn srgb_component_to_linear(x: f32) -> f32 {

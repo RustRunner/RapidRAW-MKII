@@ -1,6 +1,7 @@
 use crate::Cursor;
 use crate::app_settings::{AppSettings, load_settings};
 use crate::app_state::{AppState, LoadedImage};
+use crate::image_identity::{ImageIdentity, ImageSession};
 use crate::exif_processing;
 use crate::file_management::{parse_virtual_path, read_file_mapped};
 use crate::formats::is_raw_file;
@@ -30,6 +31,7 @@ use std::time::Instant;
 
 #[derive(serde::Serialize)]
 pub struct LoadImageResult {
+    pub identity: ImageIdentity,
     pub width: u32,
     pub height: u32,
     pub metadata: ImageMetadata,
@@ -750,12 +752,11 @@ pub async fn load_image(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<LoadImageResult, String> {
-    let my_generation = state.load_image_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let my_generation = ImageSession::new(&state).begin_load();
     let generation_tracker = state.load_image_generation.clone();
     let cancel_token = Some((generation_tracker.clone(), my_generation));
 
     {
-        *state.original_image.lock().unwrap() = None;
         *state.cached_preview.lock().unwrap() = None;
         *state.gpu_image_cache.lock().unwrap() = None;
         *state.full_warped_cache.lock().unwrap() = None;
@@ -795,18 +796,19 @@ pub async fn load_image(
             ));
         }
 
-        let (pristine_img, exif_data_loaded) = tokio::task::spawn_blocking(move || {
+        let (pristine_img, exif_data_loaded, fingerprint) = tokio::task::spawn_blocking(move || {
             if generation_tracker.load(Ordering::SeqCst) != my_generation {
                 return Err("Load cancelled".to_string());
             }
 
-            let result: Result<(DynamicImage, HashMap<String, String>), String> =
+            let result: Result<(DynamicImage, HashMap<String, String>, blake3::Hash), String> =
                 (|| match read_file_mapped(Path::new(&path_clone)) {
                     Ok(mmap) => {
                         if generation_tracker.load(Ordering::SeqCst) != my_generation {
                             return Err("Load cancelled".to_string());
                         }
 
+                        let fingerprint = blake3::hash(&mmap);
                         let img = load_base_image_from_bytes(
                             &mmap,
                             &path_clone,
@@ -816,7 +818,7 @@ pub async fn load_image(
                         )
                         .map_err(|e| e.to_string())?;
                         let exif = exif_processing::read_exif_data(&path_clone, &mmap);
-                        Ok((img, exif))
+                        Ok((img, exif, fingerprint))
                     }
                     Err(e) => {
                         log::warn!(
@@ -832,6 +834,7 @@ pub async fn load_image(
                             return Err("Load cancelled".to_string());
                         }
 
+                        let fingerprint = blake3::hash(&bytes);
                         let img = load_base_image_from_bytes(
                             &bytes,
                             &path_clone,
@@ -841,7 +844,7 @@ pub async fn load_image(
                         )
                         .map_err(|e| e.to_string())?;
                         let exif = exif_processing::read_exif_data(&path_clone, &bytes);
-                        Ok((img, exif))
+                        Ok((img, exif, fingerprint))
                     }
                 })();
             result
@@ -851,11 +854,11 @@ pub async fn load_image(
 
         let arc_img = Arc::new(pristine_img);
 
-        state.decoded_image_cache.lock().unwrap().insert(
-            source_path_str.clone(),
-            arc_img.clone(),
-            exif_data_loaded.clone(),
-        );
+        ImageSession::new(&state).with_generation(my_generation, || {
+            state.decoded_image_cache.lock().unwrap().insert(
+                source_path_str.clone(), fingerprint, arc_img.clone(), exif_data_loaded.clone(),
+            );
+        }).map_err(|_| "Load cancelled".to_string())?;
 
         (arc_img, exif_data_loaded)
     };
@@ -866,19 +869,17 @@ pub async fn load_image(
 
     let is_raw = is_raw_file(&source_path_str);
 
-    if state.load_image_generation.load(Ordering::SeqCst) != my_generation {
-        return Err("Load cancelled".to_string());
-    }
-
     let (orig_width, orig_height) = pristine_arc.dimensions();
 
-    *state.original_image.lock().unwrap() = Some(LoadedImage {
+    let identity = ImageSession::new(&state).commit_load(LoadedImage {
         path,
+        generation: my_generation,
         image: pristine_arc,
         is_raw,
-    });
+    }).map_err(|_| "Load cancelled".to_string())?;
 
     Ok(LoadImageResult {
+        identity,
         width: orig_width,
         height: orig_height,
         metadata,

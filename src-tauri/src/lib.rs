@@ -23,6 +23,7 @@ mod formats;
 mod glare_recovery;
 mod gpu_processing;
 mod hdr_deghosting;
+mod image_identity;
 mod image_loader;
 mod image_processing;
 mod inpainting;

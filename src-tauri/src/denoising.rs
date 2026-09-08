@@ -1,5 +1,6 @@
 use crate::app_settings::load_settings;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, LoadedImage};
+use crate::image_identity::{EstimateError, ImageIdentity, ImageSession, OwnedEstimate};
 use crate::file_management::parse_virtual_path;
 use crate::formats::is_raw_file;
 use crate::image_loader::load_base_image_from_bytes;
@@ -356,43 +357,31 @@ pub fn estimate_noise(image: &DynamicImage) -> NoiseEstimate {
 /// Measure the loaded image's noise floor, reusing the per-image cache so
 /// repeat estimates (and the glare estimator's max-boost derivation) skip
 /// the full-resolution scan.
-pub async fn measured_noise_for_loaded(
-    state: &tauri::State<'_, AppState>,
-) -> Result<NoiseEstimate, String> {
-    let (path, image) = {
-        let guard = state.original_image.lock().unwrap();
-        let loaded = guard.as_ref().ok_or("No image loaded")?;
-        (loaded.path.clone(), loaded.image.clone())
-    };
-    if let Some((cached_path, estimate)) = &*state.noise_estimate_cache.lock().unwrap() {
-        if *cached_path == path {
-            return Ok(*estimate);
-        }
-    }
+pub async fn measured_noise_for_snapshot(
+    state: &AppState,
+    snapshot: &LoadedImage,
+) -> Result<NoiseEstimate, EstimateError> {
+    let session = ImageSession::new(state);
+    if let Some(estimate) = session.cached_noise(snapshot)? { return Ok(estimate); }
     let start = std::time::Instant::now();
-    let estimate = tokio::task::spawn_blocking(move || estimate_noise(&image))
-        .await
-        .map_err(|e| format!("Noise estimation task failed: {e}"))?;
-    log::info!(
-        "DENOISE: noise estimate σy={:.4} σc={:.4} → strength {:.0}, chroma {:.0} in {:?}",
-        estimate.sigma_luma,
-        estimate.sigma_chroma,
-        estimate.strength,
-        estimate.chroma,
-        start.elapsed()
-    );
-    *state.noise_estimate_cache.lock().unwrap() = Some((path, estimate));
+    let image = snapshot.image.clone();
+    let computation = tokio::task::spawn_blocking(move || estimate_noise(&image)).await;
+    // A switch supersedes failures too, not just successful computations.
+    session.snapshot(&snapshot.identity())?;
+    let estimate = computation.map_err(|e| EstimateError::Failed(format!("Noise estimation task failed: {e}")))?;
+    session.publish_noise(snapshot, estimate)?;
+    log::info!("DENOISE: estimate for {:?} in {:?}", snapshot.identity(), start.elapsed());
     Ok(estimate)
 }
 
-/// Tauri command: measure the loaded image's noise floor and map it onto
-/// the denoise sliders; the frontend applies the suggestion to both the
-/// live denoiser and Deep Clean's default.
 #[tauri::command]
 pub async fn estimate_noise_level(
+    expected_identity: ImageIdentity,
     state: tauri::State<'_, AppState>,
-) -> Result<NoiseEstimate, String> {
-    measured_noise_for_loaded(&state).await
+) -> Result<OwnedEstimate<NoiseEstimate>, EstimateError> {
+    let snapshot = ImageSession::new(&state).snapshot(&expected_identity)?;
+    let estimate = measured_noise_for_snapshot(&state, &snapshot).await?;
+    ImageSession::new(&state).finish(&snapshot, estimate)
 }
 
 fn run_bm3d(

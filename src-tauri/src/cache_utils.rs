@@ -236,53 +236,51 @@ pub fn calculate_full_job_hash(path: &str, adjustments: &serde_json::Value) -> u
     hasher.finish()
 }
 
+struct DecodedImageEntry {
+    path: String,
+    fingerprint: blake3::Hash,
+    image: Arc<DynamicImage>,
+    exif: HashMap<String, String>,
+}
+
 pub struct DecodedImageCache {
     capacity: usize,
-    items: Vec<(String, Arc<DynamicImage>, HashMap<String, String>)>,
+    items: Vec<DecodedImageEntry>,
 }
 
 impl DecodedImageCache {
     pub fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            items: Vec::with_capacity(capacity),
-        }
+        Self { capacity, items: Vec::with_capacity(capacity) }
     }
 
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity;
-        while self.items.len() > self.capacity {
-            self.items.remove(0);
-        }
+        while self.items.len() > self.capacity { self.items.remove(0); }
     }
 
     pub fn get(&mut self, path: &str) -> Option<(Arc<DynamicImage>, HashMap<String, String>)> {
-        if let Some(pos) = self.items.iter().position(|(p, _, _)| p == path) {
-            let item = self.items.remove(pos);
-            let result = (item.1.clone(), item.2.clone());
-            self.items.push(item);
-            Some(result)
-        } else {
-            None
-        }
+        let pos = self.items.iter().position(|entry| entry.path == path)?;
+        let entry = self.items.remove(pos);
+        // Verify bytes, not just mtime/size: editors can preserve both on save.
+        // A cache hit still avoids RAW decoding and preprocessing.
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_reader(std::fs::File::open(path).ok()?).ok()?;
+        if hasher.finalize() != entry.fingerprint { return None; }
+        let result = (entry.image.clone(), entry.exif.clone());
+        self.items.push(entry);
+        Some(result)
     }
 
-    pub fn clear(&mut self) {
-        self.items.clear();
-    }
+    pub fn clear(&mut self) { self.items.clear(); }
 
-    pub fn insert(
-        &mut self,
-        path: String,
-        image: Arc<DynamicImage>,
-        exif: HashMap<String, String>,
-    ) {
-        if let Some(pos) = self.items.iter().position(|(p, _, _)| *p == path) {
+    pub fn insert(&mut self, path: String, fingerprint: blake3::Hash,
+        image: Arc<DynamicImage>, exif: HashMap<String, String>) {
+        if self.capacity == 0 { return; }
+        if let Some(pos) = self.items.iter().position(|entry| entry.path == path) {
             self.items.remove(pos);
-        } else if self.items.len() >= self.capacity {
-            self.items.remove(0);
-        }
-        self.items.push((path, image, exif));
+        } else if self.items.len() >= self.capacity { self.items.remove(0); }
+        // Fingerprint belongs to the bytes actually decoded, not a later stat.
+        self.items.push(DecodedImageEntry { path, fingerprint, image, exif });
     }
 }
 
@@ -367,5 +365,33 @@ mod tests {
             calculate_transform_hash(&single),
             calculate_transform_hash(&compound)
         );
+    }
+}
+
+#[cfg(test)]
+mod decoded_freshness_tests {
+    use super::*;
+
+    #[test]
+    fn changed_bytes_invalidate_a_same_path_even_with_preserved_metadata() {
+        let path = std::env::temp_dir().join(format!("rapidraw-cache-{}.bmp", uuid::Uuid::new_v4()));
+        let path_str = path.to_str().unwrap();
+        let old = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(16, 16, image::Rgb([32, 32, 32])));
+        let new = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(16, 16, image::Rgb([192, 192, 192])));
+        old.save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let modified = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&path).unwrap());
+        let mut cache = DecodedImageCache::new(1);
+        cache.insert(path_str.into(), blake3::hash(&bytes), Arc::new(old), HashMap::new());
+        assert_eq!(cache.get(path_str).unwrap().0.to_rgb8().get_pixel(0,0)[0], 32);
+        new.save(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), bytes.len() as u64);
+        filetime::set_file_mtime(&path, modified).unwrap();
+        assert!(cache.get(path_str).is_none());
+        let bytes = std::fs::read(&path).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        cache.insert(path_str.into(), blake3::hash(&bytes), Arc::new(decoded), HashMap::new());
+        assert_eq!(cache.get(path_str).unwrap().0.to_rgb8().get_pixel(0,0)[0], 192);
+        std::fs::remove_file(path).unwrap();
     }
 }
