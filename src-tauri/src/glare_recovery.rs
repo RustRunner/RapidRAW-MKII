@@ -171,10 +171,10 @@ const KNEE_CHANGE_THRESHOLD: f32 = 0.10;
 pub const GLARE_CONFIDENCE_FLOOR: f32 = 0.12;
 /// Amount from occupancy: capped well short of 1.0 so auto never crushes.
 const AMOUNT_FROM_RATIO: f32 = 1.9;
-/// Noise level (in the file's own encoding, matching `estimate_noise`)
-/// considered acceptable after the stretch; the boost budget is this over
-/// the measured sigma.
-const SIGMA_ACCEPTABLE: f32 = 0.025;
+/// Historical budget in the decoded source's encoding, matching the legacy
+/// `estimate_noise` result. This heuristic is not a calibrated output-noise
+/// ceiling; changing its input domain would silently change Glare suggestions.
+const LEGACY_SOURCE_SIGMA_BUDGET: f32 = 0.025;
 
 /// Slider suggestions for the loaded image, in the sliders' 0-100 units.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -226,7 +226,7 @@ pub fn estimate_glare(image: &DynamicImage, is_linear: bool, sigma_luma: f32) ->
     let ratio = *veil_median / percentile_99(&mut image_luma).max(1e-4);
 
     let s_target = (AMOUNT_FROM_RATIO * ratio).min(AMOUNT_CEILING);
-    let boost = (SIGMA_ACCEPTABLE / sigma_luma.max(1e-5)).clamp(1.0, MAX_BOOST_CEILING);
+    let boost = (LEGACY_SOURCE_SIGMA_BUDGET / sigma_luma.max(1e-5)).clamp(1.0, MAX_BOOST_CEILING);
 
     GlareEstimate {
         amount: slider_from_amount(s_target).round(),

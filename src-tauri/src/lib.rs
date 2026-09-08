@@ -16,6 +16,9 @@ mod callout;
 mod cpu_fft;
 mod culling;
 mod denoising;
+// Calibration prototype stays outside production until its accuracy gates pass.
+#[cfg(test)]
+mod noise_analysis;
 mod exif_processing;
 mod export_processing;
 mod file_management;

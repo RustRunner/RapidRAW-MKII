@@ -249,9 +249,9 @@ pub async fn save_denoised_image(
 // Single-image noise estimation
 // ============================================================================
 
-/// Result of single-image noise estimation. Sigmas are in [0, 1] pixel units
-/// measured at full resolution; `strength`/`chroma` are those sigmas mapped
-/// onto the denoise sliders' 0-100 range.
+/// Legacy full-resolution noise estimate in the decoded source's encoding:
+/// developed linear RGB for RAW, encoded RGB for ordinary images. Sigma is
+/// not bounded to [0, 1]. Slider suggestions retain the historical mapping.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct NoiseEstimate {
     pub sigma_luma: f32,
@@ -260,26 +260,22 @@ pub struct NoiseEstimate {
     pub chroma: f32,
 }
 
-/// Slider units per unit of measured sigma: a clean base-ISO frame
-/// (sigma ~0.004) suggests a light touch (~20) and a heavily noisy frame
-/// (sigma ~0.022) reaches the top of the scale. Anchored by the
-/// injected-noise calibration test.
+/// Historical source-domain mapping, preserved until a replacement passes
+/// the separate calibration gates. The encoded gray-noise test verifies
+/// compatibility, not calibration across transfer functions or brightness.
 const NOISE_SIGMA_TO_SLIDER: f32 = 4500.0;
 
-/// Estimate sensor noise from the image itself (Immerkaer's method made
-/// robust): the 3x3 second-difference operator `[1 -2 1; -2 4 -2; 1 -2 1]`
-/// annihilates constant and linear image structure, leaving noise plus
-/// sparse edge and texture responses. The median of |response| ignores that
-/// sparse tail, and dividing by 0.6745 x 6 (the Gaussian median-to-sigma
-/// factor times the operator's white-noise gain) recovers sigma. Luma uses
-/// the shader's Rec. 709 weights and Cb/Cr its chroma weights, so the
-/// mapped slider values act in the same units the live denoiser filters.
-/// Full resolution only - downscaling averages away the noise being
-/// measured. Demosaiced raws carry spatially correlated noise that this
-/// under-reads slightly, and heavy fine texture over-reads; the suggestion
-/// is a starting point, the sliders stay authoritative.
+/// Legacy source-domain robust second-difference estimate. The 3x3 operator
+/// annihilates constant/linear structure; MAD divided by its white Gaussian
+/// noise gain estimates uncorrelated noise. Demosaicing correlation can cause
+/// substantial under-reading, while fine texture can over-read. No transfer
+/// conversion is performed here; these units are not universally the linear
+/// units filtered by the shader. Sliders remain authoritative.
 pub fn estimate_noise(image: &DynamicImage) -> NoiseEstimate {
-    let rgb = image.to_rgb32f();
+    estimate_noise_rgb(&image.to_rgb32f())
+}
+
+pub(crate) fn estimate_noise_rgb(rgb: &Rgb32FImage) -> NoiseEstimate {
     let (w, h) = (rgb.width() as usize, rgb.height() as usize);
     if w < 3 || h < 3 {
         return NoiseEstimate { sigma_luma: 0.0, sigma_chroma: 0.0, strength: 0.0, chroma: 0.0 };
@@ -1254,7 +1250,7 @@ mod tests {
         );
     }
     #[test]
-    fn test_estimate_noise_calibration() {
+    fn test_legacy_source_encoded_gray_noise_mapping() {
 
         let scene = smooth_scene(512, 512);
 

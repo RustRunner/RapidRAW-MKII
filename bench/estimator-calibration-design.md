@@ -1,6 +1,16 @@
 # Estimator calibration proposal
 
-8 September 2026. **Proposed for review; numerical behavior is unchanged.** Follows the shader and ownership fixes through `94ced8f4` and TypeScript cleanup `4fa180f3`. The local source specification's separate calibration design gate applies.
+8 September 2026. **Approved for implementation, then returned for measurement-design revision after the accuracy gate failed. Production numerical behavior is unchanged.** Follows the shader and ownership fixes through `94ced8f4` and TypeScript cleanup `4fa180f3`. The local source specification's separate calibration design gate applies.
+
+## Measurement gate outcome and proposed revision
+
+The first implementation experiment did not qualify for production. See [measurement evidence](estimator-calibration-validation.md) and the checked-in comparison data. The specification below is retained as the agreed gate, not silently loosened to accommodate the result.
+
+- Gaussian-normalized MAD is not marginal standard deviation after a nonlinear transfer curve. Across the broader reference grid, 53 encoded comparisons miss the accuracy gate, with up to 57.15% under-reading. Linear comparisons in the same covered cases pass. Revise the encoded estimator to evaluate centered residual second moments on structure-qualified patches, retaining MAD as a separately named robust-scale diagnostic. Validate against realized transformed residual variance, with the same accuracy bounds. This is a candidate method, not yet an accepted replacement.
+- Fixed brightness buckets can acquire a single patch through sparse scene coverage or noisy brightness classification. The second supplied RAW and one synthetic case fail coverage. Evaluate bounded deterministic re-sampling of underrepresented regions within the 256-patch cap, and explicitly test brightness-boundary jitter on small images. Preserve the four-independent-patch requirement and reject clipping/texture failures; do not simply drop sparse bins or count overlapping samples as independent coverage. The coverage policy needs to be resolved before either RAW can qualify for release.
+- Re-run the full domain grid, selector/clipping/quantization checks, and both RAW audits before fitting any slider table. Cross-domain tests must include high-noise shadows, not just small encoded perturbations at midtones. Correlated and saturated developed-image cases remain required.
+
+The prototype is test-only. Shared production cache/commands remain unchanged; no fitted tables or frontend contract changes were enabled. The next implementation work is a measurement-design revision, followed by the original two commits only after the measurement gate passes. Native-app checks remain a prerequisite for enabling suggestions, not a claim made by this experiment.
 
 ## Recommended scope
 

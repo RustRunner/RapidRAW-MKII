@@ -1,0 +1,236 @@
+[
+  {
+    "height": 5464,
+    "legacy_source": {
+      "chroma": 23.213573455810547,
+      "sigma_chroma": 0.005158571992069483,
+      "sigma_luma": 0.014267729595303535,
+      "strength": 64.20478057861328
+    },
+    "measurement": {
+      "bins": [
+        {
+          "accepted_patches": 13,
+          "accepted_pixels": 53248,
+          "encoded": {
+            "sigma_cb": 0.023069044575095177,
+            "sigma_cr": 0.0277426578104496,
+            "sigma_y": 0.07650364935398102
+          },
+          "highpass_to_marginal": 0.7148076295852661,
+          "lag1": 0.4808691740036011,
+          "lag8": 0.20472455024719238,
+          "linear": {
+            "sigma_cb": 0.004001488909125328,
+            "sigma_cr": 0.005551812704652548,
+            "sigma_y": 0.00933338887989521
+          },
+          "mean_encoded_y": 0.07437688857316971,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 51,
+          "structure_ratio": 0.4561314880847931
+        },
+        {
+          "accepted_patches": 10,
+          "accepted_pixels": 40960,
+          "encoded": {
+            "sigma_cb": 0.02458575926721096,
+            "sigma_cr": 0.0291901808232069,
+            "sigma_y": 0.0942934900522232
+          },
+          "highpass_to_marginal": 0.6315855979919434,
+          "lag1": 0.5116967558860779,
+          "lag8": 0.2027362585067749,
+          "linear": {
+            "sigma_cb": 0.005009736865758896,
+            "sigma_cr": 0.006179087329655886,
+            "sigma_y": 0.012426252476871014
+          },
+          "mean_encoded_y": 0.09972850978374481,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 39,
+          "structure_ratio": 0.4960089921951294
+        },
+        {
+          "accepted_patches": 41,
+          "accepted_pixels": 167936,
+          "encoded": {
+            "sigma_cb": 0.027858780696988106,
+            "sigma_cr": 0.029781414195895195,
+            "sigma_y": 0.0879858136177063
+          },
+          "highpass_to_marginal": 0.5292657017707825,
+          "lag1": 0.5670651793479919,
+          "lag8": 0.22676396369934082,
+          "linear": {
+            "sigma_cb": 0.010903862304985523,
+            "sigma_cr": 0.012190572917461395,
+            "sigma_y": 0.03512439504265785
+          },
+          "mean_encoded_y": 0.25650346279144287,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 162,
+          "structure_ratio": 0.5196627378463745
+        },
+        {
+          "accepted_patches": 4,
+          "accepted_pixels": 16384,
+          "encoded": {
+            "sigma_cb": 0.027069875970482826,
+            "sigma_cr": 0.02726299874484539,
+            "sigma_y": 0.08000606298446655
+          },
+          "highpass_to_marginal": 0.5693010091781616,
+          "lag1": 0.6059645414352417,
+          "lag8": 0.27358245849609375,
+          "linear": {
+            "sigma_cb": 0.01867801323533058,
+            "sigma_cr": 0.01755635254085064,
+            "sigma_y": 0.05348778888583183
+          },
+          "mean_encoded_y": 0.38842687010765076,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 4,
+          "structure_ratio": 0.59451824426651
+        }
+      ],
+      "quality": {
+        "insufficient_bins": 0,
+        "qualified_by_bin": [
+          51,
+          39,
+          162,
+          4,
+          0,
+          0
+        ],
+        "rejected_clipped": 0,
+        "rejected_long_correlation": 0,
+        "rejected_nonfinite": 0,
+        "rejected_structure": 0,
+        "sampled_by_bin": [
+          51,
+          39,
+          162,
+          4,
+          0,
+          0
+        ],
+        "sampled_patches": 256,
+        "source_code_step": 0.0
+      },
+      "version": 1
+    },
+    "width": 8192,
+    "sample": "3E9A7623.CR3",
+    "sha256": "dab4c0821c5c3b42f405d5f2d0fc0924ab1030aa58dd5d136a34375b658deb72"
+  },
+  {
+    "height": 5464,
+    "legacy_source": {
+      "chroma": 37.160911560058594,
+      "sigma_chroma": 0.008257980458438396,
+      "sigma_luma": 0.020461183041334152,
+      "strength": 92.07532501220703
+    },
+    "measurement": {
+      "bins": [
+        {
+          "accepted_patches": 24,
+          "accepted_pixels": 98304,
+          "encoded": {
+            "sigma_cb": 0.03491377457976341,
+            "sigma_cr": 0.037440016865730286,
+            "sigma_y": 0.12215590476989746
+          },
+          "highpass_to_marginal": 0.7072173953056335,
+          "lag1": 0.5521010756492615,
+          "lag8": 0.1714082956314087,
+          "linear": {
+            "sigma_cb": 0.009151891805231571,
+            "sigma_cr": 0.010777880437672138,
+            "sigma_y": 0.019680695608258247
+          },
+          "mean_encoded_y": 0.12179064005613327,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 93,
+          "structure_ratio": 0.5280609130859375
+        },
+        {
+          "accepted_patches": 41,
+          "accepted_pixels": 167936,
+          "encoded": {
+            "sigma_cb": 0.04385097324848175,
+            "sigma_cr": 0.043604571372270584,
+            "sigma_y": 0.13954801857471466
+          },
+          "highpass_to_marginal": 0.5220813751220703,
+          "lag1": 0.5729745626449585,
+          "lag8": 0.2081006020307541,
+          "linear": {
+            "sigma_cb": 0.016805127263069153,
+            "sigma_cr": 0.018959809094667435,
+            "sigma_y": 0.05211828276515007
+          },
+          "mean_encoded_y": 0.2598434090614319,
+          "quantization_limited": [
+            false,
+            false,
+            false
+          ],
+          "sampled_patches": 162,
+          "structure_ratio": 0.5533528327941895
+        }
+      ],
+      "quality": {
+        "insufficient_bins": 1,
+        "qualified_by_bin": [
+          0,
+          93,
+          162,
+          1,
+          0,
+          0
+        ],
+        "rejected_clipped": 0,
+        "rejected_long_correlation": 0,
+        "rejected_nonfinite": 0,
+        "rejected_structure": 0,
+        "sampled_by_bin": [
+          0,
+          93,
+          162,
+          1,
+          0,
+          0
+        ],
+        "sampled_patches": 256,
+        "source_code_step": 0.0
+      },
+      "version": 1
+    },
+    "width": 8192,
+    "sample": "3E9A7624.CR3",
+    "sha256": "cde3c9fa58e00e07e2890a5506e5105facd5cfc74753c8be9052a14eb88bfa4f"
+  }
+]
