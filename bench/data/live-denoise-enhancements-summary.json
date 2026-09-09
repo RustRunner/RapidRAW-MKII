@@ -1,0 +1,407 @@
+{
+  "date": "2026-09-09",
+  "baseline_commit": "a9c9d2eca6c9d7c266c3dc9a3373b02788e2e2e4",
+  "shader_sha256": "2eed7222e71a6da488ffd61ea369ba48077795fd0cc8e153fd780b23d8ca9a7b",
+  "exploratory_only": true,
+  "production_renderer_changed": false,
+  "hardware": "NVIDIA GB10, 580.142",
+  "boundary_cases_per_variant": 576,
+  "synthetic_cases_per_variant": 144,
+  "variants": [
+    {
+      "name": "baseline",
+      "gpu_ms_1080": 4.068704,
+      "boundary_failures": []
+    },
+    {
+      "name": "guided-luma",
+      "gpu_ms_1080": 11.938528,
+      "boundary_failures": []
+    },
+    {
+      "name": "wide-chroma",
+      "gpu_ms_1080": 8.159968,
+      "boundary_failures": []
+    },
+    {
+      "name": "combined",
+      "gpu_ms_1080": 14.652544,
+      "boundary_failures": []
+    },
+    {
+      "name": "guided-edges",
+      "gpu_ms_1080": 4.60272,
+      "boundary_failures": []
+    },
+    {
+      "name": "wide-stable-chroma",
+      "gpu_ms_1080": 77.717632,
+      "boundary_failures": [
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=true step=1 C=100",
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=true step=2 C=100",
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=true step=4 C=100",
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=false step=1 C=100",
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=false step=2 C=100",
+        "Y=30 equal_luma=false raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=true step=1 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=true step=2 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=true step=4 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=false step=1 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=false step=2 C=100",
+        "Y=30 equal_luma=false raw=true class=floor chroma_only=false step=4 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=true step=1 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=true step=2 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=true step=4 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=false step=1 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=false step=2 C=100",
+        "Y=30 equal_luma=true raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=true step=1 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=true step=2 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=true step=4 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=false step=1 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=false step=2 C=100",
+        "Y=30 equal_luma=true raw=true class=floor chroma_only=false step=4 C=100",
+        "Y=128 equal_luma=false raw=false class=floor chroma_only=true step=4 C=100",
+        "Y=128 equal_luma=false raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=128 equal_luma=false raw=true class=floor chroma_only=true step=4 C=100",
+        "Y=128 equal_luma=false raw=true class=floor chroma_only=false step=4 C=100",
+        "Y=128 equal_luma=true raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=128 equal_luma=true raw=true class=floor chroma_only=false step=4 C=100",
+        "Y=200 equal_luma=false raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=200 equal_luma=false raw=true class=floor chroma_only=false step=4 C=100",
+        "Y=200 equal_luma=true raw=false class=floor chroma_only=false step=4 C=100",
+        "Y=200 equal_luma=true raw=true class=floor chroma_only=false step=4 C=100"
+      ]
+    }
+  ],
+  "raw_hashes": {
+    "3E9A7623": "dab4c0821c5c3b42f405d5f2d0fc0924ab1030aa58dd5d136a34375b658deb72",
+    "3E9A7624": "cde3c9fa58e00e07e2890a5506e5105facd5cfc74753c8be9052a14eb88bfa4f"
+  },
+  "raw_crops": [
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 2.766937452377256,
+          "variation_y": 13.562064603533019,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 4.418798369810768,
+          "variation_y": 15.593519110607971,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.6849643665482814,
+          "variation_y": 4.422671719249998,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "baseline"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 2.771036772399656,
+          "variation_y": 13.425758883630794,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 4.451743798323547,
+          "variation_y": 16.15592846015993,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.8504731283426539,
+          "variation_y": 8.765708515056241,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "guided-luma"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 2.281159529769182,
+          "variation_y": 13.558387598964694,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 4.0182871120110955,
+          "variation_y": 15.589873654351585,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.4451818039257793,
+          "variation_y": 4.432715896528003,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "wide-chroma"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 2.286106773345794,
+          "variation_y": 13.420958080982569,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 4.053537350958637,
+          "variation_y": 16.152088822213955,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.6369761837347312,
+          "variation_y": 8.77307713023387,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "combined"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 2.722300906437961,
+          "variation_y": 11.241374845731878,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 4.36968936066621,
+          "variation_y": 13.778350578382797,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.6823924276113509,
+          "variation_y": 4.137816694205693,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "guided-edges"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 1.5807993970453718,
+          "variation_y": 13.549195971533466,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 3.4621760120479297,
+          "variation_y": 15.57499536390553,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.313878339825962,
+          "variation_y": 4.443026819574236,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7623",
+      "variant": "wide-stable-chroma"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 5.778782912587501,
+          "variation_y": 21.028760148022176,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 6.079323685540208,
+          "variation_y": 21.391782509289424,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 3.127948973040542,
+          "variation_y": 9.90490307166454,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "baseline"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 5.895020062936713,
+          "variation_y": 21.918213908716872,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 6.229103782361237,
+          "variation_y": 22.7489105380728,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 3.3909901637576447,
+          "variation_y": 15.781458252781224,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "guided-luma"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 5.219413332643139,
+          "variation_y": 21.02686274869862,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 5.527317692480234,
+          "variation_y": 21.394911289787753,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 2.6547408346409362,
+          "variation_y": 9.919724334842261,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "wide-chroma"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 5.348393289343432,
+          "variation_y": 21.91544148084174,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 5.694429446120837,
+          "variation_y": 22.75339949640196,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 2.972302026028773,
+          "variation_y": 15.795862306055415,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "combined"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 5.667771879140613,
+          "variation_y": 19.02852178557593,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 5.969586744763935,
+          "variation_y": 19.477131083704563,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 3.1020827585079744,
+          "variation_y": 8.404961487365643,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "guided-edges"
+    },
+    {
+      "crops": [
+        {
+          "crop": "wall",
+          "variation_c": 3.307294889599372,
+          "variation_y": 20.993642055147177,
+          "x": 1792,
+          "y": 1110
+        },
+        {
+          "crop": "center",
+          "variation_c": 3.7977418281679007,
+          "variation_y": 21.372165010537124,
+          "x": 3840,
+          "y": 2476
+        },
+        {
+          "crop": "texture",
+          "variation_c": 1.9548931981342486,
+          "variation_y": 9.947709949106418,
+          "x": 5888,
+          "y": 3842
+        }
+      ],
+      "image": "3E9A7624",
+      "variant": "wide-stable-chroma"
+    }
+  ]
+}

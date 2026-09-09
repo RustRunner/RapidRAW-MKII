@@ -323,9 +323,10 @@ fn test_gpu_denoise_independence_and_identity() {
     }
 }
 
-const WIDTH: u32 = 128;
+const WIDTH: u32 = 256;
 const HEIGHT: u32 = 512;
-const MARGIN: u32 = 24; // Outside (radius 4 + guide radius 1) * step 4.
+const MARGIN: u32 = 24; // Preserve existing full-pipeline comparison coverage.
+const BOUNDARY_MARGIN: u32 = 40; // Outside (radius 6 + guide radius 1) * step 5.
 
 fn boundary_colors(target: f32, amount: f32, equal_luma: bool) -> [[f32; 4]; 2] {
     let colors = |base: f32| {
@@ -392,8 +393,8 @@ fn boundary_fixture(
 
 fn sigma(pixels: &[[f32; 4]], clean: &[[f32; 4]], side: u32) -> f64 {
     let (mut sum, mut squares, mut n) = ([0.0; 2], [0.0; 2], 0.0);
-    for y in MARGIN..HEIGHT - MARGIN {
-        for x in side * WIDTH / 2 + MARGIN..(side + 1) * WIDTH / 2 - MARGIN {
+    for y in BOUNDARY_MARGIN..HEIGHT - BOUNDARY_MARGIN {
+        for x in side * WIDTH / 2 + BOUNDARY_MARGIN..(side + 1) * WIDTH / 2 - BOUNDARY_MARGIN {
             let i = (y * WIDTH + x) as usize;
             let a = ycc(encoded(pixels[i]));
             let b = ycc(encoded(clean[i]));
@@ -417,7 +418,7 @@ fn boundary_error(output: &[[f32; 4]], clean: &[[f32; 4]]) -> (f64, f64) {
     let (mut max_error, mut max_bias) = (0.0f64, 0.0f64);
     for x in WIDTH / 2 - 16..WIDTH / 2 + 16 {
         let mut sum = [0.0; 3];
-        for y in MARGIN..HEIGHT - MARGIN {
+        for y in BOUNDARY_MARGIN..HEIGHT - BOUNDARY_MARGIN {
             let i = (y * WIDTH + x) as usize;
             let a = encoded(output[i]);
             let b = encoded(clean[i]);
@@ -428,7 +429,7 @@ fn boundary_error(output: &[[f32; 4]], clean: &[[f32; 4]]) -> (f64, f64) {
             }
         }
         for s in sum {
-            max_bias = max_bias.max((s / (HEIGHT - 2 * MARGIN) as f64).abs());
+            max_bias = max_bias.max((s / (HEIGHT - 2 * BOUNDARY_MARGIN) as f64).abs());
         }
     }
     (max_error, max_bias)
@@ -439,6 +440,14 @@ fn test_gpu_denoise_boundary_matrix() {
     let Some(gpu) = Harness::new() else {
         return;
     };
+    let failures = boundary_matrix_failures(&gpu);
+    assert!(
+        failures.is_empty(),
+        "boundary acceptance failures: {failures:#?}"
+    );
+}
+
+fn boundary_matrix_failures(gpu: &Harness) -> Vec<String> {
     let mut failures = Vec::new();
     for target in [30.0, 128.0, 200.0] {
         for equal_luma in [false, true] {
@@ -501,7 +510,7 @@ fn test_gpu_denoise_boundary_matrix() {
                         );
                         let strong = delta >= 12.0f64.max(6.0 * before);
                         assert_eq!(strong, !subtle);
-                        for step in [1.0, 2.0, 4.0] {
+                        for step in [1.0, 2.0, 4.0, 5.0] {
                             for chroma in [50.0, 100.0] {
                                 let settings = [0.0, 50.0, chroma, step];
                                 let filtered_clean =
@@ -539,10 +548,7 @@ fn test_gpu_denoise_boundary_matrix() {
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "boundary acceptance failures: {failures:#?}"
-    );
+    failures
 }
 
 #[test]
@@ -1021,3 +1027,5 @@ fn review_denoise_raw_images() {
 }
 
 mod calibration;
+mod enhancements;
+mod qualification;

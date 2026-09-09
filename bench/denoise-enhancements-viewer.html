@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live denoiser experiments</title>
+<style>
+body{background:#202020;color:#eee;font:16px system-ui;margin:24px}h1{font-size:24px}p{max-width:1000px;line-height:1.5}label{display:inline-block;margin:0 20px 16px 0}select{display:block;background:#333;color:#fff;border:1px solid #777;border-radius:4px;padding:8px;margin-top:6px}main{display:flex;gap:16px;overflow:auto}figure{margin:0;flex:none}figcaption{margin-bottom:10px}img{display:block;width:512px;height:512px}.note{color:#ddd}a{color:#9bd0ff}
+</style>
+<h1>Live denoiser experiments</h1>
+<p>Full-resolution 512 × 512 crops. Both columns use Strength 100, Detail 50, Chroma 100 and identical RAW development. These are experimental results; the app still uses the baseline.</p>
+<label>Photo<select id="photo"><option>3E9A7623</option><option>3E9A7624</option></select></label>
+<label>Crop<select id="crop"><option value="wall">Wall / color blotches</option><option value="center">Map / detail</option><option value="texture">Dark texture</option></select></label>
+<label>Candidate<select id="variant">
+<option value="wide-chroma">Wider color filter</option>
+<option value="guided-edges">Stabilized edge detector</option>
+<option value="guided-luma">Encoded luminance guide — mixed results</option>
+<option value="combined">Encoded guide + wider color filter</option>
+<option value="wide-stable-chroma">Wider, stronger color guide — rejected</option>
+</select></label>
+<p id="note" class="note"></p>
+<main><figure><figcaption>Current live denoiser</figcaption><img id="baseline" alt="Current live denoiser crop"></figure><figure><figcaption id="candidate-label"></figcaption><img id="candidate" alt="Experimental denoiser crop"></figure></main>
+<p>Compare at browser zoom 100%. A smoother surface can also mean lost texture. The originals have no clean reference; crop variation alone cannot measure detail recovery.</p>
+<script>
+const photo=document.getElementById('photo'),crop=document.getElementById('crop'),variant=document.getElementById('variant');
+const notes={
+'wide-chroma-guided-edges':'Actual proposed combination. Passes measured performance and strong color boundaries, but fails the approved clean-detail limits; deferred.',
+'wide-chroma':'Deferred: less color variation, but clean color textures fail the approved detail limit. About twice the measured filter time.',
+'guided-edges':'Deferred: reduces grain, but fails the fine-texture limit. The tested blends do not meet both the noise and detail goals.',
+'guided-luma':'Mixed: brightness behavior changes and some real dark crops retain more grain. Clean bright texture error increases.',
+'combined':'Combines the wider color filter with the mixed-result encoded luminance guide. Not selected for production.',
+'wide-stable-chroma':'Rejected: stronger smoothing, but 34 existing strong color-boundary checks fail and filter cost rises sharply.'};
+function update(){const prefix=photo.value+'-';document.getElementById('baseline').src=prefix+'baseline-'+crop.value+'.png';document.getElementById('candidate').src=prefix+variant.value+'-'+crop.value+'.png';document.getElementById('candidate-label').textContent=variant.selectedOptions[0].textContent;document.getElementById('note').textContent=notes[variant.value];}
+for(const input of [photo,crop,variant]) input.addEventListener('change',update);
+update();
+</script>
+</html>
